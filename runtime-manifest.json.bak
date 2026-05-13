@@ -1,0 +1,409 @@
+{
+  "version": 1,
+  "platforms": {
+    "macos": {
+      "pythonRuntimeSources": [],
+      "ffmpegSources": [],
+      "models": {
+        "demucs": [
+          {
+            "url": "https://gh-proxy.com/https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/04573f0d-f3cf25b2.th",
+            "sha256": "f3cf25b222c4eed7cd49dd8b2c9597d50c18bd154090f7b919cfa5f93cf22c49",
+            "targetRelpath": "demucs/04573f0d-f3cf25b2.th",
+            "note": "htdemucs_ft weight 1/4"
+          },
+          {
+            "url": "https://ghproxy.net/https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/04573f0d-f3cf25b2.th",
+            "sha256": "f3cf25b222c4eed7cd49dd8b2c9597d50c18bd154090f7b919cfa5f93cf22c49",
+            "targetRelpath": "demucs/04573f0d-f3cf25b2.th",
+            "note": "htdemucs_ft weight 1/4"
+          },
+          {
+            "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/04573f0d-f3cf25b2.th",
+            "sha256": "f3cf25b222c4eed7cd49dd8b2c9597d50c18bd154090f7b919cfa5f93cf22c49",
+            "targetRelpath": "demucs/04573f0d-f3cf25b2.th",
+            "note": "htdemucs_ft weight 1/4"
+          },
+          {
+            "url": "https://gh-proxy.com/https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/92cfc3b6-ef3bcb9c.th",
+            "sha256": "ef3bcb9c8b40d14ae5d51b6db2587339cc12c6b77c0be151ce6d69002e087bf2",
+            "targetRelpath": "demucs/92cfc3b6-ef3bcb9c.th",
+            "note": "htdemucs_ft weight 2/4"
+          },
+          {
+            "url": "https://ghproxy.net/https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/92cfc3b6-ef3bcb9c.th",
+            "sha256": "ef3bcb9c8b40d14ae5d51b6db2587339cc12c6b77c0be151ce6d69002e087bf2",
+            "targetRelpath": "demucs/92cfc3b6-ef3bcb9c.th",
+            "note": "htdemucs_ft weight 2/4"
+          },
+          {
+            "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/92cfc3b6-ef3bcb9c.th",
+            "sha256": "ef3bcb9c8b40d14ae5d51b6db2587339cc12c6b77c0be151ce6d69002e087bf2",
+            "targetRelpath": "demucs/92cfc3b6-ef3bcb9c.th",
+            "note": "htdemucs_ft weight 2/4"
+          },
+          {
+            "url": "https://gh-proxy.com/https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/d12395a8-e57c48e6.th",
+            "sha256": "e57c48e6b0e38af4f7118d7bd08c49f0a0c0edf7d09143bdd902ea0d237303e6",
+            "targetRelpath": "demucs/d12395a8-e57c48e6.th",
+            "note": "htdemucs_ft weight 3/4"
+          },
+          {
+            "url": "https://ghproxy.net/https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/d12395a8-e57c48e6.th",
+            "sha256": "e57c48e6b0e38af4f7118d7bd08c49f0a0c0edf7d09143bdd902ea0d237303e6",
+            "targetRelpath": "demucs/d12395a8-e57c48e6.th",
+            "note": "htdemucs_ft weight 3/4"
+          },
+          {
+            "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/d12395a8-e57c48e6.th",
+            "sha256": "e57c48e6b0e38af4f7118d7bd08c49f0a0c0edf7d09143bdd902ea0d237303e6",
+            "targetRelpath": "demucs/d12395a8-e57c48e6.th",
+            "note": "htdemucs_ft weight 3/4"
+          },
+          {
+            "url": "https://gh-proxy.com/https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/f7e0c4bc-ba3fe64a.th",
+            "sha256": "ba3fe64ae8ef66ac9a4857222ce48efbdc5eb3ad375cb79dd13debee5aaa4066",
+            "targetRelpath": "demucs/f7e0c4bc-ba3fe64a.th",
+            "note": "htdemucs_ft weight 4/4"
+          },
+          {
+            "url": "https://ghproxy.net/https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/f7e0c4bc-ba3fe64a.th",
+            "sha256": "ba3fe64ae8ef66ac9a4857222ce48efbdc5eb3ad375cb79dd13debee5aaa4066",
+            "targetRelpath": "demucs/f7e0c4bc-ba3fe64a.th",
+            "note": "htdemucs_ft weight 4/4"
+          },
+          {
+            "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/f7e0c4bc-ba3fe64a.th",
+            "sha256": "ba3fe64ae8ef66ac9a4857222ce48efbdc5eb3ad375cb79dd13debee5aaa4066",
+            "targetRelpath": "demucs/f7e0c4bc-ba3fe64a.th",
+            "note": "htdemucs_ft weight 4/4"
+          }
+        ],
+        "whisperBase": [
+          {
+            "url": "https://hf-mirror.com/Systran/faster-whisper-base/resolve/main/config.json",
+            "sha256": "56a6d8110d311f19c8f0471e562832c7527f146b567275bfca59fcf7c184da9a",
+            "targetRelpath": "whisper/models--Systran--faster-whisper-base/snapshots/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66/config.json",
+            "note": "faster-whisper-base config"
+          },
+          {
+            "url": "https://huggingface.co/Systran/faster-whisper-base/resolve/main/config.json",
+            "sha256": "56a6d8110d311f19c8f0471e562832c7527f146b567275bfca59fcf7c184da9a",
+            "targetRelpath": "whisper/models--Systran--faster-whisper-base/snapshots/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66/config.json",
+            "note": "faster-whisper-base config"
+          },
+          {
+            "url": "https://hf-mirror.com/Systran/faster-whisper-base/resolve/main/model.bin",
+            "sha256": "d01c3014881c9c6f3133c182f3d2887eb6ca1c789a7538c5c007196857a0a6a9",
+            "targetRelpath": "whisper/models--Systran--faster-whisper-base/snapshots/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66/model.bin",
+            "note": "faster-whisper-base weights"
+          },
+          {
+            "url": "https://huggingface.co/Systran/faster-whisper-base/resolve/main/model.bin",
+            "sha256": "d01c3014881c9c6f3133c182f3d2887eb6ca1c789a7538c5c007196857a0a6a9",
+            "targetRelpath": "whisper/models--Systran--faster-whisper-base/snapshots/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66/model.bin",
+            "note": "faster-whisper-base weights"
+          },
+          {
+            "url": "https://hf-mirror.com/Systran/faster-whisper-base/resolve/main/tokenizer.json",
+            "sha256": "fb7b63191e9bb045082c79fd742a3106a12c99513ab30df4a0d47fa6cb6fd0ab",
+            "targetRelpath": "whisper/models--Systran--faster-whisper-base/snapshots/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66/tokenizer.json",
+            "note": "faster-whisper-base tokenizer"
+          },
+          {
+            "url": "https://huggingface.co/Systran/faster-whisper-base/resolve/main/tokenizer.json",
+            "sha256": "fb7b63191e9bb045082c79fd742a3106a12c99513ab30df4a0d47fa6cb6fd0ab",
+            "targetRelpath": "whisper/models--Systran--faster-whisper-base/snapshots/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66/tokenizer.json",
+            "note": "faster-whisper-base tokenizer"
+          },
+          {
+            "url": "https://hf-mirror.com/Systran/faster-whisper-base/resolve/main/vocabulary.txt",
+            "sha256": "34ce3fe1c5041027b3f8d42912270993f986dbc4bb34cf27f951e34a1e453913",
+            "targetRelpath": "whisper/models--Systran--faster-whisper-base/snapshots/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66/vocabulary.txt",
+            "note": "faster-whisper-base vocabulary"
+          },
+          {
+            "url": "https://huggingface.co/Systran/faster-whisper-base/resolve/main/vocabulary.txt",
+            "sha256": "34ce3fe1c5041027b3f8d42912270993f986dbc4bb34cf27f951e34a1e453913",
+            "targetRelpath": "whisper/models--Systran--faster-whisper-base/snapshots/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66/vocabulary.txt",
+            "note": "faster-whisper-base vocabulary"
+          },
+          {
+            "url": "",
+            "inlineText": "ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66\n",
+            "targetRelpath": "whisper/models--Systran--faster-whisper-base/refs/main",
+            "note": "snapshot pointer"
+          }
+        ]
+      }
+    },
+    "windows": {
+      "pythonRuntimeSources": [],
+      "ffmpegSources": [],
+      "models": {
+        "demucs": [
+          {
+            "url": "https://gh-proxy.com/https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/04573f0d-f3cf25b2.th",
+            "sha256": "f3cf25b222c4eed7cd49dd8b2c9597d50c18bd154090f7b919cfa5f93cf22c49",
+            "targetRelpath": "demucs/04573f0d-f3cf25b2.th",
+            "note": "htdemucs_ft weight 1/4"
+          },
+          {
+            "url": "https://ghproxy.net/https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/04573f0d-f3cf25b2.th",
+            "sha256": "f3cf25b222c4eed7cd49dd8b2c9597d50c18bd154090f7b919cfa5f93cf22c49",
+            "targetRelpath": "demucs/04573f0d-f3cf25b2.th",
+            "note": "htdemucs_ft weight 1/4"
+          },
+          {
+            "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/04573f0d-f3cf25b2.th",
+            "sha256": "f3cf25b222c4eed7cd49dd8b2c9597d50c18bd154090f7b919cfa5f93cf22c49",
+            "targetRelpath": "demucs/04573f0d-f3cf25b2.th",
+            "note": "htdemucs_ft weight 1/4"
+          },
+          {
+            "url": "https://gh-proxy.com/https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/92cfc3b6-ef3bcb9c.th",
+            "sha256": "ef3bcb9c8b40d14ae5d51b6db2587339cc12c6b77c0be151ce6d69002e087bf2",
+            "targetRelpath": "demucs/92cfc3b6-ef3bcb9c.th",
+            "note": "htdemucs_ft weight 2/4"
+          },
+          {
+            "url": "https://ghproxy.net/https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/92cfc3b6-ef3bcb9c.th",
+            "sha256": "ef3bcb9c8b40d14ae5d51b6db2587339cc12c6b77c0be151ce6d69002e087bf2",
+            "targetRelpath": "demucs/92cfc3b6-ef3bcb9c.th",
+            "note": "htdemucs_ft weight 2/4"
+          },
+          {
+            "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/92cfc3b6-ef3bcb9c.th",
+            "sha256": "ef3bcb9c8b40d14ae5d51b6db2587339cc12c6b77c0be151ce6d69002e087bf2",
+            "targetRelpath": "demucs/92cfc3b6-ef3bcb9c.th",
+            "note": "htdemucs_ft weight 2/4"
+          },
+          {
+            "url": "https://gh-proxy.com/https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/d12395a8-e57c48e6.th",
+            "sha256": "e57c48e6b0e38af4f7118d7bd08c49f0a0c0edf7d09143bdd902ea0d237303e6",
+            "targetRelpath": "demucs/d12395a8-e57c48e6.th",
+            "note": "htdemucs_ft weight 3/4"
+          },
+          {
+            "url": "https://ghproxy.net/https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/d12395a8-e57c48e6.th",
+            "sha256": "e57c48e6b0e38af4f7118d7bd08c49f0a0c0edf7d09143bdd902ea0d237303e6",
+            "targetRelpath": "demucs/d12395a8-e57c48e6.th",
+            "note": "htdemucs_ft weight 3/4"
+          },
+          {
+            "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/d12395a8-e57c48e6.th",
+            "sha256": "e57c48e6b0e38af4f7118d7bd08c49f0a0c0edf7d09143bdd902ea0d237303e6",
+            "targetRelpath": "demucs/d12395a8-e57c48e6.th",
+            "note": "htdemucs_ft weight 3/4"
+          },
+          {
+            "url": "https://gh-proxy.com/https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/f7e0c4bc-ba3fe64a.th",
+            "sha256": "ba3fe64ae8ef66ac9a4857222ce48efbdc5eb3ad375cb79dd13debee5aaa4066",
+            "targetRelpath": "demucs/f7e0c4bc-ba3fe64a.th",
+            "note": "htdemucs_ft weight 4/4"
+          },
+          {
+            "url": "https://ghproxy.net/https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/f7e0c4bc-ba3fe64a.th",
+            "sha256": "ba3fe64ae8ef66ac9a4857222ce48efbdc5eb3ad375cb79dd13debee5aaa4066",
+            "targetRelpath": "demucs/f7e0c4bc-ba3fe64a.th",
+            "note": "htdemucs_ft weight 4/4"
+          },
+          {
+            "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/f7e0c4bc-ba3fe64a.th",
+            "sha256": "ba3fe64ae8ef66ac9a4857222ce48efbdc5eb3ad375cb79dd13debee5aaa4066",
+            "targetRelpath": "demucs/f7e0c4bc-ba3fe64a.th",
+            "note": "htdemucs_ft weight 4/4"
+          }
+        ],
+        "whisperBase": [
+          {
+            "url": "https://hf-mirror.com/Systran/faster-whisper-base/resolve/main/config.json",
+            "sha256": "56a6d8110d311f19c8f0471e562832c7527f146b567275bfca59fcf7c184da9a",
+            "targetRelpath": "whisper/models--Systran--faster-whisper-base/snapshots/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66/config.json",
+            "note": "faster-whisper-base config"
+          },
+          {
+            "url": "https://huggingface.co/Systran/faster-whisper-base/resolve/main/config.json",
+            "sha256": "56a6d8110d311f19c8f0471e562832c7527f146b567275bfca59fcf7c184da9a",
+            "targetRelpath": "whisper/models--Systran--faster-whisper-base/snapshots/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66/config.json",
+            "note": "faster-whisper-base config"
+          },
+          {
+            "url": "https://hf-mirror.com/Systran/faster-whisper-base/resolve/main/model.bin",
+            "sha256": "d01c3014881c9c6f3133c182f3d2887eb6ca1c789a7538c5c007196857a0a6a9",
+            "targetRelpath": "whisper/models--Systran--faster-whisper-base/snapshots/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66/model.bin",
+            "note": "faster-whisper-base weights"
+          },
+          {
+            "url": "https://huggingface.co/Systran/faster-whisper-base/resolve/main/model.bin",
+            "sha256": "d01c3014881c9c6f3133c182f3d2887eb6ca1c789a7538c5c007196857a0a6a9",
+            "targetRelpath": "whisper/models--Systran--faster-whisper-base/snapshots/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66/model.bin",
+            "note": "faster-whisper-base weights"
+          },
+          {
+            "url": "https://hf-mirror.com/Systran/faster-whisper-base/resolve/main/tokenizer.json",
+            "sha256": "fb7b63191e9bb045082c79fd742a3106a12c99513ab30df4a0d47fa6cb6fd0ab",
+            "targetRelpath": "whisper/models--Systran--faster-whisper-base/snapshots/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66/tokenizer.json",
+            "note": "faster-whisper-base tokenizer"
+          },
+          {
+            "url": "https://huggingface.co/Systran/faster-whisper-base/resolve/main/tokenizer.json",
+            "sha256": "fb7b63191e9bb045082c79fd742a3106a12c99513ab30df4a0d47fa6cb6fd0ab",
+            "targetRelpath": "whisper/models--Systran--faster-whisper-base/snapshots/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66/tokenizer.json",
+            "note": "faster-whisper-base tokenizer"
+          },
+          {
+            "url": "https://hf-mirror.com/Systran/faster-whisper-base/resolve/main/vocabulary.txt",
+            "sha256": "34ce3fe1c5041027b3f8d42912270993f986dbc4bb34cf27f951e34a1e453913",
+            "targetRelpath": "whisper/models--Systran--faster-whisper-base/snapshots/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66/vocabulary.txt",
+            "note": "faster-whisper-base vocabulary"
+          },
+          {
+            "url": "https://huggingface.co/Systran/faster-whisper-base/resolve/main/vocabulary.txt",
+            "sha256": "34ce3fe1c5041027b3f8d42912270993f986dbc4bb34cf27f951e34a1e453913",
+            "targetRelpath": "whisper/models--Systran--faster-whisper-base/snapshots/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66/vocabulary.txt",
+            "note": "faster-whisper-base vocabulary"
+          },
+          {
+            "url": "",
+            "inlineText": "ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66\n",
+            "targetRelpath": "whisper/models--Systran--faster-whisper-base/refs/main",
+            "note": "snapshot pointer"
+          }
+        ]
+      }
+    }
+  },
+  "modelSources": {
+    "demucs": [
+      {
+        "url": "https://gh-proxy.com/https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/04573f0d-f3cf25b2.th",
+        "sha256": "f3cf25b222c4eed7cd49dd8b2c9597d50c18bd154090f7b919cfa5f93cf22c49",
+        "targetRelpath": "demucs/04573f0d-f3cf25b2.th",
+        "note": "htdemucs_ft weight 1/4"
+      },
+      {
+        "url": "https://ghproxy.net/https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/04573f0d-f3cf25b2.th",
+        "sha256": "f3cf25b222c4eed7cd49dd8b2c9597d50c18bd154090f7b919cfa5f93cf22c49",
+        "targetRelpath": "demucs/04573f0d-f3cf25b2.th",
+        "note": "htdemucs_ft weight 1/4"
+      },
+      {
+        "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/04573f0d-f3cf25b2.th",
+        "sha256": "f3cf25b222c4eed7cd49dd8b2c9597d50c18bd154090f7b919cfa5f93cf22c49",
+        "targetRelpath": "demucs/04573f0d-f3cf25b2.th",
+        "note": "htdemucs_ft weight 1/4"
+      },
+      {
+        "url": "https://gh-proxy.com/https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/92cfc3b6-ef3bcb9c.th",
+        "sha256": "ef3bcb9c8b40d14ae5d51b6db2587339cc12c6b77c0be151ce6d69002e087bf2",
+        "targetRelpath": "demucs/92cfc3b6-ef3bcb9c.th",
+        "note": "htdemucs_ft weight 2/4"
+      },
+      {
+        "url": "https://ghproxy.net/https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/92cfc3b6-ef3bcb9c.th",
+        "sha256": "ef3bcb9c8b40d14ae5d51b6db2587339cc12c6b77c0be151ce6d69002e087bf2",
+        "targetRelpath": "demucs/92cfc3b6-ef3bcb9c.th",
+        "note": "htdemucs_ft weight 2/4"
+      },
+      {
+        "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/92cfc3b6-ef3bcb9c.th",
+        "sha256": "ef3bcb9c8b40d14ae5d51b6db2587339cc12c6b77c0be151ce6d69002e087bf2",
+        "targetRelpath": "demucs/92cfc3b6-ef3bcb9c.th",
+        "note": "htdemucs_ft weight 2/4"
+      },
+      {
+        "url": "https://gh-proxy.com/https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/d12395a8-e57c48e6.th",
+        "sha256": "e57c48e6b0e38af4f7118d7bd08c49f0a0c0edf7d09143bdd902ea0d237303e6",
+        "targetRelpath": "demucs/d12395a8-e57c48e6.th",
+        "note": "htdemucs_ft weight 3/4"
+      },
+      {
+        "url": "https://ghproxy.net/https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/d12395a8-e57c48e6.th",
+        "sha256": "e57c48e6b0e38af4f7118d7bd08c49f0a0c0edf7d09143bdd902ea0d237303e6",
+        "targetRelpath": "demucs/d12395a8-e57c48e6.th",
+        "note": "htdemucs_ft weight 3/4"
+      },
+      {
+        "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/d12395a8-e57c48e6.th",
+        "sha256": "e57c48e6b0e38af4f7118d7bd08c49f0a0c0edf7d09143bdd902ea0d237303e6",
+        "targetRelpath": "demucs/d12395a8-e57c48e6.th",
+        "note": "htdemucs_ft weight 3/4"
+      },
+      {
+        "url": "https://gh-proxy.com/https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/f7e0c4bc-ba3fe64a.th",
+        "sha256": "ba3fe64ae8ef66ac9a4857222ce48efbdc5eb3ad375cb79dd13debee5aaa4066",
+        "targetRelpath": "demucs/f7e0c4bc-ba3fe64a.th",
+        "note": "htdemucs_ft weight 4/4"
+      },
+      {
+        "url": "https://ghproxy.net/https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/f7e0c4bc-ba3fe64a.th",
+        "sha256": "ba3fe64ae8ef66ac9a4857222ce48efbdc5eb3ad375cb79dd13debee5aaa4066",
+        "targetRelpath": "demucs/f7e0c4bc-ba3fe64a.th",
+        "note": "htdemucs_ft weight 4/4"
+      },
+      {
+        "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/f7e0c4bc-ba3fe64a.th",
+        "sha256": "ba3fe64ae8ef66ac9a4857222ce48efbdc5eb3ad375cb79dd13debee5aaa4066",
+        "targetRelpath": "demucs/f7e0c4bc-ba3fe64a.th",
+        "note": "htdemucs_ft weight 4/4"
+      }
+    ],
+    "whisperBase": [
+      {
+        "url": "https://hf-mirror.com/Systran/faster-whisper-base/resolve/main/config.json",
+        "sha256": "56a6d8110d311f19c8f0471e562832c7527f146b567275bfca59fcf7c184da9a",
+        "targetRelpath": "whisper/models--Systran--faster-whisper-base/snapshots/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66/config.json",
+        "note": "faster-whisper-base config"
+      },
+      {
+        "url": "https://huggingface.co/Systran/faster-whisper-base/resolve/main/config.json",
+        "sha256": "56a6d8110d311f19c8f0471e562832c7527f146b567275bfca59fcf7c184da9a",
+        "targetRelpath": "whisper/models--Systran--faster-whisper-base/snapshots/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66/config.json",
+        "note": "faster-whisper-base config"
+      },
+      {
+        "url": "https://hf-mirror.com/Systran/faster-whisper-base/resolve/main/model.bin",
+        "sha256": "d01c3014881c9c6f3133c182f3d2887eb6ca1c789a7538c5c007196857a0a6a9",
+        "targetRelpath": "whisper/models--Systran--faster-whisper-base/snapshots/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66/model.bin",
+        "note": "faster-whisper-base weights"
+      },
+      {
+        "url": "https://huggingface.co/Systran/faster-whisper-base/resolve/main/model.bin",
+        "sha256": "d01c3014881c9c6f3133c182f3d2887eb6ca1c789a7538c5c007196857a0a6a9",
+        "targetRelpath": "whisper/models--Systran--faster-whisper-base/snapshots/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66/model.bin",
+        "note": "faster-whisper-base weights"
+      },
+      {
+        "url": "https://hf-mirror.com/Systran/faster-whisper-base/resolve/main/tokenizer.json",
+        "sha256": "fb7b63191e9bb045082c79fd742a3106a12c99513ab30df4a0d47fa6cb6fd0ab",
+        "targetRelpath": "whisper/models--Systran--faster-whisper-base/snapshots/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66/tokenizer.json",
+        "note": "faster-whisper-base tokenizer"
+      },
+      {
+        "url": "https://huggingface.co/Systran/faster-whisper-base/resolve/main/tokenizer.json",
+        "sha256": "fb7b63191e9bb045082c79fd742a3106a12c99513ab30df4a0d47fa6cb6fd0ab",
+        "targetRelpath": "whisper/models--Systran--faster-whisper-base/snapshots/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66/tokenizer.json",
+        "note": "faster-whisper-base tokenizer"
+      },
+      {
+        "url": "https://hf-mirror.com/Systran/faster-whisper-base/resolve/main/vocabulary.txt",
+        "sha256": "34ce3fe1c5041027b3f8d42912270993f986dbc4bb34cf27f951e34a1e453913",
+        "targetRelpath": "whisper/models--Systran--faster-whisper-base/snapshots/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66/vocabulary.txt",
+        "note": "faster-whisper-base vocabulary"
+      },
+      {
+        "url": "https://huggingface.co/Systran/faster-whisper-base/resolve/main/vocabulary.txt",
+        "sha256": "34ce3fe1c5041027b3f8d42912270993f986dbc4bb34cf27f951e34a1e453913",
+        "targetRelpath": "whisper/models--Systran--faster-whisper-base/snapshots/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66/vocabulary.txt",
+        "note": "faster-whisper-base vocabulary"
+      },
+      {
+        "url": "",
+        "inlineText": "ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66\n",
+        "targetRelpath": "whisper/models--Systran--faster-whisper-base/refs/main",
+        "note": "snapshot pointer"
+      }
+    ]
+  }
+}
