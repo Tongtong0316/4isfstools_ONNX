@@ -75,6 +75,14 @@ type RuntimeHealthReport = {
   level: "ready" | "warning" | "error";
   label: string;
   detail: string;
+  torchCudaAvailable: boolean;
+  selectedDevice: "cpu" | "cuda" | string;
+  torchVersion: string | null;
+  torchCudaVersion: string | null;
+  torchCudaDeviceName: string | null;
+  hasNvidiaGpu: boolean;
+  nvidiaDriverVisible: boolean;
+  nvidiaDriverCudaVersion: string | null;
   checks: RuntimeHealthCheck[];
 };
 
@@ -84,6 +92,14 @@ type BootstrapStatus = {
   whisperBaseReady: boolean;
   ffmpegReady: boolean;
   canRunCore: boolean;
+  torchCudaAvailable: boolean;
+  selectedDevice: "cpu" | "cuda" | string;
+  torchVersion: string | null;
+  torchCudaVersion: string | null;
+  torchCudaDeviceName: string | null;
+  hasNvidiaGpu: boolean;
+  nvidiaDriverVisible: boolean;
+  nvidiaDriverCudaVersion: string | null;
   detail: string;
 };
 
@@ -135,6 +151,19 @@ function App() {
   const [bootstrapStatus, setBootstrapStatus] = useState<BootstrapStatus | null>(null);
   const [bootstrapInstalling, setBootstrapInstalling] = useState(false);
   const [bootstrapMessage, setBootstrapMessage] = useState<string | null>(null);
+
+  const runtimeSelectedDevice =
+    bootstrapStatus?.selectedDevice ??
+    runtimeHealth?.selectedDevice ??
+    "cpu";
+  const runtimeTorchVersion = bootstrapStatus?.torchVersion ?? runtimeHealth?.torchVersion ?? null;
+  const runtimeTorchCudaVersion =
+    bootstrapStatus?.torchCudaVersion ?? runtimeHealth?.torchCudaVersion ?? null;
+  const runtimeTorchCudaDeviceName =
+    bootstrapStatus?.torchCudaDeviceName ?? runtimeHealth?.torchCudaDeviceName ?? null;
+  const runtimeHasNvidiaGpu = bootstrapStatus?.hasNvidiaGpu ?? runtimeHealth?.hasNvidiaGpu ?? false;
+  const runtimeTorchCudaAvailable =
+    bootstrapStatus?.torchCudaAvailable ?? runtimeHealth?.torchCudaAvailable ?? false;
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const originalAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -613,6 +642,14 @@ function App() {
             level: "error",
             label: "环境异常",
             detail: "无法完成启动检测",
+            torchCudaAvailable: false,
+            selectedDevice: "cpu",
+            torchVersion: null,
+            torchCudaVersion: null,
+            torchCudaDeviceName: null,
+            hasNvidiaGpu: false,
+            nvidiaDriverVisible: false,
+            nvidiaDriverCudaVersion: null,
             checks: [],
           });
           setBootstrapStatus(null);
@@ -1696,6 +1733,32 @@ function App() {
                         </div>
                         <div className="mt-4 text-[14px] leading-6 text-[#e5e7eb]">
                           {bootstrapStatus?.detail ?? runtimeHealth?.detail ?? "正在获取环境状态..."}
+                        </div>
+                        <div className="mt-4 grid gap-2 rounded-2xl border border-white/[0.06] bg-black/20 p-3 text-[12px] leading-5 text-[#d4d4d8] sm:grid-cols-2 lg:grid-cols-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="text-[#8f8f99]">NVIDIA GPU</span>
+                            <span className="font-medium text-[#f5f5f5]">{runtimeHasNvidiaGpu ? "已检测" : "未检测"}</span>
+                          </div>
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="text-[#8f8f99]">Torch 版本</span>
+                            <span className="font-medium text-[#f5f5f5]">{runtimeTorchVersion ?? "未安装"}</span>
+                          </div>
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="text-[#8f8f99]">Torch CUDA</span>
+                            <span className="font-medium text-[#f5f5f5]">{runtimeTorchCudaAvailable ? "可用" : "不可用"}</span>
+                          </div>
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="text-[#8f8f99]">CUDA 版本</span>
+                            <span className="font-medium text-[#f5f5f5]">{runtimeTorchCudaVersion ?? "无"}</span>
+                          </div>
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="text-[#8f8f99]">Selected device</span>
+                            <span className="font-medium text-[#f5f5f5]">{runtimeSelectedDevice}</span>
+                          </div>
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="text-[#8f8f99]">GPU 设备名</span>
+                            <span className="font-medium text-[#f5f5f5]">{runtimeTorchCudaDeviceName ?? "无"}</span>
+                          </div>
                         </div>
                         <div className="mt-4 flex items-center justify-between gap-4">
                           <div className="text-[12px] leading-5 text-[#9ca3af]">
