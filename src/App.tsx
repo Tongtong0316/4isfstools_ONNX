@@ -714,7 +714,7 @@ function App() {
     } finally {
       setBootstrapInstalling(false);
     }
-  }, [isDesktopRuntime]);
+  }, [isDesktopRuntime, preferDemucsCuda]);
 
   // Listen for processing events
   useEffect(() => {
@@ -861,7 +861,7 @@ function App() {
     } catch (e) {
       console.error("Failed to import songs:", e);
     }
-  }, []);
+  }, [demucsGpuRequested]);
 
   const handleChooseStorageFolder = useCallback(async (field: keyof FileStorageSettings) => {
     const currentPath = fileStorageSettings?.[field] || "";
@@ -920,7 +920,7 @@ function App() {
     } catch (e) {
       console.error("Failed to start separation:", e);
     }
-  }, []);
+  }, [demucsGpuRequested]);
 
   // Select a song - always select, auto-play only when ready
   const handleSelectSong = useCallback(async (song: Song) => {
