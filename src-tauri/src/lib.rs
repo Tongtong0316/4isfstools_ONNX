@@ -1377,6 +1377,32 @@ fn cuda_version_to_pytorch_index(cuda_ver: &str) -> &'static str {
     }
 }
 
+fn python_torch_cuda_ready(python_path: &Path) -> bool {
+    let check_script = r#"
+import sys
+try:
+    import torch
+    if torch.cuda.is_available() and getattr(torch.version, "cuda", None):
+        print("TORCH_CUDA_READY")
+    else:
+        print("TORCH_CUDA_NONE")
+except:
+    print("TORCH_CUDA_FAILED")
+"#;
+
+    let mut cmd = Command::new(python_path);
+    cmd.arg("-c")
+        .arg(check_script)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    process_control::configure_console_visibility(&mut cmd);
+    let output = cmd.output().ok();
+    output
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|text| text.contains("TORCH_CUDA_READY"))
+        .unwrap_or(false)
+}
+
 fn ensure_ffmpeg_runtime() -> Result<(), String> {
     if command_is_available("ffmpeg", "-version") {
         return Ok(());
@@ -2333,13 +2359,16 @@ fn ensure_core_runtime_modules(app: &AppHandle) -> Result<(), String> {
         return Err("未检测到 Python 运行时".to_string());
     }
 
+    let windows_nvidia_cuda = cfg!(windows) && detect_nvidia_cuda_version().is_some();
+    let needs_cuda_torch_refresh = windows_nvidia_cuda && !python_torch_cuda_ready(&python_path);
+
     let mut missing = Vec::new();
     for module in ["torch", "demucs", "faster_whisper", "soundfile"] {
         if !python_module_is_available(&python_path, module, 6).unwrap_or(false) {
             missing.push(module.to_string());
         }
     }
-    if missing.is_empty() {
+    if missing.is_empty() && !needs_cuda_torch_refresh {
         let _ = install_torchaudio_compat_patch(&python_path);
         return Ok(());
     }
@@ -2360,7 +2389,7 @@ fn ensure_core_runtime_modules(app: &AppHandle) -> Result<(), String> {
             still_missing.push(module.to_string());
         }
     }
-    if still_missing.is_empty() {
+    if still_missing.is_empty() && !needs_cuda_torch_refresh {
         let _ = install_torchaudio_compat_patch(&python_path);
         return Ok(());
     }
@@ -2368,7 +2397,7 @@ fn ensure_core_runtime_modules(app: &AppHandle) -> Result<(), String> {
     let mut errors = Vec::new();
 
     // Install torch with CUDA detection (China-accessible Tsinghua mirror)
-    if still_missing.iter().any(|m| m == "torch") {
+    if still_missing.iter().any(|m| m == "torch") || needs_cuda_torch_refresh {
         match install_torch_with_cuda_detection(&python_path) {
             Ok(()) => {}
             Err(e) => errors.push(format!("torch: {}", e)),
@@ -2398,6 +2427,9 @@ fn ensure_core_runtime_modules(app: &AppHandle) -> Result<(), String> {
             final_missing.push(module.to_string());
         }
     }
+    if windows_nvidia_cuda && !python_torch_cuda_ready(&python_path) {
+        final_missing.push("torch[cuda]".to_string());
+    }
     if final_missing.is_empty() {
         // Install torchaudio soundfile backend patch (torchaudio 2.11+ requires torchcodec which needs FFmpeg DLLs)
         let _ = install_torchaudio_compat_patch(&python_path);
@@ -2414,7 +2446,8 @@ fn ensure_core_runtime_modules(app: &AppHandle) -> Result<(), String> {
 /// Install PyTorch with automatic CUDA detection using China-accessible Tsinghua mirror.
 fn install_torch_with_cuda_detection(python_path: &Path) -> Result<(), String> {
     // Try CUDA detection
-    let cuda_index = match detect_nvidia_cuda_version() {
+    let detected_cuda = detect_nvidia_cuda_version();
+    let cuda_index = match &detected_cuda {
         Some(cuda_ver) => {
             let idx = cuda_version_to_pytorch_index(&cuda_ver);
             eprintln!("[forisfstools] 检测到 CUDA {}, 使用 PyTorch {} 版本", cuda_ver, idx);
@@ -2445,7 +2478,9 @@ fn install_torch_with_cuda_detection(python_path: &Path) -> Result<(), String> {
         .map_err(|e| format!("调用 pip 安装 torch 失败: {}", e))?;
 
     if output.status.success() {
-        return Ok(());
+        if detected_cuda.is_none() || python_torch_cuda_ready(&python_path) {
+            return Ok(());
+        }
     }
 
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -2463,7 +2498,9 @@ fn install_torch_with_cuda_detection(python_path: &Path) -> Result<(), String> {
         .map_err(|e| format!("调用 pip 安装 torch (fallback) 失败: {}", e))?;
 
     if fallback_output.status.success() {
-        return Ok(());
+        if detected_cuda.is_none() || python_torch_cuda_ready(&python_path) {
+            return Ok(());
+        }
     }
 
     let fallback_stderr = String::from_utf8_lossy(&fallback_output.stderr).to_string();
@@ -2478,6 +2515,11 @@ fn detect_bootstrap_status(app: &AppHandle) -> BootstrapStatus {
     let python_path = get_python_path(app);
     let python_ready = python_path.exists();
     let demucs_models_ready = is_demucs_model_ready(app);
+    let nvidia_cuda_version = if cfg!(windows) && python_ready {
+        detect_nvidia_cuda_version()
+    } else {
+        None
+    };
     let whisper_base_ready = if python_ready {
         resolve_whisper_base_model_dir(app)
             .ok()
@@ -2491,6 +2533,11 @@ fn detect_bootstrap_status(app: &AppHandle) -> BootstrapStatus {
         python_module_is_available(&python_path, "torch", 6).unwrap_or(false)
     } else {
         false
+    };
+    let torch_cuda_ready = if python_ready && nvidia_cuda_version.is_some() {
+        python_torch_cuda_ready(&python_path)
+    } else {
+        true
     };
     let demucs_ready = if python_ready {
         python_module_is_available(&python_path, "demucs", 4).unwrap_or(false)
@@ -2510,7 +2557,7 @@ fn detect_bootstrap_status(app: &AppHandle) -> BootstrapStatus {
     let can_run_core = is_full_capability_ready(
         python_ready,
         ffmpeg_ready,
-        torch_ready,
+        torch_ready && torch_cuda_ready,
         demucs_ready,
         demucs_models_ready,
         faster_whisper_ready,
