@@ -404,6 +404,59 @@ fn resolve_ffmpeg_binary_path() -> Option<PathBuf> {
     None
 }
 
+fn is_video_import_path(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.to_ascii_lowercase()),
+        Some(ext) if matches!(ext.as_str(), "mp4" | "mov" | "mkv" | "webm" | "avi" | "m4v")
+    )
+}
+
+fn extract_audio_from_video(input_path: &Path, output_path: &Path) -> Result<(), String> {
+    if output_path.exists() {
+        return Ok(());
+    }
+
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("Failed to create audio output directory: {}", e))?;
+    }
+
+    let ffmpeg_bin = resolve_ffmpeg_binary_path().ok_or_else(|| {
+        "FFmpeg 不可用：未在 PATH 或常见路径（/opt/homebrew/bin, /usr/local/bin）中找到 ffmpeg".to_string()
+    })?;
+
+    let status = Command::new(ffmpeg_bin)
+        .arg("-y")
+        .arg("-nostdin")
+        .arg("-i")
+        .arg(input_path)
+        .arg("-vn")
+        .arg("-map")
+        .arg("0:a:0")
+        .arg("-ac")
+        .arg("2")
+        .arg("-ar")
+        .arg("44100")
+        .arg("-c:a")
+        .arg("pcm_s16le")
+        .arg(output_path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|e| format!("Failed to run ffmpeg for audio extraction: {}", e))?;
+
+    if !status.success() {
+        return Err(format!("ffmpeg audio extraction failed with status: {}", status));
+    }
+
+    if !output_path.exists() {
+        return Err("ffmpeg audio extraction finished but output file is missing".to_string());
+    }
+
+    Ok(())
+}
+
 fn python_module_is_available(python_path: &PathBuf, module_name: &str, timeout_secs: u64) -> Result<bool, String> {
     let script = format!(
         r#"
@@ -4846,19 +4899,32 @@ async fn import_songs(_app: AppHandle, paths: Vec<String>) -> Result<Vec<Song>, 
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis() as u64;
+    let songs_dir = get_songs_dir();
+    ensure_dir(&songs_dir).map_err(|e| e.to_string())?;
 
     for (i, path) in paths.iter().enumerate() {
+        let source_path = Path::new(path);
         let song_id = format!("song_{}_{}", timestamp, i);
-        let filename = PathBuf::from(path)
+        let filename = source_path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("Unknown")
             .to_string();
 
+        let song_dir = songs_dir.join(&song_id);
+        ensure_dir(&song_dir).map_err(|e| e.to_string())?;
+        let stored_original_path = if is_video_import_path(source_path) {
+            let extracted_audio_path = song_dir.join("original.wav");
+            extract_audio_from_video(source_path, &extracted_audio_path)?;
+            extracted_audio_path.to_string_lossy().to_string()
+        } else {
+            path.clone()
+        };
+
         let song = Song {
             id: song_id.clone(),
             name: filename,
-            original_path: path.clone(),
+            original_path: stored_original_path,
             playlist_folder: None,
             vocals_path: None,
             instrumental_path: None,

@@ -11,8 +11,8 @@ export default function ImportView({ onFilesSelected }: ImportViewProps) {
       const selected = await open({
         multiple: true,
         filters: [{
-          name: "Audio",
-          extensions: ["mp3", "wav", "flac", "ape", "m4a", "ogg"]
+          name: "Audio / Video",
+          extensions: ["mp3", "wav", "flac", "ape", "m4a", "ogg", "aac", "mp4", "mov", "mkv", "webm", "avi"]
         }]
       });
       if (selected) {
@@ -47,13 +47,13 @@ export default function ImportView({ onFilesSelected }: ImportViewProps) {
 
       {/* 文字 */}
       <div className="relative text-center">
-        <p className="text-[#fafafa] font-medium mb-1">导入音频文件</p>
-        <p className="text-[#71717a] text-sm">点击或拖拽文件到这里</p>
+        <p className="text-[#fafafa] font-medium mb-1">导入音频 / 视频文件</p>
+        <p className="text-[#71717a] text-sm">点击或拖拽文件到这里，视频会自动抽取音轨</p>
       </div>
 
       {/* 支持格式 */}
       <div className="relative mt-6 flex gap-2">
-        {["MP3", "WAV", "FLAC", "M4A"].map((fmt) => (
+        {["MP3", "WAV", "FLAC", "M4A", "MP4", "MOV"].map((fmt) => (
           <span key={fmt} className="px-2 py-0.5 text-xs rounded-full bg-[#1e1e1e] text-[#71717a]">
             {fmt}
           </span>

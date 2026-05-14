@@ -29,6 +29,8 @@ Shared files still exist. The most important ones are:
 - `src-tauri/src/process_control.rs`
 - `runtime-manifest.json`
 
+Shared feature changes in these files apply to both platforms unless a platform branch is explicitly added. For example, video import with audio extraction is a shared import-path behavior and will be delivered in both macOS and Windows builds.
+
 Before changing shared files for Windows, check whether the behavior is platform-specific. Prefer explicit platform branching over changing macOS behavior indirectly.
 
 ## Windows-First Checklist
@@ -43,4 +45,3 @@ Before changing shared files for Windows, check whether the behavior is platform
 ## Known Trap
 
 The Windows 20% separation issue can appear to regress when an old `song_*` task directory still contains an old generated `separator.py`. Always validate a fresh task directory before concluding that the new executable has failed.
-
