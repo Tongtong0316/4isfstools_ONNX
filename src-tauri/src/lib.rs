@@ -303,65 +303,6 @@ fn extract_audio_from_video(input_path: &Path, output_path: &Path) -> Result<(),
     Ok(())
 }
 
-fn python_module_is_available(
-    python_path: &PathBuf,
-    module_name: &str,
-    timeout_secs: u64,
-) -> Result<bool, String> {
-    let script = format!(
-        r#"
-import importlib
-try:
-    importlib.import_module({module:?})
-    print("OK")
-except Exception:
-    print("NO")
-"#,
-        module = module_name
-    );
-
-    let mut cmd = Command::new(python_path);
-    cmd.arg("-c")
-        .arg(script)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    process_control::configure_console_visibility(&mut cmd);
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("Failed to run python check: {}", e))?;
-
-    let start = Instant::now();
-    let timeout = Duration::from_secs(timeout_secs);
-
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let mut out = String::new();
-                if let Some(mut stdout) = child.stdout.take() {
-                    let _ = stdout.read_to_string(&mut out);
-                }
-                if !status.success() {
-                    return Ok(false);
-                }
-                return Ok(out.contains("OK"));
-            }
-            Ok(None) => {
-                if start.elapsed() >= timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Ok(false);
-                }
-                std::thread::sleep(Duration::from_millis(120));
-            }
-            Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("Python check failed: {}", e));
-            }
-        }
-    }
-}
-
 fn whisper_model_probe(
     python_path: &PathBuf,
     model_dir: &PathBuf,
@@ -437,25 +378,25 @@ fn whisper_model_is_usable(
 fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
     let python_path = get_python_path(app);
     let python_exists = python_path.exists();
-    let torch_capability = detect_torch_cuda_capability(&python_path);
+    let torch_capability = runtime::capability::detect_torch_cuda_capability(&python_path);
     let ffmpeg_ready = command_is_available("ffmpeg", "-version");
     let torch_ready = if python_exists {
-        python_module_is_available(&python_path, "torch", 6).unwrap_or(false)
+        runtime::capability::python_module_is_available(&python_path, "torch", 6).unwrap_or(false)
     } else {
         false
     };
     let demucs_ready = if python_exists {
-        python_module_is_available(&python_path, "demucs", 4).unwrap_or(false)
+        runtime::capability::python_module_is_available(&python_path, "demucs", 4).unwrap_or(false)
     } else {
         false
     };
     let faster_whisper_ready = if python_exists {
-        python_module_is_available(&python_path, "faster_whisper", 6).unwrap_or(false)
+        runtime::capability::python_module_is_available(&python_path, "faster_whisper", 6).unwrap_or(false)
     } else {
         false
     };
     let soundfile_ready = if python_exists {
-        python_module_is_available(&python_path, "soundfile", 6).unwrap_or(false)
+        runtime::capability::python_module_is_available(&python_path, "soundfile", 6).unwrap_or(false)
     } else {
         false
     };
@@ -1270,240 +1211,6 @@ fn get_python_path(app: &AppHandle) -> PathBuf {
     }
 }
 
-fn detect_windows_python_path() -> Option<PathBuf> {
-    if cfg!(windows) {
-        let mut cmd = Command::new("cmd");
-        cmd.args(["/C", "where", "python"]);
-        process_control::configure_console_visibility(&mut cmd);
-        let output = cmd.output().ok()?;
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            for line in stdout.lines() {
-                let p = PathBuf::from(line.trim());
-                if !p.exists() {
-                    continue;
-                }
-                // Reject Windows Store stub (WindowsApps\python.exe) — it opens the Store, not Python
-                let p_lower = p.to_string_lossy().to_ascii_lowercase();
-                if p_lower.contains("windowsapps") {
-                    continue;
-                }
-                // Validate it actually runs
-                let mut probe_cmd = Command::new(&p);
-                probe_cmd
-                    .args(["-c", "print('ok')"])
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped());
-                process_control::configure_console_visibility(&mut probe_cmd);
-                let probe = probe_cmd.output().ok();
-                if let Some(result) = probe {
-                    if result.status.success() {
-                        return Some(p);
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Detect NVIDIA CUDA version via nvidia-smi. Returns CUDA version string (e.g. "12.4") or None.
-fn detect_nvidia_cuda_version() -> Option<String> {
-    let mut cmd = Command::new("nvidia-smi");
-    process_control::configure_console_visibility(&mut cmd);
-    let output = cmd.output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
-    // nvidia-smi header contains: "CUDA Version: XX.Y"
-    for line in text.lines() {
-        if !line.contains("CUDA Version") {
-            continue;
-        }
-        // Find "CUDA Version: X.Y" pattern
-        if let Some(pos) = line.find("CUDA Version") {
-            let rest = &line[pos + "CUDA Version".len()..];
-            let trimmed = rest.trim_start_matches(|c: char| c == ':' || c == ' ');
-            let ver: String = trimmed
-                .chars()
-                .take_while(|c| c.is_ascii_digit() || *c == '.')
-                .collect();
-            if !ver.is_empty() && ver.contains('.') {
-                return Some(ver);
-            }
-        }
-    }
-    None
-}
-
-fn detect_nvidia_gpu_name() -> Option<String> {
-    let mut cmd = Command::new("nvidia-smi");
-    process_control::configure_console_visibility(&mut cmd);
-    let output = cmd
-        .args(["--query-gpu=name", "--format=csv,noheader,nounits"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
-    text.lines()
-        .map(|line| line.trim())
-        .find(|line| !line.is_empty())
-        .map(|line| line.to_string())
-}
-
-fn detect_torch_cuda_capability(python_path: &Path) -> TorchCudaCapability {
-    let nvidia_gpu_name = detect_nvidia_gpu_name();
-    let nvidia_driver_cuda_version = detect_nvidia_cuda_version();
-    let has_nvidia_gpu = nvidia_gpu_name.is_some() || nvidia_driver_cuda_version.is_some();
-    let nvidia_driver_visible = has_nvidia_gpu;
-    let mut capability = TorchCudaCapability {
-        has_nvidia_gpu,
-        nvidia_driver_visible,
-        nvidia_gpu_name,
-        nvidia_driver_cuda_version,
-        selected_device: "cpu".to_string(),
-        ..Default::default()
-    };
-
-    if !python_path.exists() {
-        return capability;
-    }
-
-    let check_script = r#"
-import json
-try:
-    import torch
-    payload = {
-        "torchInstalled": True,
-        "torchVersion": getattr(torch, "__version__", None),
-        "torchCudaAvailable": bool(torch.cuda.is_available()),
-        "torchCudaVersion": getattr(torch.version, "cuda", None),
-        "torchCudaDeviceName": None,
-        "error": None,
-    }
-    if payload["torchCudaAvailable"]:
-        try:
-            payload["torchCudaDeviceName"] = torch.cuda.get_device_name(0)
-        except Exception as e:
-            payload["error"] = f"cuda_device_name_failed: {e}"
-    print(json.dumps(payload, ensure_ascii=False))
-except Exception as e:
-    print(json.dumps({
-        "torchInstalled": False,
-        "torchVersion": None,
-        "torchCudaAvailable": False,
-        "torchCudaVersion": None,
-        "torchCudaDeviceName": None,
-        "error": str(e),
-    }, ensure_ascii=False))
-"#;
-
-    let mut cmd = Command::new(python_path);
-    cmd.arg("-X")
-        .arg("utf8")
-        .arg("-c")
-        .arg(check_script)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    process_control::configure_console_visibility(&mut cmd);
-    let output = match cmd.output() {
-        Ok(output) => output,
-        Err(_) => {
-            return capability;
-        }
-    };
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&stdout) {
-        capability.torch_installed = val
-            .get("torchInstalled")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        capability.torch_version = val
-            .get("torchVersion")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        capability.torch_cuda_available = val
-            .get("torchCudaAvailable")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        capability.torch_cuda_version = val
-            .get("torchCudaVersion")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        capability.torch_cuda_device_name = val
-            .get("torchCudaDeviceName")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-    } else {
-        capability.torch_installed = false;
-        capability.torch_cuda_available = false;
-    }
-
-    if capability.torch_cuda_available {
-        capability.selected_device = "cuda".to_string();
-    } else {
-        capability.selected_device = "cpu".to_string();
-    }
-
-    if !output.status.success() && !stderr.is_empty() {
-        eprintln!("[forisfstools] torch CUDA probe stderr: {}", stderr);
-    }
-
-    capability
-}
-
-/// Map CUDA version to PyTorch wheel index suffix.
-fn cuda_version_to_pytorch_index(cuda_ver: &str) -> &'static str {
-    let major_minor: Vec<&str> = cuda_ver.split('.').collect();
-    match major_minor.first().copied() {
-        Some("12") => {
-            let minor = major_minor
-                .get(1)
-                .and_then(|s| s.parse::<u32>().ok())
-                .unwrap_or(4);
-            if minor >= 4 {
-                "cu124"
-            } else if minor >= 1 {
-                "cu121"
-            } else {
-                "cu121"
-            }
-        }
-        Some("11") => "cu118",
-        _ => "cu124",
-    }
-}
-
-fn python_torch_cuda_ready(python_path: &Path) -> bool {
-    let check_script = r#"
-import sys
-try:
-    import torch
-    if torch.cuda.is_available() and getattr(torch.version, "cuda", None):
-        print("TORCH_CUDA_READY")
-    else:
-        print("TORCH_CUDA_NONE")
-except:
-    print("TORCH_CUDA_FAILED")
-"#;
-
-    let mut cmd = Command::new(python_path);
-    cmd.arg("-c")
-        .arg(check_script)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    process_control::configure_console_visibility(&mut cmd);
-    let output = cmd.output().ok();
-    output
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|text| text.contains("TORCH_CUDA_READY"))
-        .unwrap_or(false)
-}
-
 fn ensure_ffmpeg_runtime() -> Result<(), String> {
     if command_is_available("ffmpeg", "-version") {
         return Ok(());
@@ -1772,7 +1479,7 @@ fn bootstrap_install_python_runtime(app: &AppHandle) -> Result<(), String> {
         }
 
         // Fallback: try system Python, but reject Windows Store stub
-        if let Some(system_python) = detect_windows_python_path() {
+        if let Some(system_python) = runtime::capability::detect_windows_python_path() {
             let hint = get_runtime_dir().join("python_path.txt");
             let _ = fs::create_dir_all(hint.parent().unwrap_or(&runtime_dir));
             let _ = fs::write(&hint, system_python.to_string_lossy().to_string());
@@ -2468,7 +2175,7 @@ fn ensure_core_runtime_modules(app: &AppHandle, prefer_demucs_cuda: bool) -> Res
         return Err("未检测到 Python 运行时".to_string());
     }
 
-    let torch_capability = detect_torch_cuda_capability(&python_path);
+    let torch_capability = runtime::capability::detect_torch_cuda_capability(&python_path);
     let needs_cuda_torch_refresh = cfg!(windows)
         && prefer_demucs_cuda
         && torch_capability.has_nvidia_gpu
@@ -2476,7 +2183,7 @@ fn ensure_core_runtime_modules(app: &AppHandle, prefer_demucs_cuda: bool) -> Res
 
     let mut missing = Vec::new();
     for module in ["torch", "demucs", "faster_whisper", "soundfile"] {
-        if !python_module_is_available(&python_path, module, 6).unwrap_or(false) {
+        if !runtime::capability::python_module_is_available(&python_path, module, 6).unwrap_or(false) {
             missing.push(module.to_string());
         }
     }
@@ -2497,7 +2204,7 @@ fn ensure_core_runtime_modules(app: &AppHandle, prefer_demucs_cuda: bool) -> Res
 
     let mut still_missing = Vec::new();
     for module in ["torch", "demucs", "faster_whisper"] {
-        if !python_module_is_available(&python_path, module, 6).unwrap_or(false) {
+        if !runtime::capability::python_module_is_available(&python_path, module, 6).unwrap_or(false) {
             still_missing.push(module.to_string());
         }
     }
@@ -2541,11 +2248,11 @@ fn ensure_core_runtime_modules(app: &AppHandle, prefer_demucs_cuda: bool) -> Res
 
     let mut final_missing = Vec::new();
     for module in ["torch", "demucs", "faster_whisper", "soundfile"] {
-        if !python_module_is_available(&python_path, module, 6).unwrap_or(false) {
+        if !runtime::capability::python_module_is_available(&python_path, module, 6).unwrap_or(false) {
             final_missing.push(module.to_string());
         }
     }
-    if torch_capability.has_nvidia_gpu && !python_torch_cuda_ready(&python_path) {
+    if torch_capability.has_nvidia_gpu && !runtime::capability::python_torch_cuda_ready(&python_path) {
         final_missing.push("torch[cuda]".to_string());
     }
     if final_missing.is_empty() {
@@ -2570,16 +2277,16 @@ fn install_torch_with_cuda_detection(
     python_path: &Path,
     prefer_cuda: bool,
 ) -> Result<(), String> {
-    let torch_capability = detect_torch_cuda_capability(python_path);
+    let torch_capability = runtime::capability::detect_torch_cuda_capability(python_path);
     let prefer_cuda = prefer_cuda && torch_capability.has_nvidia_gpu;
     let detected_cuda = if prefer_cuda {
-        detect_nvidia_cuda_version()
+        runtime::capability::detect_nvidia_cuda_version()
     } else {
         None
     };
     let cuda_index = match &detected_cuda {
         Some(cuda_ver) => {
-            let idx = cuda_version_to_pytorch_index(&cuda_ver);
+            let idx = runtime::capability::cuda_version_to_pytorch_index(&cuda_ver);
             eprintln!(
                 "[forisfstools] 检测到 NVIDIA GPU / CUDA {}, 使用 PyTorch {} 版本",
                 cuda_ver, idx
@@ -2620,7 +2327,7 @@ fn install_torch_with_cuda_detection(
         .map_err(|e| format!("调用 pip 安装 torch 失败: {}", e))?;
 
     if output.status.success() {
-        let refreshed_capability = detect_torch_cuda_capability(python_path);
+        let refreshed_capability = runtime::capability::detect_torch_cuda_capability(python_path);
         if detected_cuda.is_none() || refreshed_capability.torch_cuda_available {
             return Ok(());
         }
@@ -2648,7 +2355,7 @@ fn install_torch_with_cuda_detection(
         .map_err(|e| format!("调用 pip 安装 torch (fallback) 失败: {}", e))?;
 
     if fallback_output.status.success() {
-        let refreshed_capability = detect_torch_cuda_capability(python_path);
+        let refreshed_capability = runtime::capability::detect_torch_cuda_capability(python_path);
         if detected_cuda.is_none() || refreshed_capability.torch_cuda_available {
             return Ok(());
         }
@@ -2665,7 +2372,7 @@ fn install_torch_with_cuda_detection(
 fn detect_bootstrap_status(app: &AppHandle) -> BootstrapStatus {
     let python_path = get_python_path(app);
     let python_ready = python_path.exists();
-    let torch_capability = detect_torch_cuda_capability(&python_path);
+    let torch_capability = runtime::capability::detect_torch_cuda_capability(&python_path);
     let demucs_models_ready = is_demucs_model_ready(app);
     let whisper_base_ready = if python_ready {
         resolve_whisper_base_model_dir(app)
@@ -2677,24 +2384,24 @@ fn detect_bootstrap_status(app: &AppHandle) -> BootstrapStatus {
     };
     let ffmpeg_ready = command_is_available("ffmpeg", "-version");
     let torch_ready = if python_ready {
-        python_module_is_available(&python_path, "torch", 6).unwrap_or(false)
+        runtime::capability::python_module_is_available(&python_path, "torch", 6).unwrap_or(false)
     } else {
         false
     };
     let torch_cuda_ready =
         torch_capability.torch_cuda_available || !torch_capability.has_nvidia_gpu;
     let demucs_ready = if python_ready {
-        python_module_is_available(&python_path, "demucs", 4).unwrap_or(false)
+        runtime::capability::python_module_is_available(&python_path, "demucs", 4).unwrap_or(false)
     } else {
         false
     };
     let faster_whisper_ready = if python_ready {
-        python_module_is_available(&python_path, "faster_whisper", 6).unwrap_or(false)
+        runtime::capability::python_module_is_available(&python_path, "faster_whisper", 6).unwrap_or(false)
     } else {
         false
     };
     let soundfile_ready = if python_ready {
-        python_module_is_available(&python_path, "soundfile", 6).unwrap_or(false)
+        runtime::capability::python_module_is_available(&python_path, "soundfile", 6).unwrap_or(false)
     } else {
         false
     };
@@ -5281,8 +4988,8 @@ fn process_song_background(
         "检测 GPU 可用性...",
         Some(5),
     );
-    let gpu_available = check_gpu_availability(&python_path);
-    let has_nvidia_gpu = detect_nvidia_gpu_name().is_some();
+    let gpu_available = runtime::capability::check_gpu_availability(&python_path);
+    let has_nvidia_gpu = runtime::capability::detect_nvidia_gpu_name().is_some();
     let gpu_requested = prefer_demucs_cuda && has_nvidia_gpu;
     let selected_demucs_device = if gpu_requested && gpu_available {
         "cuda"
@@ -5983,62 +5690,6 @@ print(json.dumps(payload))
                 "song": song
             }),
         );
-    }
-}
-
-fn check_gpu_availability(python_path: &PathBuf) -> bool {
-    let check_script = r#"
-import sys
-try:
-    import torch
-    if torch.cuda.is_available():
-        print("GPU_CUDA")
-    else:
-        print("GPU_NONE")
-except:
-    print("GPU_CHECK_FAILED")
-"#;
-
-    let mut cmd = Command::new(python_path);
-    cmd.arg("-c")
-        .arg(check_script)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    process_control::configure_console_visibility(&mut cmd);
-    let mut child = match cmd.spawn() {
-        Ok(child) => child,
-        Err(_) => return false,
-    };
-
-    let start = Instant::now();
-    let timeout = Duration::from_secs(5);
-
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                if !status.success() {
-                    return false;
-                }
-                let mut out = String::new();
-                if let Some(mut stdout) = child.stdout.take() {
-                    let _ = stdout.read_to_string(&mut out);
-                }
-                return out.contains("GPU_CUDA");
-            }
-            Ok(None) => {
-                if start.elapsed() >= timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return false;
-                }
-                std::thread::sleep(Duration::from_millis(150));
-            }
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return false;
-            }
-        }
     }
 }
 
