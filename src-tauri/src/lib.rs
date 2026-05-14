@@ -11,7 +11,9 @@ use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
+mod models;
 mod process_control;
+pub use models::*;
 
 static SONGS: Mutex<Option<HashMap<String, Song>>> = Mutex::new(None);
 static CANCEL_FLAGS: Mutex<Option<HashMap<String, bool>>> = Mutex::new(None);
@@ -36,114 +38,6 @@ struct FileStorageSettings {
     instrumental_root: String,
     vocals_root: String,
     lyrics_root: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RuntimeHealthCheck {
-    name: String,
-    ok: bool,
-    severity: String,
-    detail: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RuntimeHealthReport {
-    level: String,
-    label: String,
-    detail: String,
-    torch_cuda_available: bool,
-    selected_device: String,
-    torch_version: Option<String>,
-    torch_cuda_version: Option<String>,
-    torch_cuda_device_name: Option<String>,
-    has_nvidia_gpu: bool,
-    nvidia_driver_visible: bool,
-    nvidia_driver_cuda_version: Option<String>,
-    checks: Vec<RuntimeHealthCheck>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct BootstrapStatus {
-    runtime_ready: bool,
-    demucs_models_ready: bool,
-    whisper_base_ready: bool,
-    ffmpeg_ready: bool,
-    can_run_core: bool,
-    torch_cuda_available: bool,
-    selected_device: String,
-    torch_version: Option<String>,
-    torch_cuda_version: Option<String>,
-    torch_cuda_device_name: Option<String>,
-    has_nvidia_gpu: bool,
-    nvidia_driver_visible: bool,
-    nvidia_driver_cuda_version: Option<String>,
-    detail: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct RuntimeManifest {
-    #[serde(default)]
-    version: u32,
-    #[serde(default)]
-    platforms: RuntimeManifestPlatforms,
-    #[serde(default)]
-    model_sources: RuntimeManifestModelSources,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct RuntimeManifestModelSources {
-    #[serde(default)]
-    demucs: Vec<String>,
-    #[serde(default)]
-    whisper_base: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct RuntimeManifestPlatforms {
-    #[serde(default)]
-    macos: RuntimeManifestPlatform,
-    #[serde(default)]
-    windows: RuntimeManifestPlatform,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct RuntimeManifestPlatform {
-    #[serde(default)]
-    python_runtime_sources: Vec<RuntimeManifestArtifact>,
-    #[serde(default)]
-    ffmpeg_sources: Vec<RuntimeManifestArtifact>,
-    #[serde(default)]
-    models: RuntimeManifestPlatformModels,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct RuntimeManifestPlatformModels {
-    #[serde(default)]
-    demucs: Vec<RuntimeManifestArtifact>,
-    #[serde(default)]
-    whisper_base: Vec<RuntimeManifestArtifact>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct RuntimeManifestArtifact {
-    url: String,
-    #[serde(default)]
-    sha256: Option<String>,
-    #[serde(default)]
-    note: Option<String>,
-    #[serde(default)]
-    target_relpath: Option<String>,
-    #[serde(default)]
-    inline_text: Option<String>,
 }
 
 impl Default for FileStorageSettings {
@@ -226,108 +120,6 @@ impl JobManager {
         }
         save_songs_to_disk();
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Song {
-    pub id: String,
-    pub name: String,
-    pub original_path: String,
-    #[serde(default)]
-    pub playlist_folder: Option<String>,
-    #[serde(default)]
-    pub vocals_path: Option<String>,
-    #[serde(default)]
-    pub instrumental_path: Option<String>,
-    #[serde(default)]
-    pub original_mix_path: Option<String>,
-    #[serde(default)]
-    pub lyrics_path: Option<String>,
-    pub duration: u64,
-    pub status: String,
-    pub progress: u32,
-    #[serde(default)]
-    pub processing_stage: Option<String>,
-    #[serde(default)]
-    pub error_message: Option<String>,
-    pub added_at: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LyricToken {
-    pub id: String,
-    pub line_id: String,
-    pub index: u32,
-    pub text: String,
-    pub start_ms: u64,
-    pub end_ms: u64,
-    pub confidence: f32,
-    pub kind: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LyricLineDoc {
-    pub id: String,
-    pub index: u32,
-    pub start_ms: u64,
-    pub end_ms: u64,
-    pub text: String,
-    pub confidence: f32,
-    pub edited: bool,
-    pub locked: bool,
-    pub tokens: Vec<LyricToken>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LyricDocument {
-    pub song_id: String,
-    pub version: u32,
-    pub language: Option<String>,
-    pub source: String,
-    pub alignment_engine: String,
-    pub created_at: u64,
-    pub updated_at: u64,
-    pub global_offset_ms: i64,
-    pub dirty: bool,
-    pub quality_score: f32,
-    pub lines: Vec<LyricLineDoc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WhisperWordResult {
-    start: Option<f64>,
-    end: Option<f64>,
-    word: String,
-    probability: Option<f64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WhisperSegmentResult {
-    start: f64,
-    end: f64,
-    text: String,
-    words: Option<Vec<WhisperWordResult>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WhisperTranscriptionResult {
-    language: Option<String>,
-    language_probability: Option<f64>,
-    segments: Vec<WhisperSegmentResult>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GeneratedLyricsDraftResult {
-    lyrics_path: String,
-    document: LyricDocument,
 }
 
 fn get_data_dir() -> PathBuf {
@@ -1559,21 +1351,6 @@ fn detect_nvidia_gpu_name() -> Option<String> {
         .map(|line| line.trim())
         .find(|line| !line.is_empty())
         .map(|line| line.to_string())
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct TorchCudaCapability {
-    has_nvidia_gpu: bool,
-    nvidia_driver_visible: bool,
-    nvidia_gpu_name: Option<String>,
-    nvidia_driver_cuda_version: Option<String>,
-    torch_installed: bool,
-    torch_version: Option<String>,
-    torch_cuda_available: bool,
-    torch_cuda_version: Option<String>,
-    torch_cuda_device_name: Option<String>,
-    selected_device: String,
 }
 
 fn detect_torch_cuda_capability(python_path: &Path) -> TorchCudaCapability {
@@ -3411,142 +3188,6 @@ fn normalize_folder_name(folder: Option<String>) -> Option<String> {
         .and_then(|value| if value.is_empty() { None } else { Some(value) })
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct LrclibTrack {
-    #[serde(default)]
-    id: Option<u64>,
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    #[serde(rename = "trackName", alias = "track_name")]
-    track_name: Option<String>,
-    #[serde(default)]
-    #[serde(rename = "artistName", alias = "artist_name")]
-    artist_name: Option<String>,
-    #[serde(default)]
-    #[serde(rename = "albumName", alias = "album_name")]
-    album_name: Option<String>,
-    #[serde(default)]
-    duration: Option<f64>,
-    #[serde(default)]
-    instrumental: Option<bool>,
-    #[serde(default)]
-    #[serde(rename = "plainLyrics", alias = "plain_lyrics")]
-    plain_lyrics: Option<String>,
-    #[serde(default)]
-    #[serde(rename = "syncedLyrics", alias = "synced_lyrics")]
-    synced_lyrics: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct NeteaseSearchResponse {
-    #[serde(default)]
-    result: Option<NeteaseSearchResult>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct NeteaseSearchResult {
-    #[serde(default)]
-    songs: Vec<NeteaseSong>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct NeteaseSong {
-    id: u64,
-    name: String,
-    #[serde(default)]
-    duration: Option<u64>,
-    #[serde(default)]
-    artists: Vec<NeteaseArtist>,
-    #[serde(default)]
-    album: Option<NeteaseAlbum>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct NeteaseArtist {
-    #[serde(default)]
-    name: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct NeteaseAlbum {
-    #[serde(default)]
-    name: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct NeteaseLyricBlock {
-    #[serde(default)]
-    lyric: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct NeteaseLyricResponse {
-    #[serde(default)]
-    lrc: Option<NeteaseLyricBlock>,
-    #[serde(default)]
-    tlyric: Option<NeteaseLyricBlock>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct QqSearchResponse {
-    data: Option<QqSearchData>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct QqSearchData {
-    #[serde(default)]
-    song: Option<QqSongContainer>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct QqSongContainer {
-    #[serde(default)]
-    list: Vec<QqSong>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct QqSinger {
-    #[serde(default)]
-    name: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct QqSong {
-    #[serde(default)]
-    songmid: Option<String>,
-    #[serde(default)]
-    songname: Option<String>,
-    #[serde(default)]
-    singer: Vec<QqSinger>,
-    #[serde(default)]
-    albumname: Option<String>,
-    #[serde(default)]
-    interval: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LyricsCandidate {
-    id: String,
-    source: String,
-    source_label: String,
-    title: String,
-    artist: Option<String>,
-    album: Option<String>,
-    score: i32,
-    synced: bool,
-    preview: String,
-    document: LyricDocument,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CachedLyricsCandidateBundle {
-    cached_at: u64,
-    candidates: Vec<LyricsCandidate>,
-}
-
 fn normalize_match_text(text: &str) -> String {
     text.to_lowercase()
         .chars()
@@ -3644,14 +3285,6 @@ fn clean_song_search_hint(song: &Song) -> String {
         .and_then(|value| value.to_str())
         .unwrap_or(&song.name);
     clean_lyrics_search_hint(file_stem)
-}
-
-#[derive(Debug, Clone)]
-struct LyricsSearchIntent {
-    query_track: String,
-    query_artist: Option<String>,
-    variants: Vec<(Option<String>, String)>,
-    allow_weak_fallback: bool,
 }
 
 fn build_lyrics_search_intent(song: &Song, manual_query: Option<&str>) -> LyricsSearchIntent {
@@ -3989,13 +3622,6 @@ fn normalized_overlap_ratio(left: &str, right: &str) -> f32 {
     }
 
     hit as f32 / seen.len().max(1) as f32
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum LyricsCandidateTier {
-    Strong = 2,
-    Acceptable = 1,
-    Weak = 0,
 }
 
 fn lyrics_candidate_source_priority(source: &str) -> i32 {
