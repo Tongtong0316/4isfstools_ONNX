@@ -14,7 +14,13 @@ use tauri::{AppHandle, Emitter, Manager};
 mod models;
 mod process_control;
 mod runtime;
+mod storage;
 pub use models::*;
+use storage::{
+    ensure_dir, get_data_dir, get_default_asset_root, get_file_storage_settings_path,
+    get_library_path, get_lyrics_search_cache_path, get_songs_dir,
+    normalize_file_storage_settings,
+};
 
 static SONGS: Mutex<Option<HashMap<String, Song>>> = Mutex::new(None);
 static CANCEL_FLAGS: Mutex<Option<HashMap<String, bool>>> = Mutex::new(None);
@@ -35,7 +41,7 @@ struct JobManager;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct FileStorageSettings {
+pub(crate) struct FileStorageSettings {
     instrumental_root: String,
     vocals_root: String,
     lyrics_root: String,
@@ -123,18 +129,6 @@ impl JobManager {
     }
 }
 
-fn get_data_dir() -> PathBuf {
-    if let Ok(override_dir) = std::env::var("FORISFSTOOLS_DATA_DIR") {
-        let trimmed = override_dir.trim();
-        if !trimmed.is_empty() {
-            return PathBuf::from(trimmed);
-        }
-    }
-    dirs::data_local_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("4isfstools")
-}
-
 fn is_isolated_runtime_mode() -> bool {
     std::env::var("FORISFSTOOLS_ISOLATED")
         .map(|v| {
@@ -144,28 +138,8 @@ fn is_isolated_runtime_mode() -> bool {
         .unwrap_or(false)
 }
 
-fn get_songs_dir() -> PathBuf {
-    get_data_dir().join("songs")
-}
-
-fn get_library_path() -> PathBuf {
-    get_data_dir().join("library.json")
-}
-
 fn get_lyrics_json_path(song_id: &str) -> PathBuf {
     resolve_lyrics_json_path(song_id, &get_file_storage_settings_snapshot())
-}
-
-fn get_lyrics_search_cache_path() -> PathBuf {
-    get_data_dir().join("lyrics_search_cache.json")
-}
-
-fn get_file_storage_settings_path() -> PathBuf {
-    get_data_dir().join("file_storage_settings.json")
-}
-
-fn get_default_asset_root(kind: &str) -> PathBuf {
-    get_data_dir().join("assets").join(kind)
 }
 
 fn command_is_available(program: &str, arg: &str) -> bool {
@@ -581,13 +555,6 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
     }
 }
 
-fn ensure_dir(path: &PathBuf) -> std::io::Result<()> {
-    if !path.exists() {
-        fs::create_dir_all(path)?;
-    }
-    Ok(())
-}
-
 fn is_full_capability_ready(
     python_ready: bool,
     ffmpeg_ready: bool,
@@ -673,27 +640,6 @@ fn persist_lyrics_search_cache() {
             let _ = fs::write(get_lyrics_search_cache_path(), json);
         }
     }
-}
-
-fn normalize_storage_root(value: &str, fallback: PathBuf) -> String {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        fallback.to_string_lossy().to_string()
-    } else {
-        PathBuf::from(trimmed).to_string_lossy().to_string()
-    }
-}
-
-fn normalize_file_storage_settings(mut settings: FileStorageSettings) -> FileStorageSettings {
-    settings.instrumental_root = normalize_storage_root(
-        &settings.instrumental_root,
-        get_default_asset_root("instrumental"),
-    );
-    settings.vocals_root =
-        normalize_storage_root(&settings.vocals_root, get_default_asset_root("vocals"));
-    settings.lyrics_root =
-        normalize_storage_root(&settings.lyrics_root, get_default_asset_root("lyrics"));
-    settings
 }
 
 fn load_file_storage_settings_from_disk() -> FileStorageSettings {
