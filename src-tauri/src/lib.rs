@@ -5632,7 +5632,11 @@ async fn import_songs(_app: AppHandle, paths: Vec<String>) -> Result<Vec<Song>, 
 }
 
 #[tauri::command]
-async fn start_process(app: AppHandle, song_id: String) -> Result<(), String> {
+async fn start_process(
+    app: AppHandle,
+    song_id: String,
+    prefer_demucs_cuda: bool,
+) -> Result<(), String> {
     let song = {
         let songs = SONGS.lock().unwrap();
         songs.as_ref().and_then(|m| m.get(&song_id).cloned())
@@ -5668,6 +5672,7 @@ async fn start_process(app: AppHandle, song_id: String) -> Result<(), String> {
             input_path,
             song_dir,
             song_duration_ms,
+            prefer_demucs_cuda,
         );
     });
 
@@ -5681,6 +5686,7 @@ fn process_song_background(
     input_path: String,
     output_dir: PathBuf,
     _song_duration_ms: u64,
+    prefer_demucs_cuda: bool,
 ) {
     let python_path = get_python_path(&app);
     let _models_dir = get_models_dir(&app);
@@ -5700,13 +5706,22 @@ fn process_song_background(
         Some(5),
     );
     let gpu_available = check_gpu_availability(&python_path);
+    let has_nvidia_gpu = detect_nvidia_gpu_name().is_some();
+    let gpu_requested = prefer_demucs_cuda && has_nvidia_gpu;
+    let selected_demucs_device = if gpu_requested && gpu_available {
+        "cuda"
+    } else {
+        "cpu"
+    };
 
     if check_cancel_flag(&song_id) {
         return;
     }
 
-    let (stage_name, message, estimated) = if gpu_available {
+    let (stage_name, message, estimated) = if selected_demucs_device == "cuda" {
         ("gpu_available", "GPU 可用", Some(180))
+    } else if gpu_requested && !gpu_available {
+        ("cpu_fallback", "GPU 请求回退 CPU", Some(600))
     } else {
         ("cpu_fallback", "CPU 处理中", Some(600))
     };
@@ -5801,6 +5816,8 @@ with open(job_file, "r", encoding="utf-8-sig") as f:
 input_path = job_data["input_path"]
 output_dir = job_data["output_dir"]
 result_file = os.path.join(output_dir, "separator_result.json")
+prefer_demucs_cuda = bool(job_data.get("prefer_demucs_cuda", False))
+has_nvidia_gpu = bool(job_data.get("has_nvidia_gpu", False))
 
 os.makedirs(output_dir, exist_ok=True)
 
@@ -5821,7 +5838,7 @@ try:
 except Exception:
     pass
 
-if gpu_available:
+if prefer_demucs_cuda and has_nvidia_gpu and gpu_available:
     device = "cuda"
 else:
     device = "cpu"
@@ -5837,6 +5854,8 @@ def emit_error(message):
         "error": message,
         "success": False,
         "selected_device": device,
+        "gpu_requested": bool(prefer_demucs_cuda and has_nvidia_gpu),
+        "has_nvidia_gpu": has_nvidia_gpu,
         "torch_cuda_available": gpu_available,
         "torch_version": torch_version,
         "torch_cuda_version": torch_cuda_version,
@@ -5980,6 +5999,8 @@ payload = {
     "success": True,
     "terminated_by_signal": terminated_by_signal,
     "selected_device": device,
+    "gpu_requested": bool(prefer_demucs_cuda and has_nvidia_gpu),
+    "has_nvidia_gpu": has_nvidia_gpu,
     "torch_cuda_available": gpu_available,
     "torch_version": torch_version,
     "torch_cuda_version": torch_cuda_version,
@@ -6016,6 +6037,8 @@ print(json.dumps(payload))
         let job_data = serde_json::json!({
             "input_path": input_path,
             "output_dir": output_dir.to_str().unwrap(),
+            "prefer_demucs_cuda": prefer_demucs_cuda,
+            "has_nvidia_gpu": has_nvidia_gpu,
         });
         if let Err(e) = fs::write(&job_file, job_data.to_string()) {
             emit_error_for_job(
@@ -6493,7 +6516,11 @@ async fn delete_song(id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn reprocess_song(app: AppHandle, song_id: String) -> Result<(), String> {
+async fn reprocess_song(
+    app: AppHandle,
+    song_id: String,
+    prefer_demucs_cuda: bool,
+) -> Result<(), String> {
     let song = {
         let songs = SONGS.lock().unwrap();
         songs.as_ref().and_then(|m| m.get(&song_id).cloned())
@@ -6544,6 +6571,7 @@ async fn reprocess_song(app: AppHandle, song_id: String) -> Result<(), String> {
             input_path,
             song_dir,
             song_duration_ms,
+            prefer_demucs_cuda,
         );
     });
 

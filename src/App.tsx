@@ -164,6 +164,33 @@ function App() {
   const runtimeHasNvidiaGpu = bootstrapStatus?.hasNvidiaGpu ?? runtimeHealth?.hasNvidiaGpu ?? false;
   const runtimeTorchCudaAvailable =
     bootstrapStatus?.torchCudaAvailable ?? runtimeHealth?.torchCudaAvailable ?? false;
+  const gpuRuntimePreferenceStorageKey = "4isfstools.prefer_demucs_cuda";
+  const [preferDemucsCuda, setPreferDemucsCuda] = useState(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+    try {
+      return window.localStorage.getItem(gpuRuntimePreferenceStorageKey) === "true";
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    try {
+      window.localStorage.setItem(
+        gpuRuntimePreferenceStorageKey,
+        preferDemucsCuda ? "true" : "false"
+      );
+    } catch {
+      // ignore persistence failures
+    }
+  }, [preferDemucsCuda]);
+
+  const demucsGpuRequested = runtimeHasNvidiaGpu && preferDemucsCuda;
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const originalAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -823,7 +850,7 @@ function App() {
       await Promise.all(
         newSongs.map(async (song) => {
           try {
-            await invoke("start_process", { songId: song.id });
+            await invoke("start_process", { songId: song.id, preferDemucsCuda: demucsGpuRequested });
           } catch (e) {
             console.error(`Failed to auto-start process for ${song.name}:`, e);
           }
@@ -882,7 +909,7 @@ function App() {
   const handleSeparateInstrumental = useCallback(async (song: Song) => {
     try {
       const command = song.status === "ready" ? "reprocess_song" : "start_process";
-      await invoke(command, { songId: song.id });
+      await invoke(command, { songId: song.id, preferDemucsCuda: demucsGpuRequested });
       setSongs((prev) => prev.map((item) =>
         item.id === song.id
           ? { ...item, status: "processing" as const, progress: 0, processingStage: "checking_gpu" as ProcessingStage, error_message: undefined }
@@ -1285,6 +1312,27 @@ function App() {
                 {runtimeHealth?.label ?? "检测中..."}
               </span>
             </button>
+            <label
+              className={`ml-1 inline-flex items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-xs text-[#d4d4d8] transition-colors ${
+                runtimeHasNvidiaGpu ? "hover:bg-white/[0.05] cursor-pointer" : "cursor-not-allowed opacity-45"
+              }`}
+              title={
+                runtimeHasNvidiaGpu
+                  ? demucsGpuRequested
+                    ? "Demucs 将在可用时优先请求 GPU"
+                    : "未启用 GPU 运行"
+                  : "未检测到 NVIDIA GPU"
+              }
+            >
+              <input
+                type="checkbox"
+                checked={demucsGpuRequested}
+                disabled={!runtimeHasNvidiaGpu}
+                onChange={(event) => setPreferDemucsCuda(event.target.checked)}
+                className="h-3.5 w-3.5 rounded border-white/20 bg-white/5 text-indigo-500 accent-indigo-500 focus:ring-0 disabled:cursor-not-allowed"
+              />
+              <span className="whitespace-nowrap">GPU 运行</span>
+            </label>
           </div>
           <div className="flex items-center gap-5">
             <div className="flex items-center gap-2 text-xs text-[var(--text-muted)] whitespace-nowrap">
