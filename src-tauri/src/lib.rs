@@ -1,14 +1,14 @@
-use serde::{Deserialize, Serialize};
-use std::io::{self, Read};
-use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
-use std::process::{Command, Stdio};
-use std::sync::{mpsc, Mutex};
-use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(unix)]
 use libc;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::io::{self, Read};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{mpsc, Mutex};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
 mod process_control;
@@ -17,7 +17,8 @@ static SONGS: Mutex<Option<HashMap<String, Song>>> = Mutex::new(None);
 static CANCEL_FLAGS: Mutex<Option<HashMap<String, bool>>> = Mutex::new(None);
 static JOBS: Mutex<Option<HashMap<String, JobHandle>>> = Mutex::new(None);
 static ACTIVE_JOB_TOKENS: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
-static LYRICS_SEARCH_CACHE: Mutex<Option<HashMap<String, CachedLyricsCandidateBundle>>> = Mutex::new(None);
+static LYRICS_SEARCH_CACHE: Mutex<Option<HashMap<String, CachedLyricsCandidateBundle>>> =
+    Mutex::new(None);
 static FILE_STORAGE_SETTINGS: Mutex<Option<FileStorageSettings>> = Mutex::new(None);
 static JOB_TOKEN_COUNTER: AtomicU64 = AtomicU64::new(1);
 const LYRICS_SEARCH_CACHE_VERSION: &str = "lyrics-search-v3";
@@ -52,6 +53,14 @@ struct RuntimeHealthReport {
     level: String,
     label: String,
     detail: String,
+    torch_cuda_available: bool,
+    selected_device: String,
+    torch_version: Option<String>,
+    torch_cuda_version: Option<String>,
+    torch_cuda_device_name: Option<String>,
+    has_nvidia_gpu: bool,
+    nvidia_driver_visible: bool,
+    nvidia_driver_cuda_version: Option<String>,
     checks: Vec<RuntimeHealthCheck>,
 }
 
@@ -63,6 +72,14 @@ struct BootstrapStatus {
     whisper_base_ready: bool,
     ffmpeg_ready: bool,
     can_run_core: bool,
+    torch_cuda_available: bool,
+    selected_device: String,
+    torch_version: Option<String>,
+    torch_cuda_version: Option<String>,
+    torch_cuda_device_name: Option<String>,
+    has_nvidia_gpu: bool,
+    nvidia_driver_visible: bool,
+    nvidia_driver_cuda_version: Option<String>,
     detail: String,
 }
 
@@ -132,9 +149,15 @@ struct RuntimeManifestArtifact {
 impl Default for FileStorageSettings {
     fn default() -> Self {
         Self {
-            instrumental_root: get_default_asset_root("instrumental").to_string_lossy().to_string(),
-            vocals_root: get_default_asset_root("vocals").to_string_lossy().to_string(),
-            lyrics_root: get_default_asset_root("lyrics").to_string_lossy().to_string(),
+            instrumental_root: get_default_asset_root("instrumental")
+                .to_string_lossy()
+                .to_string(),
+            vocals_root: get_default_asset_root("vocals")
+                .to_string_lossy()
+                .to_string(),
+            lyrics_root: get_default_asset_root("lyrics")
+                .to_string_lossy()
+                .to_string(),
         }
     }
 }
@@ -374,12 +397,13 @@ fn command_is_available(program: &str, arg: &str) -> bool {
 }
 
 fn resolve_ffmpeg_binary_path() -> Option<PathBuf> {
-    let mut candidates = vec![
-        PathBuf::from("ffmpeg"),
-    ];
+    let mut candidates = vec![PathBuf::from("ffmpeg")];
     // Windows: check runtime directory
     if cfg!(windows) {
-        let runtime_ffmpeg = get_runtime_dir().join("ffmpeg").join("bin").join("ffmpeg.exe");
+        let runtime_ffmpeg = get_runtime_dir()
+            .join("ffmpeg")
+            .join("bin")
+            .join("ffmpeg.exe");
         candidates.insert(0, runtime_ffmpeg);
     }
     // macOS / Linux
@@ -443,11 +467,13 @@ fn extract_audio_from_video(input_path: &Path, output_path: &Path) -> Result<(),
     }
 
     if let Some(parent) = output_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("Failed to create audio output directory: {}", e))?;
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create audio output directory: {}", e))?;
     }
 
     let ffmpeg_bin = resolve_ffmpeg_binary_path().ok_or_else(|| {
-        "FFmpeg 不可用：未在 PATH 或常见路径（/opt/homebrew/bin, /usr/local/bin）中找到 ffmpeg".to_string()
+        "FFmpeg 不可用：未在 PATH 或常见路径（/opt/homebrew/bin, /usr/local/bin）中找到 ffmpeg"
+            .to_string()
     })?;
 
     let status = Command::new(ffmpeg_bin)
@@ -471,7 +497,10 @@ fn extract_audio_from_video(input_path: &Path, output_path: &Path) -> Result<(),
         .map_err(|e| format!("Failed to run ffmpeg for audio extraction: {}", e))?;
 
     if !status.success() {
-        return Err(format!("ffmpeg audio extraction failed with status: {}", status));
+        return Err(format!(
+            "ffmpeg audio extraction failed with status: {}",
+            status
+        ));
     }
 
     if !output_path.exists() {
@@ -481,7 +510,11 @@ fn extract_audio_from_video(input_path: &Path, output_path: &Path) -> Result<(),
     Ok(())
 }
 
-fn python_module_is_available(python_path: &PathBuf, module_name: &str, timeout_secs: u64) -> Result<bool, String> {
+fn python_module_is_available(
+    python_path: &PathBuf,
+    module_name: &str,
+    timeout_secs: u64,
+) -> Result<bool, String> {
     let script = format!(
         r#"
 import importlib
@@ -500,7 +533,8 @@ except Exception:
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     process_control::configure_console_visibility(&mut cmd);
-    let mut child = cmd.spawn()
+    let mut child = cmd
+        .spawn()
         .map_err(|e| format!("Failed to run python check: {}", e))?;
 
     let start = Instant::now();
@@ -535,7 +569,11 @@ except Exception:
     }
 }
 
-fn whisper_model_probe(python_path: &PathBuf, model_dir: &PathBuf, timeout_secs: u64) -> Result<(), String> {
+fn whisper_model_probe(
+    python_path: &PathBuf,
+    model_dir: &PathBuf,
+    timeout_secs: u64,
+) -> Result<(), String> {
     let script = r#"
 import os
 from faster_whisper import WhisperModel
@@ -551,7 +589,8 @@ print("OK")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     process_control::configure_console_visibility(&mut cmd);
-    let mut child = cmd.spawn()
+    let mut child = cmd
+        .spawn()
         .map_err(|e| format!("Whisper 模型校验启动失败: {}", e))?;
 
     let start = Instant::now();
@@ -594,13 +633,18 @@ print("OK")
     }
 }
 
-fn whisper_model_is_usable(python_path: &PathBuf, model_dir: &PathBuf, timeout_secs: u64) -> Result<bool, String> {
+fn whisper_model_is_usable(
+    python_path: &PathBuf,
+    model_dir: &PathBuf,
+    timeout_secs: u64,
+) -> Result<bool, String> {
     Ok(whisper_model_probe(python_path, model_dir, timeout_secs).is_ok())
 }
 
 fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
     let python_path = get_python_path(app);
     let python_exists = python_path.exists();
+    let torch_capability = detect_torch_cuda_capability(&python_path);
     let ffmpeg_ready = command_is_available("ffmpeg", "-version");
     let torch_ready = if python_exists {
         python_module_is_available(&python_path, "torch", 6).unwrap_or(false)
@@ -649,63 +693,153 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
         RuntimeHealthCheck {
             name: "Python".to_string(),
             ok: python_exists,
-            severity: if python_exists { "info".to_string() } else { "error".to_string() },
+            severity: if python_exists {
+                "info".to_string()
+            } else {
+                "error".to_string()
+            },
             detail: Some(python_path.to_string_lossy().to_string()),
+        },
+        RuntimeHealthCheck {
+            name: "NVIDIA GPU".to_string(),
+            ok: torch_capability.has_nvidia_gpu,
+            severity: if torch_capability.has_nvidia_gpu {
+                "info".to_string()
+            } else {
+                "warning".to_string()
+            },
+            detail: torch_capability.nvidia_gpu_name.clone().or_else(|| {
+                torch_capability
+                    .nvidia_driver_cuda_version
+                    .clone()
+                    .map(|ver| format!("CUDA Driver {}", ver))
+            }),
         },
         RuntimeHealthCheck {
             name: "FFmpeg".to_string(),
             ok: ffmpeg_ready,
-            severity: if ffmpeg_ready { "info".to_string() } else { "error".to_string() },
+            severity: if ffmpeg_ready {
+                "info".to_string()
+            } else {
+                "error".to_string()
+            },
             detail: Some("音频复合与转换".to_string()),
         },
         RuntimeHealthCheck {
             name: "Torch".to_string(),
             ok: torch_ready,
-            severity: if torch_ready { "info".to_string() } else { "error".to_string() },
+            severity: if torch_ready {
+                "info".to_string()
+            } else {
+                "error".to_string()
+            },
             detail: Some("人声分离运行时".to_string()),
+        },
+        RuntimeHealthCheck {
+            name: "Torch CUDA".to_string(),
+            ok: torch_capability.torch_cuda_available,
+            severity: if torch_capability.torch_cuda_available {
+                "info".to_string()
+            } else {
+                "warning".to_string()
+            },
+            detail: Some(if torch_capability.torch_cuda_available {
+                let device = torch_capability
+                    .torch_cuda_device_name
+                    .clone()
+                    .unwrap_or_else(|| "CUDA 可用".to_string());
+                format!(
+                    "{} | device={}",
+                    torch_capability
+                        .torch_cuda_version
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    device
+                )
+            } else if torch_capability.has_nvidia_gpu {
+                "检测到 NVIDIA GPU，但当前 torch 不支持 CUDA".to_string()
+            } else {
+                "未检测到 NVIDIA GPU，使用 CPU".to_string()
+            }),
         },
         RuntimeHealthCheck {
             name: "Demucs".to_string(),
             ok: demucs_ready,
-            severity: if demucs_ready { "info".to_string() } else { "error".to_string() },
+            severity: if demucs_ready {
+                "info".to_string()
+            } else {
+                "error".to_string()
+            },
             detail: Some("伴奏/人声分离".to_string()),
         },
         RuntimeHealthCheck {
             name: "模型".to_string(),
             ok: demucs_models_ready,
-            severity: if demucs_models_ready { "info".to_string() } else { "warning".to_string() },
+            severity: if demucs_models_ready {
+                "info".to_string()
+            } else {
+                "warning".to_string()
+            },
             detail: Some("分离模型".to_string()),
         },
         RuntimeHealthCheck {
             name: "Faster-Whisper".to_string(),
             ok: faster_whisper_ready,
-            severity: if faster_whisper_ready { "info".to_string() } else { "warning".to_string() },
+            severity: if faster_whisper_ready {
+                "info".to_string()
+            } else {
+                "warning".to_string()
+            },
             detail: Some("AI 听写运行时".to_string()),
         },
         RuntimeHealthCheck {
             name: "SoundFile".to_string(),
             ok: soundfile_ready,
-            severity: if soundfile_ready { "info".to_string() } else { "error".to_string() },
+            severity: if soundfile_ready {
+                "info".to_string()
+            } else {
+                "error".to_string()
+            },
             detail: Some("torchaudio 兼容音频后端".to_string()),
         },
         RuntimeHealthCheck {
             name: "Whisper base".to_string(),
             ok: whisper_base_ready,
-            severity: if whisper_base_ready { "info".to_string() } else { "warning".to_string() },
+            severity: if whisper_base_ready {
+                "info".to_string()
+            } else {
+                "warning".to_string()
+            },
             detail: Some(whisper_base_detail),
         },
     ];
 
     let (level, label, detail) = if full_ready {
-        ("ready".to_string(), "可运行".to_string(), "核心环境与模型已就绪".to_string())
+        (
+            "ready".to_string(),
+            "可运行".to_string(),
+            "核心环境与模型已就绪".to_string(),
+        )
     } else {
-        ("error".to_string(), "环境异常".to_string(), "核心依赖或模型未就绪".to_string())
+        (
+            "error".to_string(),
+            "环境异常".to_string(),
+            "核心依赖或模型未就绪".to_string(),
+        )
     };
 
     RuntimeHealthReport {
         level,
         label,
         detail,
+        torch_cuda_available: torch_capability.torch_cuda_available,
+        selected_device: torch_capability.selected_device.clone(),
+        torch_version: torch_capability.torch_version.clone(),
+        torch_cuda_version: torch_capability.torch_cuda_version.clone(),
+        torch_cuda_device_name: torch_capability.torch_cuda_device_name.clone(),
+        has_nvidia_gpu: torch_capability.has_nvidia_gpu,
+        nvidia_driver_visible: torch_capability.nvidia_driver_visible,
+        nvidia_driver_cuda_version: torch_capability.nvidia_driver_cuda_version.clone(),
         checks: {
             checks.sort_by(|a, b| a.name.cmp(&b.name));
             checks
@@ -785,7 +919,9 @@ fn ensure_lyrics_search_cache_loaded() {
     let path = get_lyrics_search_cache_path();
     if path.exists() {
         if let Ok(content) = fs::read_to_string(&path) {
-            if let Ok(parsed) = serde_json::from_str::<HashMap<String, CachedLyricsCandidateBundle>>(&content) {
+            if let Ok(parsed) =
+                serde_json::from_str::<HashMap<String, CachedLyricsCandidateBundle>>(&content)
+            {
                 *cache = Some(parsed);
                 return;
             }
@@ -815,9 +951,14 @@ fn normalize_storage_root(value: &str, fallback: PathBuf) -> String {
 }
 
 fn normalize_file_storage_settings(mut settings: FileStorageSettings) -> FileStorageSettings {
-    settings.instrumental_root = normalize_storage_root(&settings.instrumental_root, get_default_asset_root("instrumental"));
-    settings.vocals_root = normalize_storage_root(&settings.vocals_root, get_default_asset_root("vocals"));
-    settings.lyrics_root = normalize_storage_root(&settings.lyrics_root, get_default_asset_root("lyrics"));
+    settings.instrumental_root = normalize_storage_root(
+        &settings.instrumental_root,
+        get_default_asset_root("instrumental"),
+    );
+    settings.vocals_root =
+        normalize_storage_root(&settings.vocals_root, get_default_asset_root("vocals"));
+    settings.lyrics_root =
+        normalize_storage_root(&settings.lyrics_root, get_default_asset_root("lyrics"));
     settings
 }
 
@@ -943,12 +1084,14 @@ fn move_or_copy_file(source: &Path, target: &Path) -> Result<bool, String> {
         return Ok(false);
     }
     if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("Failed to create directory {:?}: {}", parent, e))?;
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create directory {:?}: {}", parent, e))?;
     }
     match fs::rename(source, target) {
         Ok(_) => Ok(true),
         Err(_) => {
-            fs::copy(source, target).map_err(|e| format!("Failed to copy {:?} to {:?}: {}", source, target, e))?;
+            fs::copy(source, target)
+                .map_err(|e| format!("Failed to copy {:?} to {:?}: {}", source, target, e))?;
             let _ = fs::remove_file(source);
             Ok(true)
         }
@@ -956,32 +1099,51 @@ fn move_or_copy_file(source: &Path, target: &Path) -> Result<bool, String> {
 }
 
 fn pick_existing_path(candidates: &[PathBuf]) -> Option<PathBuf> {
-    candidates.iter().find(|candidate| candidate.exists()).cloned()
+    candidates
+        .iter()
+        .find(|candidate| candidate.exists())
+        .cloned()
 }
 
 fn migrate_song_assets(song: &mut Song, settings: &FileStorageSettings) -> Result<bool, String> {
     let mut changed = false;
     let legacy_demucs = legacy_demucs_dir(song);
     let source_instrumental = pick_existing_path(&[
-        song.instrumental_path.as_ref().map(PathBuf::from).unwrap_or_default(),
+        song.instrumental_path
+            .as_ref()
+            .map(PathBuf::from)
+            .unwrap_or_default(),
         legacy_demucs.join("no_vocals.wav"),
     ]);
     let source_vocals = pick_existing_path(&[
-        song.vocals_path.as_ref().map(PathBuf::from).unwrap_or_default(),
+        song.vocals_path
+            .as_ref()
+            .map(PathBuf::from)
+            .unwrap_or_default(),
         legacy_demucs.join("vocals.wav"),
     ]);
     let source_mix = pick_existing_path(&[
-        song.original_mix_path.as_ref().map(PathBuf::from).unwrap_or_default(),
+        song.original_mix_path
+            .as_ref()
+            .map(PathBuf::from)
+            .unwrap_or_default(),
         legacy_demucs.join("original_mix.wav"),
     ]);
     let source_lyrics_lrc = pick_existing_path(&[
-        song.lyrics_path.as_ref().map(PathBuf::from).unwrap_or_default(),
+        song.lyrics_path
+            .as_ref()
+            .map(PathBuf::from)
+            .unwrap_or_default(),
         legacy_lyrics_lrc_path(&song.id),
     ]);
     let source_lyrics_json = pick_existing_path(&[
         song.lyrics_path
             .as_ref()
-            .and_then(|path| Path::new(path).parent().map(|parent| parent.join("lyrics.json")))
+            .and_then(|path| {
+                Path::new(path)
+                    .parent()
+                    .map(|parent| parent.join("lyrics.json"))
+            })
             .unwrap_or_default(),
         legacy_lyrics_json_path(&song.id),
     ]);
@@ -1162,7 +1324,8 @@ fn load_songs_from_disk() {
         if let Ok(content) = fs::read_to_string(&lib_path) {
             if let Ok(songs_vec) = serde_json::from_str::<Vec<Song>>(&content) {
                 let mut songs = SONGS.lock().unwrap();
-                let map: HashMap<String, Song> = songs_vec.into_iter().map(|s| (s.id.clone(), s)).collect();
+                let map: HashMap<String, Song> =
+                    songs_vec.into_iter().map(|s| (s.id.clone(), s)).collect();
                 *songs = Some(map);
                 return;
             }
@@ -1199,7 +1362,8 @@ fn build_original_mix(vocals_path: &str, instrumental_path: &str) -> Result<Stri
     }
 
     let ffmpeg_bin = resolve_ffmpeg_binary_path().ok_or_else(|| {
-        "FFmpeg 不可用：未在 PATH 或常见路径（/opt/homebrew/bin, /usr/local/bin）中找到 ffmpeg".to_string()
+        "FFmpeg 不可用：未在 PATH 或常见路径（/opt/homebrew/bin, /usr/local/bin）中找到 ffmpeg"
+            .to_string()
     })?;
 
     let status = Command::new(ffmpeg_bin)
@@ -1258,34 +1422,51 @@ fn get_python_path(app: &AppHandle) -> PathBuf {
         let resource_dir = app.path().resource_dir().unwrap_or_default();
         if cfg!(windows) {
             let w = resource_dir.join("python").join("python.exe");
-            if w.exists() { return w; }
+            if w.exists() {
+                return w;
+            }
         } else {
             let p = resource_dir.join("python").join("bin").join("python3");
-            if p.exists() { return p; }
+            if p.exists() {
+                return p;
+            }
         }
     }
 
     // 4. Dev mode: project directory
     if cfg!(windows) {
         let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent().unwrap()
-            .join("python").join("python.exe");
-        if dev.exists() { return dev; }
+            .parent()
+            .unwrap()
+            .join("python")
+            .join("python.exe");
+        if dev.exists() {
+            return dev;
+        }
     } else {
         let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent().unwrap()
-            .join("python").join("bin").join("python3");
-        if dev.exists() { return dev; }
+            .parent()
+            .unwrap()
+            .join("python")
+            .join("bin")
+            .join("python3");
+        if dev.exists() {
+            return dev;
+        }
     }
 
     // 5. Production resource directory
     let resource_dir = app.path().resource_dir().unwrap_or_default();
     if cfg!(windows) {
         let prod = resource_dir.join("python").join("python.exe");
-        if prod.exists() { return prod; }
+        if prod.exists() {
+            return prod;
+        }
     } else {
         let prod = resource_dir.join("python").join("bin").join("python3");
-        if prod.exists() { return prod; }
+        if prod.exists() {
+            return prod;
+        }
     }
 
     // Fallback: return path that likely doesn't exist
@@ -1316,7 +1497,8 @@ fn detect_windows_python_path() -> Option<PathBuf> {
                 }
                 // Validate it actually runs
                 let mut probe_cmd = Command::new(&p);
-                probe_cmd.args(["-c", "print('ok')"])
+                probe_cmd
+                    .args(["-c", "print('ok')"])
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped());
                 process_control::configure_console_visibility(&mut probe_cmd);
@@ -1362,15 +1544,156 @@ fn detect_nvidia_cuda_version() -> Option<String> {
     None
 }
 
+fn detect_nvidia_gpu_name() -> Option<String> {
+    let mut cmd = Command::new("nvidia-smi");
+    process_control::configure_console_visibility(&mut cmd);
+    let output = cmd
+        .args(["--query-gpu=name", "--format=csv,noheader,nounits"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.lines()
+        .map(|line| line.trim())
+        .find(|line| !line.is_empty())
+        .map(|line| line.to_string())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct TorchCudaCapability {
+    has_nvidia_gpu: bool,
+    nvidia_driver_visible: bool,
+    nvidia_gpu_name: Option<String>,
+    nvidia_driver_cuda_version: Option<String>,
+    torch_installed: bool,
+    torch_version: Option<String>,
+    torch_cuda_available: bool,
+    torch_cuda_version: Option<String>,
+    torch_cuda_device_name: Option<String>,
+    selected_device: String,
+}
+
+fn detect_torch_cuda_capability(python_path: &Path) -> TorchCudaCapability {
+    let nvidia_gpu_name = detect_nvidia_gpu_name();
+    let nvidia_driver_cuda_version = detect_nvidia_cuda_version();
+    let has_nvidia_gpu = nvidia_gpu_name.is_some() || nvidia_driver_cuda_version.is_some();
+    let nvidia_driver_visible = has_nvidia_gpu;
+    let mut capability = TorchCudaCapability {
+        has_nvidia_gpu,
+        nvidia_driver_visible,
+        nvidia_gpu_name,
+        nvidia_driver_cuda_version,
+        selected_device: "cpu".to_string(),
+        ..Default::default()
+    };
+
+    if !python_path.exists() {
+        return capability;
+    }
+
+    let check_script = r#"
+import json
+try:
+    import torch
+    payload = {
+        "torchInstalled": True,
+        "torchVersion": getattr(torch, "__version__", None),
+        "torchCudaAvailable": bool(torch.cuda.is_available()),
+        "torchCudaVersion": getattr(torch.version, "cuda", None),
+        "torchCudaDeviceName": None,
+        "error": None,
+    }
+    if payload["torchCudaAvailable"]:
+        try:
+            payload["torchCudaDeviceName"] = torch.cuda.get_device_name(0)
+        except Exception as e:
+            payload["error"] = f"cuda_device_name_failed: {e}"
+    print(json.dumps(payload, ensure_ascii=False))
+except Exception as e:
+    print(json.dumps({
+        "torchInstalled": False,
+        "torchVersion": None,
+        "torchCudaAvailable": False,
+        "torchCudaVersion": None,
+        "torchCudaDeviceName": None,
+        "error": str(e),
+    }, ensure_ascii=False))
+"#;
+
+    let mut cmd = Command::new(python_path);
+    cmd.arg("-X")
+        .arg("utf8")
+        .arg("-c")
+        .arg(check_script)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    process_control::configure_console_visibility(&mut cmd);
+    let output = match cmd.output() {
+        Ok(output) => output,
+        Err(_) => {
+            return capability;
+        }
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&stdout) {
+        capability.torch_installed = val
+            .get("torchInstalled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        capability.torch_version = val
+            .get("torchVersion")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        capability.torch_cuda_available = val
+            .get("torchCudaAvailable")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        capability.torch_cuda_version = val
+            .get("torchCudaVersion")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        capability.torch_cuda_device_name = val
+            .get("torchCudaDeviceName")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+    } else {
+        capability.torch_installed = false;
+        capability.torch_cuda_available = false;
+    }
+
+    if capability.torch_cuda_available {
+        capability.selected_device = "cuda".to_string();
+    } else {
+        capability.selected_device = "cpu".to_string();
+    }
+
+    if !output.status.success() && !stderr.is_empty() {
+        eprintln!("[forisfstools] torch CUDA probe stderr: {}", stderr);
+    }
+
+    capability
+}
+
 /// Map CUDA version to PyTorch wheel index suffix.
 fn cuda_version_to_pytorch_index(cuda_ver: &str) -> &'static str {
     let major_minor: Vec<&str> = cuda_ver.split('.').collect();
     match major_minor.first().copied() {
         Some("12") => {
-            let minor = major_minor.get(1).and_then(|s| s.parse::<u32>().ok()).unwrap_or(4);
-            if minor >= 4 { "cu124" }
-            else if minor >= 1 { "cu121" }
-            else { "cu121" }
+            let minor = major_minor
+                .get(1)
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(4);
+            if minor >= 4 {
+                "cu124"
+            } else if minor >= 1 {
+                "cu121"
+            } else {
+                "cu121"
+            }
         }
         Some("11") => "cu118",
         _ => "cu124",
@@ -1448,14 +1771,26 @@ fn ensure_ffmpeg_runtime() -> Result<(), String> {
 
     if ffmpeg_bin.exists() {
         // Add to PATH for this session
-        let _ = std::env::set_var("PATH", format!("{};{}", ffmpeg_dir.join("bin").to_string_lossy(), std::env::var("PATH").unwrap_or_default()));
+        let _ = std::env::set_var(
+            "PATH",
+            format!(
+                "{};{}",
+                ffmpeg_dir.join("bin").to_string_lossy(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        );
         return Ok(());
     }
 
     fs::create_dir_all(&ffmpeg_dir).map_err(|e| format!("创建 FFmpeg 目录失败: {}", e))?;
     let ffmpeg_archive = runtime_dir.join("ffmpeg.zip");
 
-    let downloaded = if ffmpeg_archive.exists() && ffmpeg_archive.metadata().map(|m| m.len() > 1_000_000).unwrap_or(false) {
+    let downloaded = if ffmpeg_archive.exists()
+        && ffmpeg_archive
+            .metadata()
+            .map(|m| m.len() > 1_000_000)
+            .unwrap_or(false)
+    {
         true
     } else {
         download_to_file(ffmpeg_mirror_url, &ffmpeg_archive)
@@ -1473,16 +1808,21 @@ fn ensure_ffmpeg_runtime() -> Result<(), String> {
         let mut ps_cmd = Command::new("powershell");
         ps_cmd.args(["-NoProfile", "-Command", &script]);
         process_control::configure_console_visibility(&mut ps_cmd);
-        let status = ps_cmd.status()
+        let status = ps_cmd
+            .status()
             .map_err(|e| format!("解压 FFmpeg 失败: {}", e))?;
         if status.success() {
             // FFmpeg zip extracts to ffmpeg-master-latest-win64-gpl/ directory
             // Move bin/ contents up to ffmpeg_dir/bin/
-            let extracted_bin = ffmpeg_dir.join("ffmpeg-master-latest-win64-gpl").join("bin");
+            let extracted_bin = ffmpeg_dir
+                .join("ffmpeg-master-latest-win64-gpl")
+                .join("bin");
             if extracted_bin.exists() {
                 let target_bin = ffmpeg_dir.join("bin");
                 let _ = fs::create_dir_all(&target_bin);
-                for entry in fs::read_dir(&extracted_bin).map_err(|e| format!("读取 FFmpeg bin 失败: {}", e))? {
+                for entry in fs::read_dir(&extracted_bin)
+                    .map_err(|e| format!("读取 FFmpeg bin 失败: {}", e))?
+                {
                     let entry = entry.map_err(|e| format!("读取 FFmpeg 条目失败: {}", e))?;
                     let src = entry.path();
                     let dst = target_bin.join(entry.file_name());
@@ -1492,7 +1832,14 @@ fn ensure_ffmpeg_runtime() -> Result<(), String> {
             }
             let _ = fs::remove_file(&ffmpeg_archive);
             if ffmpeg_bin.exists() {
-                let _ = std::env::set_var("PATH", format!("{};{}", ffmpeg_dir.join("bin").to_string_lossy(), std::env::var("PATH").unwrap_or_default()));
+                let _ = std::env::set_var(
+                    "PATH",
+                    format!(
+                        "{};{}",
+                        ffmpeg_dir.join("bin").to_string_lossy(),
+                        std::env::var("PATH").unwrap_or_default()
+                    ),
+                );
                 return Ok(());
             }
         }
@@ -1553,14 +1900,19 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
         let entry = entry.map_err(|e| format!("Failed to read dir entry: {}", e))?;
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
-        let metadata = entry.metadata().map_err(|e| format!("Failed to read entry metadata: {}", e))?;
+        let metadata = entry
+            .metadata()
+            .map_err(|e| format!("Failed to read entry metadata: {}", e))?;
         if metadata.is_dir() {
             copy_dir_recursive(&src_path, &dst_path)?;
         } else if metadata.is_file() {
             if let Some(parent) = dst_path.parent() {
-                fs::create_dir_all(parent).map_err(|e| format!("Failed to create parent dir: {}", e))?;
+                fs::create_dir_all(parent)
+                    .map_err(|e| format!("Failed to create parent dir: {}", e))?;
             }
-            fs::copy(&src_path, &dst_path).map_err(|e| format!("Failed to copy file {}: {}", src_path.to_string_lossy(), e))?;
+            fs::copy(&src_path, &dst_path).map_err(|e| {
+                format!("Failed to copy file {}: {}", src_path.to_string_lossy(), e)
+            })?;
         }
     }
     Ok(())
@@ -1603,7 +1955,12 @@ fn bootstrap_install_python_runtime(app: &AppHandle) -> Result<(), String> {
         let python_upstream_url = "https://github.com/astral-sh/python-build-standalone/releases/download/20260508/cpython-3.10.20%2B20260508-x86_64-pc-windows-msvc-install_only_stripped.tar.gz";
         let python_archive = runtime_dir.join("python-windows.tar.gz");
 
-        let downloaded = if python_archive.exists() && python_archive.metadata().map(|m| m.len() > 1_000_000).unwrap_or(false) {
+        let downloaded = if python_archive.exists()
+            && python_archive
+                .metadata()
+                .map(|m| m.len() > 1_000_000)
+                .unwrap_or(false)
+        {
             true
         } else {
             download_to_file(python_mirror_url, &python_archive)
@@ -1613,9 +1970,15 @@ fn bootstrap_install_python_runtime(app: &AppHandle) -> Result<(), String> {
 
         if downloaded {
             let mut tar_cmd = Command::new("tar");
-            tar_cmd.args(["-xzf", &python_archive.to_string_lossy(), "-C", &runtime_dir.to_string_lossy()]);
+            tar_cmd.args([
+                "-xzf",
+                &python_archive.to_string_lossy(),
+                "-C",
+                &runtime_dir.to_string_lossy(),
+            ]);
             process_control::configure_console_visibility(&mut tar_cmd);
-            let status = tar_cmd.status()
+            let status = tar_cmd
+                .status()
                 .map_err(|e| format!("解压 Python 运行时失败: {}", e))?;
             if status.success() {
                 let runtime_python = runtime_dir.join("python").join("python.exe");
@@ -1715,14 +2078,16 @@ fn current_platform_manifest(manifest: &RuntimeManifest) -> RuntimeManifestPlatf
     }
 }
 
-fn legacy_model_artifacts(manifest: &RuntimeManifest, model_name: &str) -> Vec<RuntimeManifestArtifact> {
+fn legacy_model_artifacts(
+    manifest: &RuntimeManifest,
+    model_name: &str,
+) -> Vec<RuntimeManifestArtifact> {
     let urls = if model_name == "demucs" {
         manifest.model_sources.demucs.clone()
     } else {
         manifest.model_sources.whisper_base.clone()
     };
-    urls
-        .into_iter()
+    urls.into_iter()
         .map(|url| RuntimeManifestArtifact {
             url,
             sha256: None,
@@ -1843,7 +2208,8 @@ fn extract_archive(archive_path: &Path, runtime_models: &Path) -> Result<(), Str
             let mut ps_cmd = Command::new("powershell");
             ps_cmd.args(["-NoProfile", "-Command", &script]);
             process_control::configure_console_visibility(&mut ps_cmd);
-            let status = ps_cmd.status()
+            let status = ps_cmd
+                .status()
                 .map_err(|e| format!("解压 ZIP 失败: {}", e))?;
             if !status.success() {
                 return Err("解压 ZIP 失败：PowerShell Expand-Archive 返回非 0".to_string());
@@ -1867,12 +2233,14 @@ fn extract_archive(archive_path: &Path, runtime_models: &Path) -> Result<(), Str
     }
 
     let mut tar_cmd = Command::new("tar");
-    tar_cmd.arg("-xzf")
+    tar_cmd
+        .arg("-xzf")
         .arg(archive_path)
         .arg("-C")
         .arg(runtime_models);
     process_control::configure_console_visibility(&mut tar_cmd);
-    let status = tar_cmd.status()
+    let status = tar_cmd
+        .status()
         .map_err(|e| format!("解压模型归档失败: {}", e))?;
     if !status.success() {
         return Err("解压模型归档失败：tar 返回非 0".to_string());
@@ -1892,7 +2260,13 @@ fn bootstrap_model_from_manifest_sources(
     fs::create_dir_all(runtime_models).map_err(|e| format!("创建模型目录失败: {}", e))?;
     let mut attempts = Vec::new();
     let mut ordered_sources = sources.to_vec();
-    ordered_sources.sort_by_key(|s| if host_is_mainland_preferred(&s.url) { 0 } else { 1 });
+    ordered_sources.sort_by_key(|s| {
+        if host_is_mainland_preferred(&s.url) {
+            0
+        } else {
+            1
+        }
+    });
 
     for (idx, source) in ordered_sources.iter().enumerate() {
         if let Some(inline_text) = &source.inline_text {
@@ -1920,7 +2294,8 @@ fn bootstrap_model_from_manifest_sources(
         }
 
         let lower = source.url.to_ascii_lowercase();
-        let is_archive = lower.ends_with(".zip") || lower.ends_with(".tar.gz") || lower.ends_with(".tgz");
+        let is_archive =
+            lower.ends_with(".zip") || lower.ends_with(".tar.gz") || lower.ends_with(".tgz");
         let suffix = if lower.ends_with(".zip") {
             "zip"
         } else {
@@ -1941,7 +2316,10 @@ fn bootstrap_model_from_manifest_sources(
             let rel = match &source.target_relpath {
                 Some(v) if !v.trim().is_empty() => v.trim(),
                 _ => {
-                    attempts.push(format!("{}: 文件源缺少 targetRelpath: {}", model_name, source.url));
+                    attempts.push(format!(
+                        "{}: 文件源缺少 targetRelpath: {}",
+                        model_name, source.url
+                    ));
                     continue;
                 }
             };
@@ -1969,8 +2347,8 @@ fn bootstrap_model_from_manifest_sources(
         .map(|rel| runtime_models.join(rel))
         .collect();
 
-    let all_expected_present = !expected_files.is_empty()
-        && expected_files.iter().all(|p| p.exists());
+    let all_expected_present =
+        !expected_files.is_empty() && expected_files.iter().all(|p| p.exists());
 
     if all_expected_present {
         return Ok(true);
@@ -2030,7 +2408,8 @@ fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
     let has_whisper = runtime_whisper.exists();
 
     let project_models = resolve_project_root().join("python").join("models");
-    fs::create_dir_all(&runtime_models).map_err(|e| format!("Failed to create runtime models dir: {}", e))?;
+    fs::create_dir_all(&runtime_models)
+        .map_err(|e| format!("Failed to create runtime models dir: {}", e))?;
     let mut install_notes: Vec<String> = Vec::new();
 
     if !has_demucs && project_models.exists() {
@@ -2102,7 +2481,8 @@ fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
                     &whisper_sources,
                 ) {
                     Ok(true) => install_notes.push("whisper base: 检测到损坏后已重装".to_string()),
-                    Ok(false) => install_notes.push("whisper base: 检测到损坏，但未配置可用在线源".to_string()),
+                    Ok(false) => install_notes
+                        .push("whisper base: 检测到损坏，但未配置可用在线源".to_string()),
                     Err(err) => install_notes.push(format!("whisper base 重装失败: {}", err)),
                 }
             }
@@ -2148,13 +2528,22 @@ fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
     }
 }
 
-fn install_python_packages_with_fallbacks(python_path: &Path, packages: &[&str]) -> Result<(), String> {
+fn install_python_packages_with_fallbacks(
+    python_path: &Path,
+    packages: &[&str],
+) -> Result<(), String> {
     if packages.is_empty() {
         return Ok(());
     }
     let mirrors = [
-        ("https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple", "mirrors.tuna.tsinghua.edu.cn"),
-        ("https://mirrors.aliyun.com/pypi/simple", "mirrors.aliyun.com"),
+        (
+            "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple",
+            "mirrors.tuna.tsinghua.edu.cn",
+        ),
+        (
+            "https://mirrors.aliyun.com/pypi/simple",
+            "mirrors.aliyun.com",
+        ),
         ("https://pypi.org/simple", "pypi.org"),
     ];
 
@@ -2185,12 +2574,7 @@ fn install_python_packages_with_fallbacks(python_path: &Path, packages: &[&str])
 
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        errors.push(format!(
-            "[{}] {} {}",
-            mirror,
-            stderr,
-            stdout
-        ));
+        errors.push(format!("[{}] {} {}", mirror, stderr, stdout));
     }
 
     Err(format!("多源安装失败：{}", errors.join(" | ")))
@@ -2203,7 +2587,10 @@ fn install_torchaudio_compat_patch(python_path: &Path) -> Result<(), String> {
     let site_packages = python_site_packages_dir(python_path)?;
     let init_path = site_packages.join("torchaudio").join("__init__.py");
     if !init_path.exists() {
-        return Err(format!("torchaudio __init__.py not found: {}", init_path.display()));
+        return Err(format!(
+            "torchaudio __init__.py not found: {}",
+            init_path.display()
+        ));
     }
 
     // If the current file is already valid and contains our soundfile fallback, nothing to do.
@@ -2408,7 +2795,13 @@ fn ensure_core_runtime_modules(app: &AppHandle) -> Result<(), String> {
     let mut other_pkgs: Vec<&str> = still_missing
         .iter()
         .filter(|m| *m != "torch")
-        .map(|m| if *m == "faster_whisper" { "faster-whisper" } else { m.as_str() })
+        .map(|m| {
+            if *m == "faster_whisper" {
+                "faster-whisper"
+            } else {
+                m.as_str()
+            }
+        })
         .collect();
     // soundfile is needed for torchaudio compat patch (torchaudio 2.11+ needs it as fallback backend)
     if !other_pkgs.iter().any(|p| *p == "soundfile") {
@@ -2438,7 +2831,11 @@ fn ensure_core_runtime_modules(app: &AppHandle) -> Result<(), String> {
         Err(format!(
             "一键安装后仍缺少核心模块: {}。已尝试本地离线源与中国大陆 PyPI 镜像。{}",
             final_missing.join(", "),
-            if errors.is_empty() { String::new() } else { format!("错误详情: {}", errors.join(" | ")) }
+            if errors.is_empty() {
+                String::new()
+            } else {
+                format!("错误详情: {}", errors.join(" | "))
+            }
         ))
     }
 }
@@ -2450,7 +2847,10 @@ fn install_torch_with_cuda_detection(python_path: &Path) -> Result<(), String> {
     let cuda_index = match &detected_cuda {
         Some(cuda_ver) => {
             let idx = cuda_version_to_pytorch_index(&cuda_ver);
-            eprintln!("[forisfstools] 检测到 CUDA {}, 使用 PyTorch {} 版本", cuda_ver, idx);
+            eprintln!(
+                "[forisfstools] 检测到 CUDA {}, 使用 PyTorch {} 版本",
+                cuda_ver, idx
+            );
             idx
         }
         None => {
@@ -2459,7 +2859,10 @@ fn install_torch_with_cuda_detection(python_path: &Path) -> Result<(), String> {
         }
     };
 
-    let torch_index_url = format!("https://mirrors.tuna.tsinghua.edu.cn/pytorch/whl/{}", cuda_index);
+    let torch_index_url = format!(
+        "https://mirrors.tuna.tsinghua.edu.cn/pytorch/whl/{}",
+        cuda_index
+    );
     let torch_index_host = "mirrors.tuna.tsinghua.edu.cn";
 
     // PyPI fallback for torch (from Tsinghua)
@@ -2468,9 +2871,15 @@ fn install_torch_with_cuda_detection(python_path: &Path) -> Result<(), String> {
 
     // Try Tsinghua PyTorch mirror first (CUDA-aware)
     let args = [
-        "-m", "pip", "install", "torch", "torchaudio",
-        "--index-url", &torch_index_url,
-        "--trusted-host", torch_index_host,
+        "-m",
+        "pip",
+        "install",
+        "torch",
+        "torchaudio",
+        "--index-url",
+        &torch_index_url,
+        "--trusted-host",
+        torch_index_host,
     ];
     let output = Command::new(python_path)
         .args(&args)
@@ -2488,9 +2897,16 @@ fn install_torch_with_cuda_detection(python_path: &Path) -> Result<(), String> {
 
     // Fallback: try standard PyPI with Tsinghua mirror
     let fallback_args = [
-        "-m", "pip", "install", "-U", "torch", "torchaudio",
-        "-i", pypi_index,
-        "--trusted-host", pypi_host,
+        "-m",
+        "pip",
+        "install",
+        "-U",
+        "torch",
+        "torchaudio",
+        "-i",
+        pypi_index,
+        "--trusted-host",
+        pypi_host,
     ];
     let fallback_output = Command::new(python_path)
         .args(&fallback_args)
@@ -2514,12 +2930,8 @@ fn install_torch_with_cuda_detection(python_path: &Path) -> Result<(), String> {
 fn detect_bootstrap_status(app: &AppHandle) -> BootstrapStatus {
     let python_path = get_python_path(app);
     let python_ready = python_path.exists();
+    let torch_capability = detect_torch_cuda_capability(&python_path);
     let demucs_models_ready = is_demucs_model_ready(app);
-    let nvidia_cuda_version = if cfg!(windows) && python_ready {
-        detect_nvidia_cuda_version()
-    } else {
-        None
-    };
     let whisper_base_ready = if python_ready {
         resolve_whisper_base_model_dir(app)
             .ok()
@@ -2534,11 +2946,8 @@ fn detect_bootstrap_status(app: &AppHandle) -> BootstrapStatus {
     } else {
         false
     };
-    let torch_cuda_ready = if python_ready && nvidia_cuda_version.is_some() {
-        python_torch_cuda_ready(&python_path)
-    } else {
-        true
-    };
+    let torch_cuda_ready =
+        torch_capability.torch_cuda_available || !torch_capability.has_nvidia_gpu;
     let demucs_ready = if python_ready {
         python_module_is_available(&python_path, "demucs", 4).unwrap_or(false)
     } else {
@@ -2577,6 +2986,14 @@ fn detect_bootstrap_status(app: &AppHandle) -> BootstrapStatus {
         whisper_base_ready,
         ffmpeg_ready,
         can_run_core,
+        torch_cuda_available: torch_capability.torch_cuda_available,
+        selected_device: torch_capability.selected_device,
+        torch_version: torch_capability.torch_version,
+        torch_cuda_version: torch_capability.torch_cuda_version,
+        torch_cuda_device_name: torch_capability.torch_cuda_device_name,
+        has_nvidia_gpu: torch_capability.has_nvidia_gpu,
+        nvidia_driver_visible: torch_capability.nvidia_driver_visible,
+        nvidia_driver_cuda_version: torch_capability.nvidia_driver_cuda_version,
         detail,
     }
 }
@@ -2604,7 +3021,14 @@ fn format_missing_core_components_with_reason(health: &RuntimeHealthReport) -> S
     }
 }
 
-fn emit_progress(app: &AppHandle, song_id: &str, stage: &str, progress: u32, message: &str, estimated_time: Option<u32>) {
+fn emit_progress(
+    app: &AppHandle,
+    song_id: &str,
+    stage: &str,
+    progress: u32,
+    message: &str,
+    estimated_time: Option<u32>,
+) {
     if stage != "cancelling" && stage != "cancelled" {
         let status = {
             let songs = SONGS.lock().unwrap();
@@ -2613,17 +3037,23 @@ fn emit_progress(app: &AppHandle, song_id: &str, stage: &str, progress: u32, mes
                 .and_then(|m| m.get(song_id))
                 .map(|song| song.status.clone())
         };
-        if check_cancel_flag(song_id) || status.as_deref() == Some("cancelled") || status.as_deref() == Some("cancelling") {
+        if check_cancel_flag(song_id)
+            || status.as_deref() == Some("cancelled")
+            || status.as_deref() == Some("cancelling")
+        {
             return;
         }
     }
-    let _ = app.emit("processing-progress", serde_json::json!({
-        "song_id": song_id,
-        "stage": stage,
-        "progress": progress,
-        "message": message,
-        "estimated_time": estimated_time
-    }));
+    let _ = app.emit(
+        "processing-progress",
+        serde_json::json!({
+            "song_id": song_id,
+            "stage": stage,
+            "progress": progress,
+            "message": message,
+            "estimated_time": estimated_time
+        }),
+    );
 }
 
 fn emit_error(app: &AppHandle, song_id: &str, stage: &str, error: &str) {
@@ -2634,17 +3064,31 @@ fn emit_error(app: &AppHandle, song_id: &str, stage: &str, error: &str) {
             .and_then(|m| m.get(song_id))
             .map(|song| song.status.clone())
     };
-    if check_cancel_flag(song_id) || status.as_deref() == Some("cancelled") || status.as_deref() == Some("cancelling") {
+    if check_cancel_flag(song_id)
+        || status.as_deref() == Some("cancelled")
+        || status.as_deref() == Some("cancelling")
+    {
         return;
     }
-    let _ = app.emit("processing-error", serde_json::json!({
-        "song_id": song_id,
-        "stage": stage,
-        "error": error
-    }));
+    let _ = app.emit(
+        "processing-error",
+        serde_json::json!({
+            "song_id": song_id,
+            "stage": stage,
+            "error": error
+        }),
+    );
 }
 
-fn emit_progress_for_job(app: &AppHandle, song_id: &str, job_token: &str, stage: &str, progress: u32, message: &str, estimated_time: Option<u32>) {
+fn emit_progress_for_job(
+    app: &AppHandle,
+    song_id: &str,
+    job_token: &str,
+    stage: &str,
+    progress: u32,
+    message: &str,
+    estimated_time: Option<u32>,
+) {
     if is_active_job(song_id, job_token) {
         emit_progress(app, song_id, stage, progress, message, estimated_time);
     }
@@ -2656,7 +3100,14 @@ fn emit_error_for_job(app: &AppHandle, song_id: &str, job_token: &str, stage: &s
     }
 }
 
-fn update_song_status_for_job(song_id: &str, job_token: &str, status: &str, progress: u32, stage: Option<&str>, error: Option<&str>) {
+fn update_song_status_for_job(
+    song_id: &str,
+    job_token: &str,
+    status: &str,
+    progress: u32,
+    stage: Option<&str>,
+    error: Option<&str>,
+) {
     if is_active_job(song_id, job_token) {
         update_song_status(song_id, status, progress, stage, error);
     }
@@ -2664,7 +3115,10 @@ fn update_song_status_for_job(song_id: &str, job_token: &str, status: &str, prog
 
 fn check_cancel_flag(song_id: &str) -> bool {
     let flags = CANCEL_FLAGS.lock().unwrap();
-    flags.as_ref().map(|f| f.get(song_id).copied().unwrap_or(false)).unwrap_or(false)
+    flags
+        .as_ref()
+        .map(|f| f.get(song_id).copied().unwrap_or(false))
+        .unwrap_or(false)
 }
 
 fn clear_cancel_flag(song_id: &str) {
@@ -2785,37 +3239,40 @@ fn terminate_song_processes(song_id: &str, force: bool) {
     }
     #[cfg(unix)]
     {
-    let output = match Command::new("ps").args(["-axo", "pid,pgid,command"]).output() {
-        Ok(output) => output,
-        Err(_) => return,
-    };
-    let text = String::from_utf8_lossy(&output.stdout);
-    let current_pid = std::process::id() as i32;
-    let mut process_groups = HashSet::new();
+        let output = match Command::new("ps")
+            .args(["-axo", "pid,pgid,command"])
+            .output()
+        {
+            Ok(output) => output,
+            Err(_) => return,
+        };
+        let text = String::from_utf8_lossy(&output.stdout);
+        let current_pid = std::process::id() as i32;
+        let mut process_groups = HashSet::new();
 
-    for line in text.lines().skip(1) {
-        if !line.contains(song_id) {
-            continue;
-        }
-        if !(line.contains("separator.py") || line.contains("demucs")) {
-            continue;
-        }
-        let mut parts = line.split_whitespace();
-        let pid = parts.next().and_then(|value| value.parse::<i32>().ok());
-        let pgid = parts.next().and_then(|value| value.parse::<i32>().ok());
-        if let (Some(pid), Some(pgid)) = (pid, pgid) {
-            if pid != current_pid && pgid > 0 {
-                process_groups.insert(pgid);
+        for line in text.lines().skip(1) {
+            if !line.contains(song_id) {
+                continue;
+            }
+            if !(line.contains("separator.py") || line.contains("demucs")) {
+                continue;
+            }
+            let mut parts = line.split_whitespace();
+            let pid = parts.next().and_then(|value| value.parse::<i32>().ok());
+            let pgid = parts.next().and_then(|value| value.parse::<i32>().ok());
+            if let (Some(pid), Some(pgid)) = (pid, pgid) {
+                if pid != current_pid && pgid > 0 {
+                    process_groups.insert(pgid);
+                }
             }
         }
-    }
 
-    for pgid in process_groups {
-        unsafe {
-            let signal = if force { libc::SIGKILL } else { libc::SIGTERM };
-            let _ = libc::kill(-(pgid as libc::pid_t), signal);
+        for pgid in process_groups {
+            unsafe {
+                let signal = if force { libc::SIGKILL } else { libc::SIGTERM };
+                let _ = libc::kill(-(pgid as libc::pid_t), signal);
+            }
         }
-    }
     }
 }
 
@@ -2838,39 +3295,41 @@ fn terminate_app_processing_processes(force: bool) {
     }
     #[cfg(unix)]
     {
-    let output = match Command::new("ps").args(["-axo", "pid,pgid,command"]).output() {
-        Ok(output) => output,
-        Err(_) => return,
-    };
-    let data_dir = get_data_dir().to_string_lossy().to_string();
-    let text = String::from_utf8_lossy(&output.stdout);
-    let current_pid = std::process::id() as i32;
-    let mut process_groups = HashSet::new();
+        let output = match Command::new("ps")
+            .args(["-axo", "pid,pgid,command"])
+            .output()
+        {
+            Ok(output) => output,
+            Err(_) => return,
+        };
+        let data_dir = get_data_dir().to_string_lossy().to_string();
+        let text = String::from_utf8_lossy(&output.stdout);
+        let current_pid = std::process::id() as i32;
+        let mut process_groups = HashSet::new();
 
-    for line in text.lines().skip(1) {
-        let is_app_process = line.contains(&data_dir) || line.contains("4isfstools/songs");
-        let is_processing_process = line.contains("separator.py")
-            || line.contains("demucs");
-        if !is_app_process || !is_processing_process {
-            continue;
-        }
+        for line in text.lines().skip(1) {
+            let is_app_process = line.contains(&data_dir) || line.contains("4isfstools/songs");
+            let is_processing_process = line.contains("separator.py") || line.contains("demucs");
+            if !is_app_process || !is_processing_process {
+                continue;
+            }
 
-        let mut parts = line.split_whitespace();
-        let pid = parts.next().and_then(|value| value.parse::<i32>().ok());
-        let pgid = parts.next().and_then(|value| value.parse::<i32>().ok());
-        if let (Some(pid), Some(pgid)) = (pid, pgid) {
-            if pid != current_pid && pgid > 0 {
-                process_groups.insert(pgid);
+            let mut parts = line.split_whitespace();
+            let pid = parts.next().and_then(|value| value.parse::<i32>().ok());
+            let pgid = parts.next().and_then(|value| value.parse::<i32>().ok());
+            if let (Some(pid), Some(pgid)) = (pid, pgid) {
+                if pid != current_pid && pgid > 0 {
+                    process_groups.insert(pgid);
+                }
             }
         }
-    }
 
-    for pgid in process_groups {
-        unsafe {
-            let signal = if force { libc::SIGKILL } else { libc::SIGTERM };
-            let _ = libc::kill(-(pgid as libc::pid_t), signal);
+        for pgid in process_groups {
+            unsafe {
+                let signal = if force { libc::SIGKILL } else { libc::SIGTERM };
+                let _ = libc::kill(-(pgid as libc::pid_t), signal);
+            }
         }
-    }
     }
 }
 
@@ -2882,7 +3341,13 @@ fn cancel_active_processing_jobs(reason: &str) {
     JobManager::cancel_active_jobs(reason);
 }
 
-fn update_song_status(song_id: &str, status: &str, progress: u32, stage: Option<&str>, error: Option<&str>) {
+fn update_song_status(
+    song_id: &str,
+    status: &str,
+    progress: u32,
+    stage: Option<&str>,
+    error: Option<&str>,
+) {
     let mut songs = SONGS.lock().unwrap();
     if let Some(ref mut map) = *songs {
         if let Some(song) = map.get_mut(song_id) {
@@ -2912,9 +3377,11 @@ fn lyric_document_to_lrc(document: &LyricDocument) -> String {
         .filter(|line| !line.text.trim().is_empty())
         .map(|line| {
             let shifted = if document.global_offset_ms >= 0 {
-                line.start_ms.saturating_add(document.global_offset_ms as u64)
+                line.start_ms
+                    .saturating_add(document.global_offset_ms as u64)
             } else {
-                line.start_ms.saturating_sub((-document.global_offset_ms) as u64)
+                line.start_ms
+                    .saturating_sub((-document.global_offset_ms) as u64)
             };
             let minutes = shifted / 60000;
             let seconds = (shifted % 60000) / 1000;
@@ -3135,8 +3602,12 @@ fn is_search_noise_token(token: &str) -> bool {
 }
 
 fn clean_lyrics_search_hint(text: &str) -> String {
-    let mut normalized_source = strip_bracketed_segments(text)
-        .replace(['_', '-', '—', '–', '·', '•', '|', '/', '\\', ':', '，', '。', '！', '？', ',', '.'], " ");
+    let mut normalized_source = strip_bracketed_segments(text).replace(
+        [
+            '_', '-', '—', '–', '·', '•', '|', '/', '\\', ':', '，', '。', '！', '？', ',', '.',
+        ],
+        " ",
+    );
     normalized_source = normalized_source.replace("feat.", " ");
     normalized_source = normalized_source.replace("ft.", " ");
     normalized_source = normalized_source.replace("Feat.", " ");
@@ -3171,7 +3642,10 @@ struct LyricsSearchIntent {
 }
 
 fn build_lyrics_search_intent(song: &Song, manual_query: Option<&str>) -> LyricsSearchIntent {
-    if let Some(query) = manual_query.map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(query) = manual_query
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         let (artist_hint, track_hint) = split_artist_track_hint(query);
         let query_track = clean_lyrics_search_hint(&track_hint);
         let query_artist = artist_hint
@@ -3186,7 +3660,11 @@ fn build_lyrics_search_intent(song: &Song, manual_query: Option<&str>) -> Lyrics
         let allow_weak_fallback = query_track.chars().filter(|c| !c.is_whitespace()).count() > 4
             || query_artist.is_some();
         return LyricsSearchIntent {
-            query_track: if query_track.is_empty() { track_hint } else { query_track },
+            query_track: if query_track.is_empty() {
+                track_hint
+            } else {
+                query_track
+            },
             query_artist,
             variants,
             allow_weak_fallback,
@@ -3222,7 +3700,11 @@ fn split_artist_track_hint(hint: &str) -> (Option<String>, String) {
             let track = track.trim();
             if !track.is_empty() {
                 return (
-                    if artist.is_empty() { None } else { Some(artist.to_string()) },
+                    if artist.is_empty() {
+                        None
+                    } else {
+                        Some(artist.to_string())
+                    },
                     track.to_string(),
                 );
             }
@@ -3231,14 +3713,23 @@ fn split_artist_track_hint(hint: &str) -> (Option<String>, String) {
     (None, trimmed.to_string())
 }
 
-fn candidate_query_variants(query_hint: &str, fallback_hint: &str) -> Vec<(Option<String>, String)> {
+fn candidate_query_variants(
+    query_hint: &str,
+    fallback_hint: &str,
+) -> Vec<(Option<String>, String)> {
     let mut variants = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
-    let push_variant = |artist: Option<String>, track: String, variants: &mut Vec<(Option<String>, String)>, seen: &mut std::collections::HashSet<String>| {
+    let push_variant = |artist: Option<String>,
+                        track: String,
+                        variants: &mut Vec<(Option<String>, String)>,
+                        seen: &mut std::collections::HashSet<String>| {
         let normalized_key = format!(
             "{}::{}",
-            artist.as_deref().map(normalize_match_text).unwrap_or_default(),
+            artist
+                .as_deref()
+                .map(normalize_match_text)
+                .unwrap_or_default(),
             normalize_match_text(&track),
         );
         if seen.insert(normalized_key) {
@@ -3246,7 +3737,9 @@ fn candidate_query_variants(query_hint: &str, fallback_hint: &str) -> Vec<(Optio
         }
     };
 
-    let build_variants = |hint: &str, variants: &mut Vec<(Option<String>, String)>, seen: &mut std::collections::HashSet<String>| {
+    let build_variants = |hint: &str,
+                          variants: &mut Vec<(Option<String>, String)>,
+                          seen: &mut std::collections::HashSet<String>| {
         let trimmed = clean_lyrics_search_hint(hint);
         if trimmed.is_empty() {
             return;
@@ -3258,12 +3751,7 @@ fn candidate_query_variants(query_hint: &str, fallback_hint: &str) -> Vec<(Optio
         push_variant(artist.clone(), track.clone(), variants, seen);
 
         let mut stripped = trimmed.to_string();
-        let removals = [
-            ("（", "）"),
-            ("(", ")"),
-            ("【", "】"),
-            ("[", "]"),
-        ];
+        let removals = [("（", "）"), ("(", ")"), ("【", "】"), ("[", "]")];
         for (open, close) in removals {
             while let Some(start) = stripped.find(open) {
                 if let Some(end) = stripped[start + open.len()..].find(close) {
@@ -3306,7 +3794,12 @@ fn candidate_query_variants(query_hint: &str, fallback_hint: &str) -> Vec<(Optio
 
             let cjk_tokens = simple_tokens
                 .iter()
-                .filter(|token| token.chars().any(|ch| ('\u{4e00}'..='\u{9fff}').contains(&ch) || ('\u{3400}'..='\u{4dbf}').contains(&ch)))
+                .filter(|token| {
+                    token.chars().any(|ch| {
+                        ('\u{4e00}'..='\u{9fff}').contains(&ch)
+                            || ('\u{3400}'..='\u{4dbf}').contains(&ch)
+                    })
+                })
                 .cloned()
                 .collect::<Vec<String>>();
             if !cjk_tokens.is_empty() {
@@ -3345,7 +3838,12 @@ mod tests {
         build_document_from_plain_lines("song_1", "test", "test", None, "hello world", 0.5).unwrap()
     }
 
-    fn sample_candidate(title: &str, artist: Option<&str>, source: &str, score: i32) -> LyricsCandidate {
+    fn sample_candidate(
+        title: &str,
+        artist: Option<&str>,
+        source: &str,
+        score: i32,
+    ) -> LyricsCandidate {
         LyricsCandidate {
             id: format!("{}::{}", source, title),
             source: source.to_string(),
@@ -3402,7 +3900,10 @@ mod tests {
             added_at: 0,
         };
         let intent = build_lyrics_search_intent(&song, None);
-        assert!(intent.variants.iter().any(|(_, track)| normalize_match_text(track).contains("临渊")));
+        assert!(intent
+            .variants
+            .iter()
+            .any(|(_, track)| normalize_match_text(track).contains("临渊")));
     }
 
     #[test]
@@ -3432,7 +3933,12 @@ mod tests {
     #[test]
     fn rank_lyrics_candidates_filters_obvious_noise_when_no_weak_fallback() {
         let ranked = rank_lyrics_candidates(
-            vec![sample_candidate("432赫兹", Some("Thomas Dallan"), "netease", 20)],
+            vec![sample_candidate(
+                "432赫兹",
+                Some("Thomas Dallan"),
+                "netease",
+                20,
+            )],
             "爱你",
             None,
             false,
@@ -3619,7 +4125,12 @@ fn rank_lyrics_candidates(
         return result;
     }
 
-    let weak_floor = if normalize_match_text(query_track).chars().filter(|c| !c.is_whitespace()).count() <= 4 {
+    let weak_floor = if normalize_match_text(query_track)
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .count()
+        <= 4
+    {
         10
     } else {
         5
@@ -3653,7 +4164,10 @@ fn score_text_relevance(
     let candidate_track_norm = normalize_match_text(candidate_track);
     let query_artist_norm = query_artist.map(normalize_match_text);
     let candidate_artist_norm = normalize_match_text(candidate_artist);
-    let query_track_len = query_track_norm.chars().filter(|c| !c.is_whitespace()).count();
+    let query_track_len = query_track_norm
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .count();
 
     let mut score = 0;
     let mut track_hit = false;
@@ -3721,13 +4235,14 @@ fn score_text_relevance(
 fn parse_lrclib_timestamp(timestamp: &str) -> Option<u64> {
     let (minutes_part, seconds_part) = timestamp.split_once(':')?;
     let minutes = minutes_part.trim().parse::<u64>().ok()?;
-    let (seconds_str, fraction_str) = if let Some((seconds, fraction)) = seconds_part.split_once('.') {
-        (seconds, fraction)
-    } else if let Some((seconds, fraction)) = seconds_part.split_once(',') {
-        (seconds, fraction)
-    } else {
-        (seconds_part, "0")
-    };
+    let (seconds_str, fraction_str) =
+        if let Some((seconds, fraction)) = seconds_part.split_once('.') {
+            (seconds, fraction)
+        } else if let Some((seconds, fraction)) = seconds_part.split_once(',') {
+            (seconds, fraction)
+        } else {
+            (seconds_part, "0")
+        };
     let seconds = seconds_str.trim().parse::<u64>().ok()?;
     let fraction = fraction_str.trim();
     let milliseconds = match fraction.len() {
@@ -3800,8 +4315,13 @@ fn build_document_from_timed_lines(
     let mut doc_lines = Vec::new();
 
     for (idx, (start_ms, text)) in normalized.iter().enumerate() {
-        let next_start = normalized.get(idx + 1).map(|(value, _)| *value).unwrap_or(start_ms.saturating_add(2500));
-        let end_ms = next_start.saturating_sub(50).max(start_ms.saturating_add(300));
+        let next_start = normalized
+            .get(idx + 1)
+            .map(|(value, _)| *value)
+            .unwrap_or(start_ms.saturating_add(2500));
+        let end_ms = next_start
+            .saturating_sub(50)
+            .max(start_ms.saturating_add(300));
         let token = LyricToken {
             id: format!("token_{}_0", idx),
             line_id: format!("line_{}", idx),
@@ -3855,7 +4375,14 @@ fn build_document_from_plain_lines(
         .enumerate()
         .map(|(idx, text)| ((idx as u64) * 2500, text.to_string()))
         .collect::<Vec<(u64, String)>>();
-    build_document_from_timed_lines(song_id, source, alignment_engine, language, timed_lines, quality_score)
+    build_document_from_timed_lines(
+        song_id,
+        source,
+        alignment_engine,
+        language,
+        timed_lines,
+        quality_score,
+    )
 }
 
 fn build_lrclib_document(
@@ -3987,7 +4514,10 @@ fn fetch_netease_candidates(
 
         let mut search_queries = vec![query_track.to_string()];
         for token in extract_fallback_keywords(query_track) {
-            if !search_queries.iter().any(|q| normalize_match_text(q) == normalize_match_text(&token)) {
+            if !search_queries
+                .iter()
+                .any(|q| normalize_match_text(q) == normalize_match_text(&token))
+            {
                 search_queries.push(token);
             }
         }
@@ -4031,7 +4561,8 @@ fn fetch_netease_candidates(
 
         let mut scored = Vec::new();
         for song in songs {
-            let metadata_score = score_netease_song(query_track, query_artist, query_duration_ms, &song, false);
+            let metadata_score =
+                score_netease_song(query_track, query_artist, query_duration_ms, &song, false);
             let artist = song.artists.first().and_then(|value| value.name.clone());
             let album = song.album.as_ref().and_then(|value| value.name.clone());
             scored.push((metadata_score, song, artist, album));
@@ -4101,11 +4632,9 @@ fn fetch_netease_candidates(
                 .unwrap_or(false);
             let score = base_score + if has_synced { 18 } else { 0 };
 
-            if let Some(document) = build_netease_document(
-                song_id,
-                synced_lyrics.as_deref(),
-                plain_lyrics.as_deref(),
-            ) {
+            if let Some(document) =
+                build_netease_document(song_id, synced_lyrics.as_deref(), plain_lyrics.as_deref())
+            {
                 scored.push((score, song, artist, album, has_synced, document));
             }
         }
@@ -4174,7 +4703,8 @@ fn score_qq_song(
 
     if query_duration_ms > 0 {
         if let Some(candidate_duration_ms) = song.interval {
-            let diff = (candidate_duration_ms as f64 * 1000.0 - query_duration_ms as f64).abs() / 1000.0;
+            let diff =
+                (candidate_duration_ms as f64 * 1000.0 - query_duration_ms as f64).abs() / 1000.0;
             if diff <= 2.0 {
                 score += 20;
             } else if diff < 6.0 {
@@ -4196,13 +4726,8 @@ fn fetch_qq_candidates(
     query_artist: Option<&str>,
     query_duration_ms: u64,
 ) -> Result<Vec<LyricsCandidate>, String> {
-    let cache_key = lyrics_search_cache_key(
-        "qq",
-        song_id,
-        query_track,
-        query_artist,
-        query_duration_ms,
-    );
+    let cache_key =
+        lyrics_search_cache_key("qq", song_id, query_track, query_artist, query_duration_ms);
 
     fetch_with_lyrics_cache(cache_key, || {
         let client = reqwest::blocking::Client::builder()
@@ -4213,7 +4738,10 @@ fn fetch_qq_candidates(
 
         let mut search_queries = vec![query_track.to_string()];
         for token in extract_fallback_keywords(query_track) {
-            if !search_queries.iter().any(|q| normalize_match_text(q) == normalize_match_text(&token)) {
+            if !search_queries
+                .iter()
+                .any(|q| normalize_match_text(q) == normalize_match_text(&token))
+            {
                 search_queries.push(token);
             }
         }
@@ -4268,11 +4796,18 @@ fn fetch_qq_candidates(
 
         let mut scored = Vec::new();
         for song in songs {
-            let Some(songmid) = song.songmid.as_deref().map(str::trim).filter(|value| !value.is_empty()).map(|value| value.to_string()) else {
+            let Some(songmid) = song
+                .songmid
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| value.to_string())
+            else {
                 continue;
             };
 
-            let metadata_score = score_qq_song(query_track, query_artist, query_duration_ms, &song, false);
+            let metadata_score =
+                score_qq_song(query_track, query_artist, query_duration_ms, &song, false);
             let artist = song.singer.first().and_then(|value| value.name.clone());
             let album = song.albumname.clone();
             scored.push((metadata_score, song, artist, album, songmid));
@@ -4324,9 +4859,15 @@ fn fetch_qq_candidates(
             let lyric_text = parse_jsonp_or_json::<serde_json::Value>(&body)
                 .ok()
                 .and_then(|value| {
-                    value.get("lyric")
+                    value
+                        .get("lyric")
                         .and_then(|v| v.as_str())
-                        .or_else(|| value.get("data").and_then(|d| d.get("lyric")).and_then(|v| v.as_str()))
+                        .or_else(|| {
+                            value
+                                .get("data")
+                                .and_then(|d| d.get("lyric"))
+                                .and_then(|v| v.as_str())
+                        })
                         .map(|s| s.to_string())
                 });
 
@@ -4353,7 +4894,10 @@ fn fetch_qq_candidates(
                     .unwrap_or_else(|| format!("qq::{}::{}", song_id, result.len())),
                 source: "qq".to_string(),
                 source_label: "163MusicLyrics · QQ 音乐".to_string(),
-                title: song.songname.clone().unwrap_or_else(|| query_track.to_string()),
+                title: song
+                    .songname
+                    .clone()
+                    .unwrap_or_else(|| query_track.to_string()),
                 artist,
                 album,
                 score,
@@ -4387,7 +4931,10 @@ fn resolve_whisper_base_model_dir(app: &AppHandle) -> Result<PathBuf, String> {
             if snapshot.exists() {
                 let model_bin = snapshot.join("model.bin");
                 let tokenizer_json = snapshot.join("tokenizer.json");
-                if model_bin.exists() && tokenizer_json.exists() && looks_like_json_file(&tokenizer_json) {
+                if model_bin.exists()
+                    && tokenizer_json.exists()
+                    && looks_like_json_file(&tokenizer_json)
+                {
                     return Ok(snapshot);
                 }
             }
@@ -4397,22 +4944,30 @@ fn resolve_whisper_base_model_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let blobs_dir = root.join("blobs");
     if blobs_dir.exists() {
         // Some copy flows may lose snapshot symlinks; rebuild a materialized snapshot from blobs.
-        let fallback_snapshot = root
-            .join("snapshots")
-            .join("recovered-local-copy");
-        let model_blob = blobs_dir.join("d01c3014881c9c6f3133c182f3d2887eb6ca1c789a7538c5c007196857a0a6a9");
+        let fallback_snapshot = root.join("snapshots").join("recovered-local-copy");
+        let model_blob =
+            blobs_dir.join("d01c3014881c9c6f3133c182f3d2887eb6ca1c789a7538c5c007196857a0a6a9");
         // faster-whisper-base blobs:
         // 7818... => tokenizer.json
         // c907... => vocabulary.txt
         let tokenizer_blob = blobs_dir.join("7818adb6de9fa3064d3ff81226fdd675be1f6344");
         let config_blob = blobs_dir.join("867cf1a0fece1394e01d55e287ba2f09a577c046");
         let vocab_blob = blobs_dir.join("c9074644d9d1205686f16d411564729461324b75");
-        if model_blob.exists() && tokenizer_blob.exists() && config_blob.exists() && vocab_blob.exists() {
+        if model_blob.exists()
+            && tokenizer_blob.exists()
+            && config_blob.exists()
+            && vocab_blob.exists()
+        {
             let _ = fs::create_dir_all(&fallback_snapshot);
             let copy_or_keep = |src: &Path, dst: &Path| -> Result<(), String> {
                 if !dst.exists() {
-                    fs::copy(src, dst)
-                        .map_err(|e| format!("Failed to recover whisper snapshot file {}: {}", dst.to_string_lossy(), e))?;
+                    fs::copy(src, dst).map_err(|e| {
+                        format!(
+                            "Failed to recover whisper snapshot file {}: {}",
+                            dst.to_string_lossy(),
+                            e
+                        )
+                    })?;
                 }
                 Ok(())
             };
@@ -4442,7 +4997,10 @@ fn resolve_whisper_base_model_dir(app: &AppHandle) -> Result<PathBuf, String> {
         for snapshot in snapshots {
             let model_bin = snapshot.join("model.bin");
             let tokenizer_json = snapshot.join("tokenizer.json");
-            if model_bin.exists() && tokenizer_json.exists() && looks_like_json_file(&tokenizer_json) {
+            if model_bin.exists()
+                && tokenizer_json.exists()
+                && looks_like_json_file(&tokenizer_json)
+            {
                 return Ok(snapshot);
             }
         }
@@ -4493,7 +5051,9 @@ fn ensure_whisper_runtime_ready(app: &AppHandle) -> Result<PathBuf, String> {
 fn is_whitespace_or_punct(text: &str) -> bool {
     let cleaned = text.trim();
     cleaned.is_empty()
-        || cleaned.chars().all(|ch| ch.is_ascii_punctuation() || ch.is_whitespace())
+        || cleaned
+            .chars()
+            .all(|ch| ch.is_ascii_punctuation() || ch.is_whitespace())
 }
 
 fn seconds_to_ms(value: f64) -> u64 {
@@ -4536,7 +5096,10 @@ fn build_document_from_whisper_segments(
                     continue;
                 }
                 let start_ms = word.start.map(seconds_to_ms).unwrap_or(line_start_ms);
-                let end_ms = word.end.map(seconds_to_ms).unwrap_or(start_ms.saturating_add(180));
+                let end_ms = word
+                    .end
+                    .map(seconds_to_ms)
+                    .unwrap_or(start_ms.saturating_add(180));
                 line_start_ms = line_start_ms.min(start_ms);
                 line_end_ms = line_end_ms.max(end_ms);
                 confidence_sum += word.probability.unwrap_or(0.75);
@@ -4626,9 +5189,19 @@ fn score_lrclib_track(
     let candidate_artist = track.artist_name.as_deref().unwrap_or_default();
     score += score_text_relevance(query_track, query_artist, candidate_track, candidate_artist);
 
-    if track.synced_lyrics.as_deref().map(|v| !v.trim().is_empty()).unwrap_or(false) {
+    if track
+        .synced_lyrics
+        .as_deref()
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false)
+    {
         score += 25;
-    } else if track.plain_lyrics.as_deref().map(|v| !v.trim().is_empty()).unwrap_or(false) {
+    } else if track
+        .plain_lyrics
+        .as_deref()
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false)
+    {
         score += 10;
     }
 
@@ -4687,13 +5260,18 @@ fn fetch_lrclib_candidates(
     let mut candidates: Vec<(i32, LrclibTrack)> = Vec::new();
     let mut search_queries = vec![query_track.to_string()];
     for token in extract_fallback_keywords(query_track) {
-        if !search_queries.iter().any(|q| normalize_match_text(q) == normalize_match_text(&token)) {
+        if !search_queries
+            .iter()
+            .any(|q| normalize_match_text(q) == normalize_match_text(&token))
+        {
             search_queries.push(token);
         }
     }
     search_queries.truncate(3);
 
-    let mut get_request = client.get("https://lrclib.net/api/get").query(&[("track_name", query_track)]);
+    let mut get_request = client
+        .get("https://lrclib.net/api/get")
+        .query(&[("track_name", query_track)]);
     if let Some(query_artist) = query_artist {
         get_request = get_request.query(&[("artist_name", query_artist)]);
     }
@@ -4704,7 +5282,8 @@ fn fetch_lrclib_candidates(
     if let Ok(response) = get_request.send() {
         if response.status().is_success() {
             if let Ok(track) = response.json::<LrclibTrack>() {
-                let score = score_lrclib_track(query_track, query_artist, query_duration_ms, &track);
+                let score =
+                    score_lrclib_track(query_track, query_artist, query_duration_ms, &track);
                 candidates.push((score, track));
             }
         }
@@ -4730,7 +5309,8 @@ fn fetch_lrclib_candidates(
             };
 
             for track in tracks {
-                let score = score_lrclib_track(query_track, query_artist, query_duration_ms, &track);
+                let score =
+                    score_lrclib_track(query_track, query_artist, query_duration_ms, &track);
                 candidates.push((score, track));
             }
             if candidates.len() >= 12 {
@@ -4755,19 +5335,30 @@ fn fetch_lrclib_candidates(
         if !seen.insert(key) {
             continue;
         }
-        let title = track.track_name.clone().or(track.name.clone()).unwrap_or_else(|| query_track.to_string());
+        let title = track
+            .track_name
+            .clone()
+            .or(track.name.clone())
+            .unwrap_or_else(|| query_track.to_string());
         let artist = track.artist_name.clone();
         let album = track.album_name.clone();
         if let Some(document) = build_lrclib_document(song_id, &track, true) {
             result.push(LyricsCandidate {
-                id: track.id.map(|id| format!("lrclib::{}", id)).unwrap_or_else(|| format!("lrclib::{}::{}", song_id, result.len())),
+                id: track
+                    .id
+                    .map(|id| format!("lrclib::{}", id))
+                    .unwrap_or_else(|| format!("lrclib::{}::{}", song_id, result.len())),
                 source: "lrclib".to_string(),
                 source_label: "LRCLib".to_string(),
                 title,
                 artist,
                 album,
                 score,
-                synced: track.synced_lyrics.as_deref().map(|v| !v.trim().is_empty()).unwrap_or(false),
+                synced: track
+                    .synced_lyrics
+                    .as_deref()
+                    .map(|v| !v.trim().is_empty())
+                    .unwrap_or(false),
                 preview: preview_document(&document, 3),
                 document,
             });
@@ -4794,7 +5385,8 @@ fn fetch_lrclib_candidates(
                     Err(_) => continue,
                 };
                 for track in tracks {
-                    let score = score_lrclib_track(query_track, query_artist, query_duration_ms, &track);
+                    let score =
+                        score_lrclib_track(query_track, query_artist, query_duration_ms, &track);
                     broader.push((score, track));
                 }
                 if broader.len() >= 20 {
@@ -4818,19 +5410,30 @@ fn fetch_lrclib_candidates(
             if !seen.insert(key) {
                 continue;
             }
-            let title = track.track_name.clone().or(track.name.clone()).unwrap_or_else(|| query_track.to_string());
+            let title = track
+                .track_name
+                .clone()
+                .or(track.name.clone())
+                .unwrap_or_else(|| query_track.to_string());
             let artist = track.artist_name.clone();
             let album = track.album_name.clone();
             if let Some(document) = build_lrclib_document(song_id, &track, true) {
                 result.push(LyricsCandidate {
-                    id: track.id.map(|id| format!("lrclib::{}", id)).unwrap_or_else(|| format!("lrclib::{}::{}", song_id, result.len())),
+                    id: track
+                        .id
+                        .map(|id| format!("lrclib::{}", id))
+                        .unwrap_or_else(|| format!("lrclib::{}::{}", song_id, result.len())),
                     source: "lrclib".to_string(),
                     source_label: "LRCLib".to_string(),
                     title,
                     artist,
                     album,
                     score,
-                    synced: track.synced_lyrics.as_deref().map(|v| !v.trim().is_empty()).unwrap_or(false),
+                    synced: track
+                        .synced_lyrics
+                        .as_deref()
+                        .map(|v| !v.trim().is_empty())
+                        .unwrap_or(false),
                     preview: preview_document(&document, 3),
                     document,
                 });
@@ -4864,7 +5467,9 @@ fn fetch_lrclib_candidates_manual(
 
     let (query_artist, query_track) = split_artist_track_hint(&query);
     let mut tracks: Vec<LrclibTrack> = Vec::new();
-    let mut exact_request = client.get("https://lrclib.net/api/get").query(&[("track_name", query_track.as_str())]);
+    let mut exact_request = client
+        .get("https://lrclib.net/api/get")
+        .query(&[("track_name", query_track.as_str())]);
     if let Some(query_artist) = query_artist.as_deref() {
         if !query_artist.trim().is_empty() {
             exact_request = exact_request.query(&[("artist_name", query_artist)]);
@@ -4878,14 +5483,14 @@ fn fetch_lrclib_candidates_manual(
         }
     }
 
-        for query_param in ["q", "query"] {
-            let response = match client
-                .get("https://lrclib.net/api/search")
-                .query(&[(query_param, query.as_str())])
-                .send()
-            {
-                Ok(response) if response.status().is_success() => response,
-                _ => continue,
+    for query_param in ["q", "query"] {
+        let response = match client
+            .get("https://lrclib.net/api/search")
+            .query(&[(query_param, query.as_str())])
+            .send()
+        {
+            Ok(response) if response.status().is_success() => response,
+            _ => continue,
         };
         match response.json::<Vec<LrclibTrack>>() {
             Ok(mut parsed) => tracks.append(&mut parsed),
@@ -5048,13 +5653,27 @@ async fn start_process(app: AppHandle, song_id: String) -> Result<(), String> {
 
     std::thread::spawn(move || {
         let song_duration_ms = song.duration;
-        process_song_background(app, song_id_clone, job_token, input_path, song_dir, song_duration_ms);
+        process_song_background(
+            app,
+            song_id_clone,
+            job_token,
+            input_path,
+            song_dir,
+            song_duration_ms,
+        );
     });
 
     Ok(())
 }
 
-fn process_song_background(app: AppHandle, song_id: String, job_token: String, input_path: String, output_dir: PathBuf, _song_duration_ms: u64) {
+fn process_song_background(
+    app: AppHandle,
+    song_id: String,
+    job_token: String,
+    input_path: String,
+    output_dir: PathBuf,
+    _song_duration_ms: u64,
+) {
     let python_path = get_python_path(&app);
     let _models_dir = get_models_dir(&app);
 
@@ -5063,7 +5682,15 @@ fn process_song_background(app: AppHandle, song_id: String, job_token: String, i
     }
 
     // Stage 0: GPU check
-    emit_progress_for_job(&app, &song_id, &job_token, "checking_gpu", 5, "检测 GPU 可用性...", Some(5));
+    emit_progress_for_job(
+        &app,
+        &song_id,
+        &job_token,
+        "checking_gpu",
+        5,
+        "检测 GPU 可用性...",
+        Some(5),
+    );
     let gpu_available = check_gpu_availability(&python_path);
 
     if check_cancel_flag(&song_id) {
@@ -5076,8 +5703,17 @@ fn process_song_background(app: AppHandle, song_id: String, job_token: String, i
         ("cpu_fallback", "CPU 处理中", Some(600))
     };
 
-    emit_progress_for_job(&app, &song_id, &job_token, stage_name, 10, message, estimated);
-    update_song_status_for_job(&song_id, &job_token, "processing", 10, Some(stage_name), None);
+    emit_progress_for_job(
+        &app, &song_id, &job_token, stage_name, 10, message, estimated,
+    );
+    update_song_status_for_job(
+        &song_id,
+        &job_token,
+        "processing",
+        10,
+        Some(stage_name),
+        None,
+    );
 
     if check_cancel_flag(&song_id) {
         return;
@@ -5099,12 +5735,28 @@ fn process_song_background(app: AppHandle, song_id: String, job_token: String, i
 
     if existing_vocals.exists() && existing_instrumental.exists() {
         // Skip separation - files already exist
-        emit_progress_for_job(&app, &song_id, &job_token, "separating", 45, "人声分离已完成，跳过分离步骤", estimated);
+        emit_progress_for_job(
+            &app,
+            &song_id,
+            &job_token,
+            "separating",
+            45,
+            "人声分离已完成，跳过分离步骤",
+            estimated,
+        );
         vocals_opt = Some(existing_vocals.to_string_lossy().to_string());
         instrumental_opt = Some(existing_instrumental.to_string_lossy().to_string());
     } else {
         // Stage 1: Vocal separation
-        emit_progress_for_job(&app, &song_id, &job_token, "separating", 15, "人声分离中 (0%)", estimated);
+        emit_progress_for_job(
+            &app,
+            &song_id,
+            &job_token,
+            "separating",
+            15,
+            "人声分离中 (0%)",
+            estimated,
+        );
 
         let separator_script = r#"
 import sys
@@ -5311,8 +5963,21 @@ print(json.dumps(payload))
 
         let separator_path = output_dir.join("separator.py");
         if let Err(e) = fs::write(&separator_path, separator_script) {
-            emit_error_for_job(&app, &song_id, &job_token, "separating", &format!("Failed to write script: {}", e));
-            update_song_status_for_job(&song_id, &job_token, "error", 0, Some("separating"), Some(&format!("Failed to write script: {}", e)));
+            emit_error_for_job(
+                &app,
+                &song_id,
+                &job_token,
+                "separating",
+                &format!("Failed to write script: {}", e),
+            );
+            update_song_status_for_job(
+                &song_id,
+                &job_token,
+                "error",
+                0,
+                Some("separating"),
+                Some(&format!("Failed to write script: {}", e)),
+            );
             return;
         }
 
@@ -5323,28 +5988,57 @@ print(json.dumps(payload))
             "output_dir": output_dir.to_str().unwrap(),
         });
         if let Err(e) = fs::write(&job_file, job_data.to_string()) {
-            emit_error_for_job(&app, &song_id, &job_token, "separating", &format!("Failed to write job file: {}", e));
-            update_song_status_for_job(&song_id, &job_token, "error", 0, Some("separating"), Some(&format!("Failed to write job file: {}", e)));
+            emit_error_for_job(
+                &app,
+                &song_id,
+                &job_token,
+                "separating",
+                &format!("Failed to write job file: {}", e),
+            );
+            update_song_status_for_job(
+                &song_id,
+                &job_token,
+                "error",
+                0,
+                Some("separating"),
+                Some(&format!("Failed to write job file: {}", e)),
+            );
             return;
         }
 
-        emit_progress_for_job(&app, &song_id, &job_token, "separating", 20, "人声分离中 (20%)", estimated);
+        emit_progress_for_job(
+            &app,
+            &song_id,
+            &job_token,
+            "separating",
+            20,
+            "人声分离中 (20%)",
+            estimated,
+        );
 
         // Create progress file for intermediate updates
         let progress_file = output_dir.join("separator_progress.json");
-        let _ = fs::write(&progress_file, r#"{"percent":20,"message":"人声分离中 (20%)"}"#);
+        let _ = fs::write(
+            &progress_file,
+            r#"{"percent":20,"message":"人声分离中 (20%)"}"#,
+        );
 
         let mut child = spawn_in_own_process_group(
-        Command::new(&python_path)
-        .arg(&separator_path)
-        .arg(&job_file)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            Command::new(&python_path)
+                .arg(&separator_path)
+                .arg(&job_file)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
         )
         .expect("Failed to spawn separator process");
 
         // Store job handle for potential cancellation
-        set_job(&song_id, JobHandle { separator_pid: Some(child.id()) });
+        set_job(
+            &song_id,
+            JobHandle {
+                separator_pid: Some(child.id()),
+            },
+        );
 
         // Spawn thread to monitor progress file and emit updates
         let progress_file_clone = progress_file.clone();
@@ -5361,8 +6055,19 @@ print(json.dumps(payload))
                         if let Some(pct) = val.get("percent").and_then(|v| v.as_i64()) {
                             if pct > last_pct {
                                 last_pct = pct;
-                                let msg = val.get("message").and_then(|v| v.as_str()).unwrap_or("人声分离中");
-                                emit_progress_for_job(&app_clone, &song_id_clone, &job_token_clone, "separating", pct as u32, msg, estimated_clone);
+                                let msg = val
+                                    .get("message")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("人声分离中");
+                                emit_progress_for_job(
+                                    &app_clone,
+                                    &song_id_clone,
+                                    &job_token_clone,
+                                    "separating",
+                                    pct as u32,
+                                    msg,
+                                    estimated_clone,
+                                );
                             }
                         }
                     }
@@ -5429,32 +6134,90 @@ print(json.dumps(payload))
                         format!("分离脚本输出为空: {}", stderr.trim())
                     };
                     emit_error_for_job(&app, &song_id, &job_token, "separating", &err_msg);
-                    update_song_status_for_job(&song_id, &job_token, "error", 0, Some("separating"), Some(&err_msg));
+                    update_song_status_for_job(
+                        &song_id,
+                        &job_token,
+                        "error",
+                        0,
+                        Some("separating"),
+                        Some(&err_msg),
+                    );
                     return;
                 }
 
                 match separator_json {
                     Some(json) => {
                         if json.get("error").is_some() {
-                            let err = json.get("error").unwrap().as_str().unwrap_or("Unknown error");
+                            let err = json
+                                .get("error")
+                                .unwrap()
+                                .as_str()
+                                .unwrap_or("Unknown error");
                             emit_error_for_job(&app, &song_id, &job_token, "separating", err);
-                            update_song_status_for_job(&song_id, &job_token, "error", 0, Some("separating"), Some(err));
+                            update_song_status_for_job(
+                                &song_id,
+                                &job_token,
+                                "error",
+                                0,
+                                Some("separating"),
+                                Some(err),
+                            );
                             return;
                         }
-                        emit_progress_for_job(&app, &song_id, &job_token, "separating", 45, "人声分离中 (45%)", estimated);
-                        vocals_opt = json.get("vocals").and_then(|v| v.as_str()).map(|s| s.to_string());
-                        instrumental_opt = json.get("instrumental").and_then(|v| v.as_str()).map(|s| s.to_string());
+                        emit_progress_for_job(
+                            &app,
+                            &song_id,
+                            &job_token,
+                            "separating",
+                            45,
+                            "人声分离中 (45%)",
+                            estimated,
+                        );
+                        vocals_opt = json
+                            .get("vocals")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+                        instrumental_opt = json
+                            .get("instrumental")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
                     }
                     None => {
-                        emit_error_for_job(&app, &song_id, &job_token, "separating", "JSON parse error: separator result missing");
-                        update_song_status_for_job(&song_id, &job_token, "error", 0, Some("separating"), Some("JSON parse error: separator result missing"));
+                        emit_error_for_job(
+                            &app,
+                            &song_id,
+                            &job_token,
+                            "separating",
+                            "JSON parse error: separator result missing",
+                        );
+                        update_song_status_for_job(
+                            &song_id,
+                            &job_token,
+                            "error",
+                            0,
+                            Some("separating"),
+                            Some("JSON parse error: separator result missing"),
+                        );
                         return;
                     }
                 }
             }
             Err(e) => {
-                emit_error_for_job(&app, &song_id, &job_token, "separating", &format!("Command failed: {}", e));
-                update_song_status_for_job(&song_id, &job_token, "error", 0, Some("separating"), Some(&format!("Command failed: {}", e)));
+                emit_error_for_job(
+                    &app,
+                    &song_id,
+                    &job_token,
+                    "separating",
+                    &format!("Command failed: {}", e),
+                );
+                update_song_status_for_job(
+                    &song_id,
+                    &job_token,
+                    "error",
+                    0,
+                    Some("separating"),
+                    Some(&format!("Command failed: {}", e)),
+                );
                 return;
             }
         }
@@ -5467,8 +6230,21 @@ print(json.dumps(payload))
     let _vocals_path = match vocals_opt {
         Some(ref p) => Some(p.clone()),
         None => {
-            emit_error_for_job(&app, &song_id, &job_token, "separating", "No vocals path returned");
-            update_song_status_for_job(&song_id, &job_token, "error", 0, Some("separating"), Some("No vocals path returned"));
+            emit_error_for_job(
+                &app,
+                &song_id,
+                &job_token,
+                "separating",
+                "No vocals path returned",
+            );
+            update_song_status_for_job(
+                &song_id,
+                &job_token,
+                "error",
+                0,
+                Some("separating"),
+                Some("No vocals path returned"),
+            );
             return;
         }
     };
@@ -5503,7 +6279,15 @@ print(json.dumps(payload))
     };
 
     // Default flow no longer auto-generates lyrics. Users can trigger lyric generation manually.
-    emit_progress_for_job(&app, &song_id, &job_token, "separating", 90, "分离完成，歌词可手动生成", Some(5));
+    emit_progress_for_job(
+        &app,
+        &song_id,
+        &job_token,
+        "separating",
+        90,
+        "分离完成，歌词可手动生成",
+        Some(5),
+    );
     let lyrics_path = {
         let existing = output_dir.join("lyrics.lrc");
         let target_lyrics = resolve_lyrics_lrc_path(&song_id, &storage_settings);
@@ -5533,7 +6317,8 @@ print(json.dumps(payload))
                     return;
                 }
                 song.vocals_path = Some(target_vocals_path.to_string_lossy().to_string());
-                song.instrumental_path = Some(target_instrumental_path.to_string_lossy().to_string());
+                song.instrumental_path =
+                    Some(target_instrumental_path.to_string_lossy().to_string());
                 song.lyrics_path = lyrics_path;
                 song.status = "ready".to_string();
                 song.progress = 100;
@@ -5546,7 +6331,15 @@ print(json.dumps(payload))
 
     save_songs_to_disk();
 
-    emit_progress_for_job(&app, &song_id, &job_token, "complete", 100, "处理完成", None);
+    emit_progress_for_job(
+        &app,
+        &song_id,
+        &job_token,
+        "complete",
+        100,
+        "处理完成",
+        None,
+    );
 
     // Emit complete with full song data
     let complete_song = {
@@ -5555,9 +6348,12 @@ print(json.dumps(payload))
     };
 
     if let Some(song) = complete_song {
-        let _ = app.emit("processing-complete", serde_json::json!({
-            "song": song
-        }));
+        let _ = app.emit(
+            "processing-complete",
+            serde_json::json!({
+                "song": song
+            }),
+        );
     }
 }
 
@@ -5580,8 +6376,7 @@ except:
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     process_control::configure_console_visibility(&mut cmd);
-    let mut child = match cmd.spawn()
-    {
+    let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(_) => return false,
     };
@@ -5621,7 +6416,10 @@ except:
 #[tauri::command]
 async fn get_songs() -> Result<Vec<Song>, String> {
     let songs = SONGS.lock().unwrap();
-    Ok(songs.as_ref().map(|m| m.values().cloned().collect()).unwrap_or_default())
+    Ok(songs
+        .as_ref()
+        .map(|m| m.values().cloned().collect())
+        .unwrap_or_default())
 }
 
 #[tauri::command]
@@ -5677,7 +6475,10 @@ async fn reprocess_song(app: AppHandle, song_id: String) -> Result<(), String> {
     };
 
     if song.status != "ready" {
-        return Err(format!("Cannot reprocess song with status: {}. Only 'ready' songs can be reprocessed.", song.status));
+        return Err(format!(
+            "Cannot reprocess song with status: {}. Only 'ready' songs can be reprocessed.",
+            song.status
+        ));
     }
 
     // Clear output paths for reprocess
@@ -5706,7 +6507,14 @@ async fn reprocess_song(app: AppHandle, song_id: String) -> Result<(), String> {
 
     std::thread::spawn(move || {
         let song_duration_ms = song.duration;
-        process_song_background(app, song_id_clone, job_token, input_path, song_dir, song_duration_ms);
+        process_song_background(
+            app,
+            song_id_clone,
+            job_token,
+            input_path,
+            song_dir,
+            song_duration_ms,
+        );
     });
 
     Ok(())
@@ -5760,14 +6568,22 @@ async fn ensure_original_mix(song_id: String) -> Result<String, String> {
 async fn cancel_process(app: AppHandle, song_id: String) -> Result<(), String> {
     let status = {
         let songs = SONGS.lock().unwrap();
-        songs.as_ref().and_then(|m| m.get(&song_id).map(|s| s.status.clone()))
+        songs
+            .as_ref()
+            .and_then(|m| m.get(&song_id).map(|s| s.status.clone()))
     };
 
     match status {
         Some(s) if s == "processing" || s == "cancelling" => {
             let cancel_job_token = get_active_job_token(&song_id);
             JobManager::clear_song_job(&song_id, "用户取消");
-            update_song_status(&song_id, "cancelling", 0, Some("cancelling"), Some("正在取消..."));
+            update_song_status(
+                &song_id,
+                "cancelling",
+                0,
+                Some("cancelling"),
+                Some("正在取消..."),
+            );
             emit_progress(&app, &song_id, "cancelling", 0, "正在取消...", None);
             set_cancel_flag(&song_id);
 
@@ -5776,7 +6592,13 @@ async fn cancel_process(app: AppHandle, song_id: String) -> Result<(), String> {
             }
             terminate_song_processes(&song_id, false);
 
-            update_song_status(&song_id, "cancelled", 0, Some("cancelled"), Some("用户取消"));
+            update_song_status(
+                &song_id,
+                "cancelled",
+                0,
+                Some("cancelled"),
+                Some("用户取消"),
+            );
             emit_progress(&app, &song_id, "cancelled", 0, "已取消", None);
 
             let app_clone = app.clone();
@@ -5891,10 +6713,8 @@ async fn get_bootstrap_status(app: AppHandle) -> Result<BootstrapStatus, String>
 
 #[tauri::command]
 async fn bootstrap_install_minimal(app: AppHandle) -> Result<BootstrapStatus, String> {
-    bootstrap_install_python_runtime(&app)
-        .map_err(|e| format!("Python 运行时安装失败：{}", e))?;
-    ensure_ffmpeg_runtime()
-        .map_err(|e| format!("FFmpeg 安装失败：{}", e))?;
+    bootstrap_install_python_runtime(&app).map_err(|e| format!("Python 运行时安装失败：{}", e))?;
+    ensure_ffmpeg_runtime().map_err(|e| format!("FFmpeg 安装失败：{}", e))?;
     ensure_core_runtime_modules(&app)
         .map_err(|e| format!("核心模块安装失败（torch/demucs/faster-whisper）：{}", e))?;
     bootstrap_install_models(&app)
@@ -5913,7 +6733,9 @@ async fn bootstrap_install_minimal(app: AppHandle) -> Result<BootstrapStatus, St
 }
 
 #[tauri::command]
-async fn update_file_storage_settings(settings: FileStorageSettings) -> Result<FileStorageSettings, String> {
+async fn update_file_storage_settings(
+    settings: FileStorageSettings,
+) -> Result<FileStorageSettings, String> {
     let normalized = normalize_file_storage_settings(settings);
     set_file_storage_settings(normalized.clone());
     migrate_library_assets();
@@ -5921,7 +6743,10 @@ async fn update_file_storage_settings(settings: FileStorageSettings) -> Result<F
 }
 
 #[tauri::command]
-async fn search_match_lyrics(song_id: String, query: Option<String>) -> Result<Vec<LyricsCandidate>, String> {
+async fn search_match_lyrics(
+    song_id: String,
+    query: Option<String>,
+) -> Result<Vec<LyricsCandidate>, String> {
     let song = {
         let songs = SONGS.lock().unwrap();
         songs.as_ref().and_then(|m| m.get(&song_id).cloned())
@@ -5940,13 +6765,19 @@ async fn search_match_lyrics(song_id: String, query: Option<String>) -> Result<V
         let song_duration = song_for_worker.duration;
         let mut candidates = Vec::new();
         let mut errors = Vec::new();
-        let search_intent = build_lyrics_search_intent(&song_for_worker, query_for_worker.as_deref());
+        let search_intent =
+            build_lyrics_search_intent(&song_for_worker, query_for_worker.as_deref());
         let intent_track = search_intent.query_track.clone();
         let intent_artist = search_intent.query_artist.clone();
         let intent_variants = search_intent.variants.clone();
         let allow_weak_fallback = search_intent.allow_weak_fallback;
 
-        if query_for_worker.as_deref().map(str::trim).filter(|value| !value.is_empty()).is_some() {
+        if query_for_worker
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some()
+        {
             let mut handles = Vec::new();
 
             {
@@ -5974,28 +6805,34 @@ async fn search_match_lyrics(song_id: String, query: Option<String>) -> Result<V
                 let song_id = song_id_for_worker.clone();
                 let query_track = intent_track.clone();
                 let query_artist = intent_artist.clone();
-                handles.push(("163MusicLyrics", std::thread::spawn(move || {
-                    fetch_netease_candidates(
-                        &song_id,
-                        &query_track,
-                        query_artist.as_deref(),
-                        song_duration,
-                    )
-                })));
+                handles.push((
+                    "163MusicLyrics",
+                    std::thread::spawn(move || {
+                        fetch_netease_candidates(
+                            &song_id,
+                            &query_track,
+                            query_artist.as_deref(),
+                            song_duration,
+                        )
+                    }),
+                ));
             }
 
             {
                 let song_id = song_id_for_worker.clone();
                 let query_track = intent_track.clone();
                 let query_artist = intent_artist.clone();
-                handles.push(("QQMusic", std::thread::spawn(move || {
-                    fetch_qq_candidates(
-                        &song_id,
-                        &query_track,
-                        query_artist.as_deref(),
-                        song_duration,
-                    )
-                })));
+                handles.push((
+                    "QQMusic",
+                    std::thread::spawn(move || {
+                        fetch_qq_candidates(
+                            &song_id,
+                            &query_track,
+                            query_artist.as_deref(),
+                            song_duration,
+                        )
+                    }),
+                ));
             }
 
             for (label, handle) in handles {
@@ -6161,7 +6998,10 @@ fn persist_lyrics_document(song_id: &str, document: &LyricDocument) -> Result<St
 }
 
 #[tauri::command]
-async fn generate_whisper_base_lyrics(app: AppHandle, song_id: String) -> Result<GeneratedLyricsDraftResult, String> {
+async fn generate_whisper_base_lyrics(
+    app: AppHandle,
+    song_id: String,
+) -> Result<GeneratedLyricsDraftResult, String> {
     let song = {
         let songs = SONGS.lock().unwrap();
         songs
@@ -6190,8 +7030,9 @@ async fn generate_whisper_base_lyrics(app: AppHandle, song_id: String) -> Result
     ensure_dir(&song_dir).map_err(|e| e.to_string())?;
     let transcription_result_file = song_dir.join("whisper_transcription.json");
 
-    let transcription_json = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
-        let script = r#"
+    let transcription_json =
+        tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+            let script = r#"
 import json
 import os
 import sys
@@ -6249,43 +7090,44 @@ with open(result_file, "w", encoding="utf-8") as f:
 print(json.dumps(payload, ensure_ascii=False))
 "#;
 
-        let mut cmd = Command::new(&python_bin);
-        cmd.arg("-X")
-            .arg("utf8")
-            .arg("-c")
-            .arg(script)
-            .env("WHISPER_AUDIO_PATH", &audio_path)
-            .env("WHISPER_MODEL_DIR", &model_dir)
-            .env("WHISPER_RESULT_PATH", &transcription_result_file)
-            .env("WHISPER_DEVICE", "cpu")
-            .env("WHISPER_COMPUTE_TYPE", "int8")
-            .env("PYTHONUTF8", "1")
-            .env("PYTHONIOENCODING", "utf-8")
-            .current_dir(&song_dir);
-        process_control::configure_console_visibility(&mut cmd);
-        let output = cmd.output()
-            .map_err(|e| format!("Whisper base 运行失败: {}", e))?;
+            let mut cmd = Command::new(&python_bin);
+            cmd.arg("-X")
+                .arg("utf8")
+                .arg("-c")
+                .arg(script)
+                .env("WHISPER_AUDIO_PATH", &audio_path)
+                .env("WHISPER_MODEL_DIR", &model_dir)
+                .env("WHISPER_RESULT_PATH", &transcription_result_file)
+                .env("WHISPER_DEVICE", "cpu")
+                .env("WHISPER_COMPUTE_TYPE", "int8")
+                .env("PYTHONUTF8", "1")
+                .env("PYTHONIOENCODING", "utf-8")
+                .current_dir(&song_dir);
+            process_control::configure_console_visibility(&mut cmd);
+            let output = cmd
+                .output()
+                .map_err(|e| format!("Whisper base 运行失败: {}", e))?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let detail = if !stderr.is_empty() { stderr } else { stdout };
-            return Err(if detail.is_empty() {
-                "Whisper base 转录失败".to_string()
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                let detail = if !stderr.is_empty() { stderr } else { stdout };
+                return Err(if detail.is_empty() {
+                    "Whisper base 转录失败".to_string()
+                } else {
+                    format!("Whisper base 转录失败: {}", detail)
+                });
+            }
+
+            if transcription_result_file.exists() {
+                fs::read_to_string(&transcription_result_file)
+                    .map_err(|e| format!("Whisper base 输出读取失败: {}", e))
             } else {
-                format!("Whisper base 转录失败: {}", detail)
-            });
-        }
-
-        if transcription_result_file.exists() {
-            fs::read_to_string(&transcription_result_file)
-                .map_err(|e| format!("Whisper base 输出读取失败: {}", e))
-        } else {
-            String::from_utf8(output.stdout).map_err(|e| e.to_string())
-        }
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+                String::from_utf8(output.stdout).map_err(|e| e.to_string())
+            }
+        })
+        .await
+        .map_err(|e| e.to_string())??;
 
     let transcription = serde_json::from_str::<WhisperTranscriptionResult>(&transcription_json)
         .map_err(|e| format!("Whisper base 输出解析失败: {}", e))?;
@@ -6325,8 +7167,9 @@ async fn get_audio_url(path: String) -> Result<String, String> {
         // Use to_string_lossy and manually encode special characters
         let path_str = canonical.to_string_lossy();
         // Encode special characters: space, #, %, etc.
-        let encoded: String = path_str.chars().map(|c| {
-            match c {
+        let encoded: String = path_str
+            .chars()
+            .map(|c| match c {
                 ' ' => "%20".to_string(),
                 '#' => "%23".to_string(),
                 '%' => "%25".to_string(),
@@ -6354,8 +7197,8 @@ async fn get_audio_url(path: String) -> Result<String, String> {
                 '(' => "%28".to_string(),
                 ')' => "%29".to_string(),
                 _ => c.to_string(),
-            }
-        }).collect();
+            })
+            .collect();
         Ok(format!("file://{}", encoded))
     } else {
         Err("File not found".to_string())
