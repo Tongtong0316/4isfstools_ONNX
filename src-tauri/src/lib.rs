@@ -5805,9 +5805,19 @@ result_file = os.path.join(output_dir, "separator_result.json")
 os.makedirs(output_dir, exist_ok=True)
 
 gpu_available = False
+torch_version = None
+torch_cuda_version = None
+torch_cuda_device_name = None
 try:
     import torch
+    torch_version = getattr(torch, "__version__", None)
+    torch_cuda_version = getattr(torch.version, "cuda", None)
     gpu_available = torch.cuda.is_available()
+    if gpu_available:
+        try:
+            torch_cuda_device_name = torch.cuda.get_device_name(0)
+        except Exception:
+            torch_cuda_device_name = None
 except Exception:
     pass
 
@@ -5826,6 +5836,12 @@ def emit_error(message):
     payload = {
         "error": message,
         "success": False,
+        "selected_device": device,
+        "torch_cuda_available": gpu_available,
+        "torch_version": torch_version,
+        "torch_cuda_version": torch_cuda_version,
+        "torch_cuda_device_name": torch_cuda_device_name,
+        "demucs_device_arg": device,
     }
     with open(result_file, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False)
@@ -5963,6 +5979,12 @@ payload = {
     "instrumental": instrumental_path,
     "success": True,
     "terminated_by_signal": terminated_by_signal,
+    "selected_device": device,
+    "torch_cuda_available": gpu_available,
+    "torch_version": torch_version,
+    "torch_cuda_version": torch_cuda_version,
+    "torch_cuda_device_name": torch_cuda_device_name,
+    "demucs_device_arg": device,
 }
 with open(result_file, "w", encoding="utf-8") as f:
     json.dump(payload, f, ensure_ascii=False)
