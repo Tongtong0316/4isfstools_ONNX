@@ -693,7 +693,9 @@ function App() {
     setBootstrapInstalling(true);
     setBootstrapMessage("正在安装运行时与模型...");
     try {
-      const status = await invoke<BootstrapStatus>("bootstrap_install_minimal");
+      const status = await invoke<BootstrapStatus>("bootstrap_install_minimal", {
+        preferDemucsCuda,
+      });
       const health = await invoke<RuntimeHealthReport>("get_runtime_health");
       setBootstrapStatus(status);
       setRuntimeHealth(health);

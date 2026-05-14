@@ -2740,7 +2740,7 @@ fn find_return_block_end(content: &str, start: usize) -> Option<usize> {
     None
 }
 
-fn ensure_core_runtime_modules(app: &AppHandle) -> Result<(), String> {
+fn ensure_core_runtime_modules(app: &AppHandle, prefer_demucs_cuda: bool) -> Result<(), String> {
     let python_path = get_python_path(app);
     if !python_path.exists() {
         return Err("未检测到 Python 运行时".to_string());
@@ -2748,6 +2748,7 @@ fn ensure_core_runtime_modules(app: &AppHandle) -> Result<(), String> {
 
     let torch_capability = detect_torch_cuda_capability(&python_path);
     let needs_cuda_torch_refresh = cfg!(windows)
+        && prefer_demucs_cuda
         && torch_capability.has_nvidia_gpu
         && (!torch_capability.torch_installed || !torch_capability.torch_cuda_available);
 
@@ -2787,7 +2788,7 @@ fn ensure_core_runtime_modules(app: &AppHandle) -> Result<(), String> {
 
     // Install torch with CUDA detection (China-accessible Tsinghua mirror)
     if still_missing.iter().any(|m| m == "torch") || needs_cuda_torch_refresh {
-        match install_torch_with_cuda_detection(&python_path) {
+        match install_torch_with_cuda_detection(&python_path, prefer_demucs_cuda) {
             Ok(()) => {}
             Err(e) => errors.push(format!("torch: {}", e)),
         }
@@ -2843,9 +2844,13 @@ fn ensure_core_runtime_modules(app: &AppHandle) -> Result<(), String> {
 }
 
 /// Install PyTorch with automatic CUDA detection using China-accessible Tsinghua mirror.
-fn install_torch_with_cuda_detection(python_path: &Path) -> Result<(), String> {
+fn install_torch_with_cuda_detection(
+    python_path: &Path,
+    prefer_cuda: bool,
+) -> Result<(), String> {
     let torch_capability = detect_torch_cuda_capability(python_path);
-    let detected_cuda = if torch_capability.has_nvidia_gpu {
+    let prefer_cuda = prefer_cuda && torch_capability.has_nvidia_gpu;
+    let detected_cuda = if prefer_cuda {
         detect_nvidia_cuda_version()
     } else {
         None
@@ -5032,7 +5037,7 @@ fn ensure_whisper_runtime_ready(app: &AppHandle) -> Result<PathBuf, String> {
         return Err("找不到 Python 运行时，无法使用 AI 听写".to_string());
     }
 
-    ensure_core_runtime_modules(app)?;
+    ensure_core_runtime_modules(app, false)?;
 
     let mut model_dir = resolve_whisper_base_model_dir(app)?;
     let mut usable = whisper_model_is_usable(&python_path, &model_dir, 8).unwrap_or(false);
@@ -6770,10 +6775,13 @@ async fn get_bootstrap_status(app: AppHandle) -> Result<BootstrapStatus, String>
 }
 
 #[tauri::command]
-async fn bootstrap_install_minimal(app: AppHandle) -> Result<BootstrapStatus, String> {
+async fn bootstrap_install_minimal(
+    app: AppHandle,
+    prefer_demucs_cuda: bool,
+) -> Result<BootstrapStatus, String> {
     bootstrap_install_python_runtime(&app).map_err(|e| format!("Python 运行时安装失败：{}", e))?;
     ensure_ffmpeg_runtime().map_err(|e| format!("FFmpeg 安装失败：{}", e))?;
-    ensure_core_runtime_modules(&app)
+    ensure_core_runtime_modules(&app, prefer_demucs_cuda)
         .map_err(|e| format!("核心模块安装失败（torch/demucs/faster-whisper）：{}", e))?;
     bootstrap_install_models(&app)
         .map_err(|e| format!("模型安装失败（demucs/whisper base）：{}", e))?;
