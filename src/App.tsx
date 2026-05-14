@@ -8,6 +8,38 @@ import { Song, ProcessingStage, ProcessingStatus } from "./types";
 import LyricsPanel from "./components/lyrics/LyricsPanel";
 import type { LyricDocument } from "./types/lyrics";
 
+const MEDIA_IMPORT_EXTENSIONS = [
+  "mp3",
+  "wav",
+  "flac",
+  "ape",
+  "m4a",
+  "ogg",
+  "aac",
+  "mp4",
+  "mov",
+  "mkv",
+  "webm",
+  "avi",
+  "m4v",
+  "mpg",
+  "mpeg",
+  "3gp",
+  "3g2",
+  "ts",
+  "m2ts",
+  "mts",
+  "vob",
+  "wmv",
+  "asf",
+  "flv",
+  "f4v",
+  "ogv",
+  "rmvb",
+  "qt",
+  "mxf",
+];
+
 type LyricsCandidate = {
   id: string;
   source: string;
@@ -1238,7 +1270,7 @@ function App() {
               onClick={async () => {
                 const selected = await open({
                   multiple: true,
-                  filters: [{ name: "Audio", extensions: ["mp3", "wav", "flac", "m4a", "ogg", "aac"] }]
+                  filters: [{ name: "Audio / Video", extensions: MEDIA_IMPORT_EXTENSIONS }]
                 });
                 if (selected) {
                   const paths = Array.isArray(selected) ? selected : [selected];

@@ -5,6 +5,38 @@ interface ImportViewProps {
   onFilesSelected: (paths: string[]) => void;
 }
 
+const MEDIA_IMPORT_EXTENSIONS = [
+  "mp3",
+  "wav",
+  "flac",
+  "ape",
+  "m4a",
+  "ogg",
+  "aac",
+  "mp4",
+  "mov",
+  "mkv",
+  "webm",
+  "avi",
+  "m4v",
+  "mpg",
+  "mpeg",
+  "3gp",
+  "3g2",
+  "ts",
+  "m2ts",
+  "mts",
+  "vob",
+  "wmv",
+  "asf",
+  "flv",
+  "f4v",
+  "ogv",
+  "rmvb",
+  "qt",
+  "mxf",
+];
+
 export default function ImportView({ onFilesSelected }: ImportViewProps) {
   const handleClick = useCallback(async () => {
     try {
@@ -12,7 +44,7 @@ export default function ImportView({ onFilesSelected }: ImportViewProps) {
         multiple: true,
         filters: [{
           name: "Audio / Video",
-          extensions: ["mp3", "wav", "flac", "ape", "m4a", "ogg", "aac", "mp4", "mov", "mkv", "webm", "avi"]
+          extensions: MEDIA_IMPORT_EXTENSIONS,
         }]
       });
       if (selected) {

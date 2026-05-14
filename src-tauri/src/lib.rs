@@ -409,7 +409,31 @@ fn is_video_import_path(path: &Path) -> bool {
         path.extension()
             .and_then(|ext| ext.to_str())
             .map(|ext| ext.to_ascii_lowercase()),
-        Some(ext) if matches!(ext.as_str(), "mp4" | "mov" | "mkv" | "webm" | "avi" | "m4v")
+        Some(ext) if matches!(
+            ext.as_str(),
+            "mp4"
+                | "mov"
+                | "mkv"
+                | "webm"
+                | "avi"
+                | "m4v"
+                | "mpg"
+                | "mpeg"
+                | "3gp"
+                | "3g2"
+                | "ts"
+                | "m2ts"
+                | "mts"
+                | "vob"
+                | "wmv"
+                | "asf"
+                | "flv"
+                | "f4v"
+                | "ogv"
+                | "rmvb"
+                | "qt"
+                | "mxf"
+        )
     )
 }
 
