@@ -2746,8 +2746,10 @@ fn ensure_core_runtime_modules(app: &AppHandle) -> Result<(), String> {
         return Err("未检测到 Python 运行时".to_string());
     }
 
-    let windows_nvidia_cuda = cfg!(windows) && detect_nvidia_cuda_version().is_some();
-    let needs_cuda_torch_refresh = windows_nvidia_cuda && !python_torch_cuda_ready(&python_path);
+    let torch_capability = detect_torch_cuda_capability(&python_path);
+    let needs_cuda_torch_refresh = cfg!(windows)
+        && torch_capability.has_nvidia_gpu
+        && (!torch_capability.torch_installed || !torch_capability.torch_cuda_available);
 
     let mut missing = Vec::new();
     for module in ["torch", "demucs", "faster_whisper", "soundfile"] {
@@ -2820,7 +2822,7 @@ fn ensure_core_runtime_modules(app: &AppHandle) -> Result<(), String> {
             final_missing.push(module.to_string());
         }
     }
-    if windows_nvidia_cuda && !python_torch_cuda_ready(&python_path) {
+    if torch_capability.has_nvidia_gpu && !python_torch_cuda_ready(&python_path) {
         final_missing.push("torch[cuda]".to_string());
     }
     if final_missing.is_empty() {
@@ -2842,13 +2844,17 @@ fn ensure_core_runtime_modules(app: &AppHandle) -> Result<(), String> {
 
 /// Install PyTorch with automatic CUDA detection using China-accessible Tsinghua mirror.
 fn install_torch_with_cuda_detection(python_path: &Path) -> Result<(), String> {
-    // Try CUDA detection
-    let detected_cuda = detect_nvidia_cuda_version();
+    let torch_capability = detect_torch_cuda_capability(python_path);
+    let detected_cuda = if torch_capability.has_nvidia_gpu {
+        detect_nvidia_cuda_version()
+    } else {
+        None
+    };
     let cuda_index = match &detected_cuda {
         Some(cuda_ver) => {
             let idx = cuda_version_to_pytorch_index(&cuda_ver);
             eprintln!(
-                "[forisfstools] 检测到 CUDA {}, 使用 PyTorch {} 版本",
+                "[forisfstools] 检测到 NVIDIA GPU / CUDA {}, 使用 PyTorch {} 版本",
                 cuda_ver, idx
             );
             idx
@@ -2887,7 +2893,8 @@ fn install_torch_with_cuda_detection(python_path: &Path) -> Result<(), String> {
         .map_err(|e| format!("调用 pip 安装 torch 失败: {}", e))?;
 
     if output.status.success() {
-        if detected_cuda.is_none() || python_torch_cuda_ready(&python_path) {
+        let refreshed_capability = detect_torch_cuda_capability(python_path);
+        if detected_cuda.is_none() || refreshed_capability.torch_cuda_available {
             return Ok(());
         }
     }
@@ -2914,7 +2921,8 @@ fn install_torch_with_cuda_detection(python_path: &Path) -> Result<(), String> {
         .map_err(|e| format!("调用 pip 安装 torch (fallback) 失败: {}", e))?;
 
     if fallback_output.status.success() {
-        if detected_cuda.is_none() || python_torch_cuda_ready(&python_path) {
+        let refreshed_capability = detect_torch_cuda_capability(python_path);
+        if detected_cuda.is_none() || refreshed_capability.torch_cuda_available {
             return Ok(());
         }
     }
