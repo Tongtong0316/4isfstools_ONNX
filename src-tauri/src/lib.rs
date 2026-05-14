@@ -11,21 +11,26 @@ use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
+mod events;
 mod models;
 mod process_control;
 mod runtime;
 mod storage;
 pub use models::*;
+pub(crate) use events::{
+    check_cancel_flag, emit_error_for_job, emit_progress, emit_progress_for_job,
+    get_active_job_token, is_active_job,
+};
 use storage::{
     ensure_dir, get_data_dir, get_default_asset_root, get_file_storage_settings_path,
     get_library_path, get_lyrics_search_cache_path, get_songs_dir,
     normalize_file_storage_settings,
 };
 
-static SONGS: Mutex<Option<HashMap<String, Song>>> = Mutex::new(None);
-static CANCEL_FLAGS: Mutex<Option<HashMap<String, bool>>> = Mutex::new(None);
+pub(crate) static SONGS: Mutex<Option<HashMap<String, Song>>> = Mutex::new(None);
+pub(crate) static CANCEL_FLAGS: Mutex<Option<HashMap<String, bool>>> = Mutex::new(None);
 static JOBS: Mutex<Option<HashMap<String, JobHandle>>> = Mutex::new(None);
-static ACTIVE_JOB_TOKENS: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+pub(crate) static ACTIVE_JOB_TOKENS: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
 static LYRICS_SEARCH_CACHE: Mutex<Option<HashMap<String, CachedLyricsCandidateBundle>>> =
     Mutex::new(None);
 static FILE_STORAGE_SETTINGS: Mutex<Option<FileStorageSettings>> = Mutex::new(None);
@@ -2279,85 +2284,6 @@ fn format_missing_core_components_with_reason(health: &RuntimeHealthReport) -> S
     }
 }
 
-fn emit_progress(
-    app: &AppHandle,
-    song_id: &str,
-    stage: &str,
-    progress: u32,
-    message: &str,
-    estimated_time: Option<u32>,
-) {
-    if stage != "cancelling" && stage != "cancelled" {
-        let status = {
-            let songs = SONGS.lock().unwrap();
-            songs
-                .as_ref()
-                .and_then(|m| m.get(song_id))
-                .map(|song| song.status.clone())
-        };
-        if check_cancel_flag(song_id)
-            || status.as_deref() == Some("cancelled")
-            || status.as_deref() == Some("cancelling")
-        {
-            return;
-        }
-    }
-    let _ = app.emit(
-        "processing-progress",
-        serde_json::json!({
-            "song_id": song_id,
-            "stage": stage,
-            "progress": progress,
-            "message": message,
-            "estimated_time": estimated_time
-        }),
-    );
-}
-
-fn emit_error(app: &AppHandle, song_id: &str, stage: &str, error: &str) {
-    let status = {
-        let songs = SONGS.lock().unwrap();
-        songs
-            .as_ref()
-            .and_then(|m| m.get(song_id))
-            .map(|song| song.status.clone())
-    };
-    if check_cancel_flag(song_id)
-        || status.as_deref() == Some("cancelled")
-        || status.as_deref() == Some("cancelling")
-    {
-        return;
-    }
-    let _ = app.emit(
-        "processing-error",
-        serde_json::json!({
-            "song_id": song_id,
-            "stage": stage,
-            "error": error
-        }),
-    );
-}
-
-fn emit_progress_for_job(
-    app: &AppHandle,
-    song_id: &str,
-    job_token: &str,
-    stage: &str,
-    progress: u32,
-    message: &str,
-    estimated_time: Option<u32>,
-) {
-    if is_active_job(song_id, job_token) {
-        emit_progress(app, song_id, stage, progress, message, estimated_time);
-    }
-}
-
-fn emit_error_for_job(app: &AppHandle, song_id: &str, job_token: &str, stage: &str, error: &str) {
-    if is_active_job(song_id, job_token) {
-        emit_error(app, song_id, stage, error);
-    }
-}
-
 fn update_song_status_for_job(
     song_id: &str,
     job_token: &str,
@@ -2369,14 +2295,6 @@ fn update_song_status_for_job(
     if is_active_job(song_id, job_token) {
         update_song_status(song_id, status, progress, stage, error);
     }
-}
-
-fn check_cancel_flag(song_id: &str) -> bool {
-    let flags = CANCEL_FLAGS.lock().unwrap();
-    flags
-        .as_ref()
-        .map(|f| f.get(song_id).copied().unwrap_or(false))
-        .unwrap_or(false)
 }
 
 fn clear_cancel_flag(song_id: &str) {
@@ -2428,15 +2346,6 @@ fn set_active_job_token(song_id: &str, job_token: &str) {
     if let Some(ref mut map) = *tokens {
         map.insert(song_id.to_string(), job_token.to_string());
     }
-}
-
-fn get_active_job_token(song_id: &str) -> Option<String> {
-    let tokens = ACTIVE_JOB_TOKENS.lock().unwrap();
-    tokens.as_ref().and_then(|m| m.get(song_id).cloned())
-}
-
-fn is_active_job(song_id: &str, job_token: &str) -> bool {
-    get_active_job_token(song_id).as_deref() == Some(job_token)
 }
 
 fn clear_active_job_token(song_id: &str) {
