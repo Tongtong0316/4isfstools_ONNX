@@ -376,7 +376,7 @@ fn whisper_model_is_usable(
 }
 
 fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
-    let python_path = get_python_path(app);
+    let python_path = runtime::python::get_python_path(app);
     let python_exists = python_path.exists();
     let torch_capability = runtime::capability::detect_torch_cuda_capability(&python_path);
     let ffmpeg_ready = command_is_available("ffmpeg", "-version");
@@ -1124,93 +1124,6 @@ fn build_original_mix(vocals_path: &str, instrumental_path: &str) -> Result<Stri
     Ok(mix_path.to_string_lossy().to_string())
 }
 
-fn get_python_path(app: &AppHandle) -> PathBuf {
-    let runtime_dir = get_data_dir().join("runtime");
-
-    // 1. Explicit hint from python_path.txt (set during installation)
-    let runtime_python_hint = runtime_dir.join("python_path.txt");
-    if runtime_python_hint.exists() {
-        if let Ok(path) = fs::read_to_string(&runtime_python_hint) {
-            let hinted = PathBuf::from(path.trim());
-            if hinted.exists() {
-                return hinted;
-            }
-        }
-    }
-
-    // 2. Runtime directory — Windows uses python.exe, Unix uses bin/python3
-    if cfg!(windows) {
-        let exe = runtime_dir.join("python").join("python.exe");
-        if exe.exists() {
-            return exe;
-        }
-    } else {
-        let bin = runtime_dir.join("python").join("bin").join("python3");
-        if bin.exists() {
-            return bin;
-        }
-    }
-
-    // 3. Isolated runtime mode (bundled in app resources)
-    if is_isolated_runtime_mode() {
-        let resource_dir = app.path().resource_dir().unwrap_or_default();
-        if cfg!(windows) {
-            let w = resource_dir.join("python").join("python.exe");
-            if w.exists() {
-                return w;
-            }
-        } else {
-            let p = resource_dir.join("python").join("bin").join("python3");
-            if p.exists() {
-                return p;
-            }
-        }
-    }
-
-    // 4. Dev mode: project directory
-    if cfg!(windows) {
-        let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .join("python")
-            .join("python.exe");
-        if dev.exists() {
-            return dev;
-        }
-    } else {
-        let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .join("python")
-            .join("bin")
-            .join("python3");
-        if dev.exists() {
-            return dev;
-        }
-    }
-
-    // 5. Production resource directory
-    let resource_dir = app.path().resource_dir().unwrap_or_default();
-    if cfg!(windows) {
-        let prod = resource_dir.join("python").join("python.exe");
-        if prod.exists() {
-            return prod;
-        }
-    } else {
-        let prod = resource_dir.join("python").join("bin").join("python3");
-        if prod.exists() {
-            return prod;
-        }
-    }
-
-    // Fallback: return path that likely doesn't exist
-    if cfg!(windows) {
-        runtime_dir.join("python").join("python.exe")
-    } else {
-        runtime_dir.join("python").join("bin").join("python3")
-    }
-}
-
 fn ensure_ffmpeg_runtime() -> Result<(), String> {
     if command_is_available("ffmpeg", "-version") {
         return Ok(());
@@ -1816,7 +1729,7 @@ fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
     let runtime_models = get_runtime_dir().join("models");
     let runtime_demucs = runtime_models.join("demucs");
     let runtime_whisper = runtime_models.join("whisper");
-    let python_path = get_python_path(app);
+    let python_path = runtime::python::get_python_path(app);
     let demucs_ready_initial = is_demucs_model_ready(app);
     let whisper_ready_initial = if python_path.exists() {
         match resolve_whisper_base_model_dir(app) {
@@ -1895,7 +1808,7 @@ fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
 
     // Whisper runtime folder may exist but be unusable (e.g. empty snapshot, corrupted model.bin).
     if runtime_whisper.exists() {
-        let python_path = get_python_path(app);
+        let python_path = runtime::python::get_python_path(app);
         if python_path.exists() {
             let whisper_usable = resolve_whisper_base_model_dir(app)
                 .ok()
@@ -1924,7 +1837,7 @@ fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
         still_missing.push("demucs 模型");
     }
 
-    let python_path = get_python_path(app);
+    let python_path = runtime::python::get_python_path(app);
     let whisper_ready = if python_path.exists() {
         match resolve_whisper_base_model_dir(app) {
             Ok(model_dir) => match whisper_model_probe(&python_path, &model_dir, 8) {
@@ -2013,7 +1926,7 @@ fn install_python_packages_with_fallbacks(
 /// torchaudio 2.11+ defaults to torchcodec which requires FFmpeg shared DLLs not present in our runtime.
 /// Import hooks (sitecustomize.py) don't work for child processes, so we patch the source directly.
 fn install_torchaudio_compat_patch(python_path: &Path) -> Result<(), String> {
-    let site_packages = python_site_packages_dir(python_path)?;
+    let site_packages = runtime::python::python_site_packages_dir(python_path)?;
     let init_path = site_packages.join("torchaudio").join("__init__.py");
     if !init_path.exists() {
         return Err(format!(
@@ -2027,7 +1940,7 @@ fn install_torchaudio_compat_patch(python_path: &Path) -> Result<(), String> {
         .ok()
         .map(|content| content.contains("soundfile as sf") && content.contains("sf.read"))
         .unwrap_or(false)
-        && python_file_compiles(python_path, &init_path).unwrap_or(false);
+        && runtime::python::python_file_compiles(python_path, &init_path).unwrap_or(false);
     if already_patched {
         return Ok(());
     }
@@ -2088,7 +2001,7 @@ fn install_torchaudio_compat_patch(python_path: &Path) -> Result<(), String> {
     fs::write(&init_path, &new_content)
         .map_err(|e| format!("Failed to write patched torchaudio: {}", e))?;
 
-    if !python_file_compiles(python_path, &init_path).unwrap_or(false) {
+    if !runtime::python::python_file_compiles(python_path, &init_path).unwrap_or(false) {
         if backup.exists() {
             let _ = fs::copy(&backup, &init_path);
         }
@@ -2099,49 +2012,6 @@ fn install_torchaudio_compat_patch(python_path: &Path) -> Result<(), String> {
     }
 
     Ok(())
-}
-
-fn python_site_packages_dir(python_path: &Path) -> Result<PathBuf, String> {
-    let output = Command::new(python_path)
-        .args([
-            "-c",
-            "import sysconfig, site; p = sysconfig.get_paths().get('purelib') or sysconfig.get_paths().get('platlib') or ''; print(p.strip())",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|e| format!("Failed to resolve Python site-packages dir: {}", e))?;
-    if !output.status.success() {
-        return Err(format!(
-            "Failed to resolve Python site-packages dir: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    let dir = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if dir.is_empty() {
-        return Err("Failed to resolve Python site-packages dir: empty result".to_string());
-    }
-    Ok(PathBuf::from(dir))
-}
-
-fn python_file_compiles(python_path: &Path, file_path: &Path) -> Result<bool, String> {
-    let output = Command::new(python_path)
-        .args([
-            "-c",
-            &format!(
-                "import py_compile; py_compile.compile({}, doraise=True)",
-                format!("{:?}", file_path.to_string_lossy())
-            ),
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|e| format!("Failed to compile-check Python file: {}", e))?;
-    if output.status.success() {
-        Ok(true)
-    } else {
-        Ok(false)
-    }
 }
 
 /// Find the end of a `return func(...)` block by tracking parenthesis depth
@@ -2170,7 +2040,7 @@ fn find_return_block_end(content: &str, start: usize) -> Option<usize> {
 }
 
 fn ensure_core_runtime_modules(app: &AppHandle, prefer_demucs_cuda: bool) -> Result<(), String> {
-    let python_path = get_python_path(app);
+    let python_path = runtime::python::get_python_path(app);
     if !python_path.exists() {
         return Err("未检测到 Python 运行时".to_string());
     }
@@ -2370,7 +2240,7 @@ fn install_torch_with_cuda_detection(
 }
 
 fn detect_bootstrap_status(app: &AppHandle) -> BootstrapStatus {
-    let python_path = get_python_path(app);
+    let python_path = runtime::python::get_python_path(app);
     let python_ready = python_path.exists();
     let torch_capability = runtime::capability::detect_torch_cuda_capability(&python_path);
     let demucs_models_ready = is_demucs_model_ready(app);
@@ -4310,7 +4180,7 @@ fn looks_like_json_file(path: &Path) -> bool {
 }
 
 fn ensure_whisper_runtime_ready(app: &AppHandle) -> Result<PathBuf, String> {
-    let python_path = get_python_path(app);
+    let python_path = runtime::python::get_python_path(app);
     if !python_path.exists() {
         return Err("找不到 Python 运行时，无法使用 AI 听写".to_string());
     }
@@ -4971,7 +4841,7 @@ fn process_song_background(
     _song_duration_ms: u64,
     prefer_demucs_cuda: bool,
 ) {
-    let python_path = get_python_path(&app);
+    let python_path = runtime::python::get_python_path(&app);
     let _models_dir = get_models_dir(&app);
 
     if check_cancel_flag(&song_id) {
@@ -6308,7 +6178,7 @@ async fn generate_whisper_base_lyrics(
         return Err("找不到可用于转录的音频文件".to_string());
     }
 
-    let python_bin = get_python_path(&app);
+    let python_bin = runtime::python::get_python_path(&app);
     if !python_bin.exists() {
         return Err("找不到 Python 运行时，无法生成 Whisper 草稿".to_string());
     }
