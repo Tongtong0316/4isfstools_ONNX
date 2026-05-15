@@ -8,7 +8,7 @@ export interface Song {
   originalMixPath: string | null;
   lyricsPath: string | null;
   duration: number;
-  status: 'pending' | 'processing' | 'ready' | 'error' | 'cancelled' | 'cancelling';
+  status: 'pending' | 'queued' | 'processing' | 'ready' | 'error' | 'cancelled' | 'cancelling';
   progress: number;
   processingStage?: ProcessingStage;
   error_message?: string;
@@ -22,6 +22,7 @@ export type ProcessingStage =
   | 'separating'
   | 'aligning'
   | 'complete'
+  | 'queued'
   | 'cancelling'
   | 'cancelled'
   | 'error';
@@ -55,6 +56,7 @@ export const STAGE_LABELS: Record<ProcessingStage, string> = {
   'separating': '人声分离中',
   'aligning': '歌词同步中',
   'complete': '处理完成',
+  'queued': '排队中',
   'cancelling': '正在取消',
   'cancelled': '已取消',
   'error': '处理失败'
@@ -62,6 +64,7 @@ export const STAGE_LABELS: Record<ProcessingStage, string> = {
 
 export const STATUS_LABELS: Record<string, string> = {
   'pending': '待处理',
+  'queued': '排队中',
   'processing': '处理中',
   'ready': '可唱',
   'error': '失败',
@@ -71,6 +74,7 @@ export const STATUS_LABELS: Record<string, string> = {
 
 export const STATUS_ICONS: Record<string, string> = {
   'pending': '📁',
+  'queued': '⏳',
   'processing': '⚙️',
   'ready': '🎤',
   'error': '❌',
@@ -85,6 +89,7 @@ export const STAGE_ICONS: Record<ProcessingStage, string> = {
   'separating': '🎤',
   'aligning': '🎯',
   'complete': '✅',
+  'queued': '⏳',
   'cancelling': '🔄',
   'cancelled': '⏸',
   'error': '❌'
