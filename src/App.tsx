@@ -212,6 +212,94 @@ function App() {
   const [vocalWaveformLoading, setVocalWaveformLoading] = useState(false);
   const [vocalWaveformError, setVocalWaveformError] = useState<string | null>(null);
   const [vocalWaveformEnabled, setVocalWaveformEnabled] = useState(true);
+
+  // Audio output device
+  const audioOutputStorageKey = "4isfstools.audio_output_device";
+  const [audioOutputDeviceId, setAudioOutputDeviceId] = useState<string>(() => {
+    if (typeof window === "undefined") return "default";
+    try {
+      return window.localStorage.getItem(audioOutputStorageKey) || "default";
+    } catch { return "default"; }
+  });
+  const [audioOutputDevices, setAudioOutputDevices] = useState<Array<{ deviceId: string; label: string }>>([]);
+  const [audioOutputSupport, setAudioOutputSupport] = useState<"unknown" | "supported" | "unsupported">("unknown");
+  const audioOutputDeviceIdRef = useRef(audioOutputDeviceId);
+  audioOutputDeviceIdRef.current = audioOutputDeviceId;
+
+  const refreshAudioOutputDevices = useCallback(async () => {
+    try {
+      if (!navigator.mediaDevices?.enumerateDevices) {
+        setAudioOutputSupport("unsupported");
+        return;
+      }
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const outputs = devices
+        .filter((d) => d.kind === "audiooutput")
+        .map((d) => ({ deviceId: d.deviceId, label: d.label || d.deviceId }));
+      setAudioOutputDevices(outputs);
+      // Probe support: check if AudioContext.setSinkId or HTMLAudioElement.setSinkId exists
+      const probe = new Audio();
+      if (typeof AudioContext !== "undefined" && "setSinkId" in AudioContext.prototype) {
+        setAudioOutputSupport("supported");
+      } else if (typeof probe.setSinkId === "function") {
+        setAudioOutputSupport("supported");
+      } else {
+        setAudioOutputSupport("unsupported");
+      }
+    } catch {
+      setAudioOutputSupport("unsupported");
+    }
+  }, []);
+
+  const applyAudioOutputDevice = useCallback(async (audio: HTMLAudioElement) => {
+    const deviceId = audioOutputDeviceIdRef.current;
+    if (!deviceId || deviceId === "default") return;
+    // Prefer AudioContext.setSinkId (routes entire Web Audio graph)
+    const ctx = audioAnalyserContextRef.current as (AudioContext & { setSinkId?: (id: string) => Promise<void> }) | null;
+    if (ctx && typeof ctx.setSinkId === "function") {
+      try {
+        await ctx.setSinkId(deviceId);
+        return;
+      } catch (e) {
+        console.warn("[audio] AudioContext.setSinkId failed:", e);
+      }
+    }
+    // Fallback: HTMLAudioElement.setSinkId
+    try {
+      if (typeof audio.setSinkId === "function") {
+        await audio.setSinkId(deviceId);
+      }
+    } catch (e) {
+      console.warn("[audio] setSinkId failed, using default output:", e);
+    }
+  }, []);
+
+  const applyToAllAudioOutputs = useCallback(async () => {
+    const deviceId = audioOutputDeviceIdRef.current;
+    // Apply to AudioContext if available
+    const ctx = audioAnalyserContextRef.current as (AudioContext & { setSinkId?: (id: string) => Promise<void> }) | null;
+    if (ctx && typeof ctx.setSinkId === "function" && deviceId && deviceId !== "default") {
+      try { await ctx.setSinkId(deviceId); } catch { /* fallback below */ }
+    }
+    // Apply to active HTMLAudioElements
+    if (audioRef.current) void applyAudioOutputDevice(audioRef.current);
+    if (originalAudioRef.current) void applyAudioOutputDevice(originalAudioRef.current);
+  }, [applyAudioOutputDevice]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(audioOutputStorageKey, audioOutputDeviceId);
+    } catch { /* ignore */ }
+    // Apply immediately to all active outputs
+    void applyToAllAudioOutputs();
+  }, [audioOutputDeviceId, applyToAllAudioOutputs]);
+
+  useEffect(() => {
+    if (fileStorageSettingsOpen) {
+      void refreshAudioOutputDevices();
+    }
+  }, [fileStorageSettingsOpen, refreshAudioOutputDevices]);
+
   const readySongCount = songs.filter((s) => s.status === "ready").length;
 
 
@@ -302,8 +390,9 @@ function App() {
     audio.preload = "auto";
     audio.load();
     audio.volume = 1;
+    void applyAudioOutputDevice(audio);
     return audio;
-  }, []);
+  }, [applyAudioOutputDevice]);
 
   const waitForMediaReady = useCallback((audio: HTMLAudioElement, timeoutMs = 1500) => {
     if (audio.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
@@ -1744,6 +1833,49 @@ function App() {
                             >
                               {fileStorageSettingsSaving ? "保存中..." : "保存并迁移"}
                             </button>
+                          </div>
+                        </div>
+
+                        {/* Audio output device */}
+                        <div className="mt-[20px] rounded-[18px] border border-white/[0.08] bg-white/[0.035] px-[24px] py-[22px]">
+                          <div className="flex items-center justify-between gap-4">
+                            <div>
+                              <div className="text-[16px] font-semibold leading-[1.3] tracking-tight text-[#f5f5f5]">声音输出源</div>
+                              <div className="mt-[5px] text-[13px] leading-[1.4] text-white/52">
+                                选择音频播放的输出设备。需要浏览器授予音频设备权限。
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-white/[0.10] px-3 py-1.5 text-[12px] font-medium text-[#d4d4d8] transition-colors hover:bg-white/[0.06]"
+                              onClick={() => void refreshAudioOutputDevices()}
+                            >
+                              刷新设备
+                            </button>
+                          </div>
+                          <div className="mt-3">
+                            <select
+                              value={audioOutputDeviceId}
+                              onChange={(e) => setAudioOutputDeviceId(e.target.value)}
+                              className="w-full max-w-[420px] rounded-[12px] border border-white/[0.10] bg-white/[0.05] px-4 py-2.5 text-[14px] text-[#f5f5f5] outline-none transition-colors focus:border-[#6366f1]/60"
+                            >
+                              <option value="default">系统默认</option>
+                              {audioOutputDevices.map((d) => (
+                                <option key={d.deviceId} value={d.deviceId}>
+                                  {d.label}
+                                </option>
+                              ))}
+                            </select>
+                            {audioOutputDeviceId !== "default" && (
+                              <div className="mt-2 text-[12px] text-white/40">
+                                当前输出：{audioOutputDevices.find((d) => d.deviceId === audioOutputDeviceId)?.label ?? audioOutputDeviceId}
+                              </div>
+                            )}
+                            {audioOutputSupport === "unsupported" && (
+                              <div className="mt-2 rounded-lg border border-amber-400/20 bg-amber-400/[0.06] px-3 py-2 text-[12px] text-amber-200/80">
+                                当前环境不支持选择输出设备，声音将使用系统默认输出。
+                              </div>
+                            )}
                           </div>
                         </div>
                       </div>
