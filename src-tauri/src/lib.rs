@@ -75,6 +75,7 @@ impl JobManager {
         }
         terminate_song_processes(song_id, true);
         clear_cancel_flag(song_id);
+        update_song_status(song_id, "pending", 0, None, None);
         remove_job(song_id);
         clear_active_job_token(song_id);
         let job_token = make_job_token(song_id);
