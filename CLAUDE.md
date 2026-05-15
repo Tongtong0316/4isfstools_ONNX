@@ -6,13 +6,20 @@
 - 项目名：`4isfstools`
 - 应用名：`Macaron Singer`
 - 定位：本地音频处理桌面应用，核心能力是人声分离、AI 听写草稿、歌词搜索/导入、播放与歌词编辑。
-- 平台策略：macOS 已冻结，后续默认按 Windows 主线维护；涉及共享逻辑时要明确平台影响。
+- 平台策略：
+  - **macOS 是稳定参考线**：已冻结，作为行为基准和回归对照，不应随意修改。
+  - **Windows 是当前主开发线**：新功能、bugfix、重构均以 Windows 为目标平台。
+  - **共享逻辑改动必须避免无意破坏 macOS**：涉及 `#[cfg]` 平台分支、路径解析、进程控制等共享代码时，必须确认 macOS 侧行为不变。
 
 ## 主要文件
-- [src/App.tsx](/Users/suntong/文件夹/4isfstools/src/App.tsx)：前端主界面、运行状态、偏好设置、GPU 勾选、启动安装入口。
-- [src-tauri/src/lib.rs](/Users/suntong/文件夹/4isfstools/src-tauri/src/lib.rs)：运行时检测、安装、Demucs 分离、Whisper 听写、separator 任务生成。
-- [src-tauri/src/process_control.rs](/Users/suntong/文件夹/4isfstools/src-tauri/src/process_control.rs)：进程控制，Windows 不能回退到会阻塞的旧做法。
-- [runtime-manifest.json](/Users/suntong/文件夹/4isfstools/runtime-manifest.json)：模型来源清单，只管模型源，不负责 torch/profile 决策。
+- [src/App.tsx](/Users/suntong/文件夹/4isfstools-refactor/src/App.tsx)：前端主界面、运行状态、偏好设置、GPU 勾选、启动安装入口。
+- [src-tauri/src/lib.rs](/Users/suntong/文件夹/4isfstools-refactor/src-tauri/src/lib.rs)：Tauri commands、安装逻辑、Demucs/Whisper 运行、全局状态（~6200 行）。
+- [src-tauri/src/models.rs](/Users/suntong/文件夹/4isfstools-refactor/src-tauri/src/models.rs)：纯数据结构/枚举定义。
+- [src-tauri/src/events.rs](/Users/suntong/文件夹/4isfstools-refactor/src-tauri/src/events.rs)：进度/错误事件发送、cancel/job 状态读取。
+- [src-tauri/src/runtime/](/Users/suntong/文件夹/4isfstools-refactor/src-tauri/src/runtime/)：运行时检测、manifest 解析、Python 路径、GPU/CUDA 能力检测。
+- [src-tauri/src/storage/](/Users/suntong/文件夹/4isfstools-refactor/src-tauri/src/storage/)：路径计算、文件存储辅助。
+- [src-tauri/src/process_control.rs](/Users/suntong/文件夹/4isfstools-refactor/src-tauri/src/process_control.rs)：进程控制，Windows 不能回退到会阻塞的旧做法。
+- [runtime-manifest.json](/Users/suntong/文件夹/4isfstools-refactor/runtime-manifest.json)：模型来源清单，只管模型源，不负责 torch/profile 决策。
 
 ## 当前 GPU / CPU 设计
 - 运行时检测以项目实际 Python 环境中的 `torch.cuda.is_available()` 为准，不以驱动存在代替。
@@ -62,9 +69,14 @@
 - 不要新增与当前目标无关的大重构或新文档体系。
 
 ## 最近关键 commits
+- `0ffe1ae` `docs: summarize phase 1 refactor`
+- `faabfd3` `refactor: move event helpers out of lib`
+- `ccc5ff6` `refactor: move storage helpers out of lib`
+- `437d9f2` `refactor: move runtime python helpers out of lib`
+- `0dc8b59` `refactor: move runtime capability helpers out of lib`
+- `b6d4afe` `refactor: move runtime manifest helpers out of lib`
+- `1fbac02` `refactor: move shared models out of lib`
+- `dec1414` `ui: refresh gpu toggle callbacks`
 - `7d49174` `runtime: gate cuda torch install behind gpu toggle`
 - `016e7d7` `ui/runtime: gate demucs cuda behind gpu toggle`
-- `5270440` `separation: record demucs selected device`
-- `802cca6` `runtime: select cpu or cuda torch profile`
-- `438a14b` `ui: show runtime cuda capability`
 
