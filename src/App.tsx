@@ -144,7 +144,7 @@ function App() {
   const [lyricsImportError, setLyricsImportError] = useState<string | null>(null);
   const [fileStorageSettings, setFileStorageSettings] = useState<FileStorageSettings | null>(null);
   const [fileStorageSettingsOpen, setFileStorageSettingsOpen] = useState(false);
-  const [settingsPane, setSettingsPane] = useState<"paths" | "runtime">("paths");
+  const [settingsPane, setSettingsPane] = useState<"paths" | "runtime" | "audioOutput">("runtime");
   const [fileStorageSettingsSaving, setFileStorageSettingsSaving] = useState(false);
   const [fileStorageSettingsMessage, setFileStorageSettingsMessage] = useState<string | null>(null);
   const [runtimeHealth, setRuntimeHealth] = useState<RuntimeHealthReport | null>(null);
@@ -295,10 +295,10 @@ function App() {
   }, [audioOutputDeviceId, applyToAllAudioOutputs]);
 
   useEffect(() => {
-    if (fileStorageSettingsOpen) {
+    if (fileStorageSettingsOpen && settingsPane === "audioOutput") {
       void refreshAudioOutputDevices();
     }
-  }, [fileStorageSettingsOpen, refreshAudioOutputDevices]);
+  }, [fileStorageSettingsOpen, settingsPane, refreshAudioOutputDevices]);
 
   const readySongCount = songs.filter((s) => s.status === "ready").length;
 
@@ -1715,8 +1715,9 @@ function App() {
               <div aria-hidden="true" className="h-[12px]" />
               <div className="settings-sidebar-nav flex flex-col gap-2">
                 {([
-                  ["自定义路径", "paths", "文件归档位置"],
                   ["依赖与模型", "runtime", "启动环境与模型状态"],
+                  ["声音输出源", "audioOutput", "音频播放设备选择"],
+                  ["自定义路径", "paths", "文件归档位置"],
                 ] as Array<[string, typeof settingsPane, string]>).map(([label, pane, hint]) => {
                   const active = settingsPane === pane;
                   return (
@@ -1745,12 +1746,14 @@ function App() {
                 <div data-debug-id="settings-main-inner" className="settings-main-inner flex w-full max-w-[1040px] flex-col box-border">
                   <div className="settings-page-header mb-[28px] max-w-[760px]">
                     <div data-debug-id="settings-page-title" className="settings-page-title text-[30px] font-[750] leading-[1.15] tracking-tight text-[#f5f5f5]">
-                      {settingsPane === "paths" ? "自定义路径" : "依赖与模型"}
+                      {settingsPane === "runtime" ? "依赖与模型" : settingsPane === "audioOutput" ? "声音输出源" : "自定义路径"}
                     </div>
                     <div className="settings-page-description mt-2 text-[14px] leading-6 text-white/55">
-                      {settingsPane === "paths"
-                        ? "伴奏、人声、歌词会自动归档到指定目录，保存后可随时迁移历史文件。"
-                        : "启动时会做最小环境检测，核心依赖异常时会以颜色提示。"}
+                      {settingsPane === "runtime"
+                        ? "启动时会做最小环境检测，核心依赖异常时会以颜色提示。"
+                        : settingsPane === "audioOutput"
+                          ? "选择音频播放的输出设备，切换后立即生效。"
+                          : "伴奏、人声、歌词会自动归档到指定目录，保存后可随时迁移历史文件。"}
                     </div>
                   </div>
 
@@ -1835,51 +1838,52 @@ function App() {
                             </button>
                           </div>
                         </div>
-
-                        {/* Audio output device */}
-                        <div className="mt-[20px] rounded-[18px] border border-white/[0.08] bg-white/[0.035] px-[24px] py-[22px]">
-                          <div className="flex items-center justify-between gap-4">
-                            <div>
-                              <div className="text-[16px] font-semibold leading-[1.3] tracking-tight text-[#f5f5f5]">声音输出源</div>
-                              <div className="mt-[5px] text-[13px] leading-[1.4] text-white/52">
-                                选择音频播放的输出设备。需要浏览器授予音频设备权限。
-                              </div>
-                            </div>
-                            <button
-                              type="button"
-                              className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-white/[0.10] px-3 py-1.5 text-[12px] font-medium text-[#d4d4d8] transition-colors hover:bg-white/[0.06]"
-                              onClick={() => void refreshAudioOutputDevices()}
-                            >
-                              刷新设备
-                            </button>
-                          </div>
-                          <div className="mt-3">
-                            <select
-                              value={audioOutputDeviceId}
-                              onChange={(e) => setAudioOutputDeviceId(e.target.value)}
-                              className="w-full max-w-[420px] rounded-[12px] border border-white/[0.10] bg-white/[0.05] px-4 py-2.5 text-[14px] text-[#f5f5f5] outline-none transition-colors focus:border-[#6366f1]/60"
-                            >
-                              <option value="default">系统默认</option>
-                              {audioOutputDevices.map((d) => (
-                                <option key={d.deviceId} value={d.deviceId}>
-                                  {d.label}
-                                </option>
-                              ))}
-                            </select>
-                            {audioOutputDeviceId !== "default" && (
-                              <div className="mt-2 text-[12px] text-white/40">
-                                当前输出：{audioOutputDevices.find((d) => d.deviceId === audioOutputDeviceId)?.label ?? audioOutputDeviceId}
-                              </div>
-                            )}
-                            {audioOutputSupport === "unsupported" && (
-                              <div className="mt-2 rounded-lg border border-amber-400/20 bg-amber-400/[0.06] px-3 py-2 text-[12px] text-amber-200/80">
-                                当前环境不支持选择输出设备，声音将使用系统默认输出。
-                              </div>
-                            )}
-                          </div>
-                        </div>
                       </div>
                     )
+                  ) : settingsPane === "audioOutput" ? (
+                    <div className="flex w-full flex-col gap-[20px]">
+                      <div className="rounded-[18px] border border-white/[0.08] bg-white/[0.035] px-[24px] py-[22px]">
+                        <div className="flex items-center justify-between gap-4">
+                          <div>
+                            <div className="text-[16px] font-semibold leading-[1.3] tracking-tight text-[#f5f5f5]">声音输出源</div>
+                            <div className="mt-[5px] text-[13px] leading-[1.4] text-white/52">
+                              选择音频播放的输出设备。需要浏览器授予音频设备权限。
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-white/[0.10] px-3 py-1.5 text-[12px] font-medium text-[#d4d4d8] transition-colors hover:bg-white/[0.06]"
+                            onClick={() => void refreshAudioOutputDevices()}
+                          >
+                            刷新设备
+                          </button>
+                        </div>
+                        <div className="mt-3">
+                          <select
+                            value={audioOutputDeviceId}
+                            onChange={(e) => setAudioOutputDeviceId(e.target.value)}
+                            className="w-full max-w-[420px] rounded-[12px] border border-white/[0.10] bg-white/[0.05] px-4 py-2.5 text-[14px] text-[#f5f5f5] outline-none transition-colors focus:border-[#6366f1]/60"
+                          >
+                            <option value="default">系统默认</option>
+                            {audioOutputDevices.map((d) => (
+                              <option key={d.deviceId} value={d.deviceId}>
+                                {d.label}
+                              </option>
+                            ))}
+                          </select>
+                          {audioOutputDeviceId !== "default" && (
+                            <div className="mt-2 text-[12px] text-white/40">
+                              当前输出：{audioOutputDevices.find((d) => d.deviceId === audioOutputDeviceId)?.label ?? audioOutputDeviceId}
+                            </div>
+                          )}
+                          {audioOutputSupport === "unsupported" && (
+                            <div className="mt-2 rounded-lg border border-amber-400/20 bg-amber-400/[0.06] px-3 py-2 text-[12px] text-amber-200/80">
+                              当前环境不支持选择输出设备，声音将使用系统默认输出。
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
                   ) : (
                     <div className="flex w-full flex-col gap-[20px]">
                       <div data-debug-id="env-summary-card" className="env-summary-card rounded-[18px] border border-white/[0.08] bg-white/[0.04] p-[22px] shadow-[0_1px_0_rgba(255,255,255,0.03)_inset]">
