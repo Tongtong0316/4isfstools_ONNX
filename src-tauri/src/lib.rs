@@ -15,6 +15,7 @@ mod events;
 mod models;
 mod process_control;
 mod runtime;
+mod separation_queue;
 mod storage;
 pub use models::*;
 pub(crate) use events::{
@@ -2509,7 +2510,7 @@ fn cancel_active_processing_jobs(reason: &str) {
     JobManager::cancel_active_jobs(reason);
 }
 
-fn update_song_status(
+pub(crate) fn update_song_status(
     song_id: &str,
     status: &str,
     progress: u32,
@@ -4660,8 +4661,12 @@ async fn start_process(
         return Err(format!("Cannot process song with status: {}", song.status));
     }
 
+    if separation_queue::is_queued(&song_id) {
+        return Err("Song is already queued for processing".to_string());
+    }
+
     let job_token = JobManager::prepare_song_job(&song_id);
-    update_song_status(&song_id, "processing", 0, Some("checking_gpu"), None);
+    update_song_status(&song_id, "queued", 0, Some("queued"), None);
 
     let songs_dir = get_songs_dir();
     ensure_dir(&songs_dir).map_err(|e| e.to_string())?;
@@ -4670,25 +4675,22 @@ async fn start_process(
     ensure_dir(&song_dir).map_err(|e| e.to_string())?;
 
     let input_path = song.original_path.clone();
-    let song_id_clone = song_id.clone();
+    let song_duration_ms = song.duration;
 
-    std::thread::spawn(move || {
-        let song_duration_ms = song.duration;
-        process_song_background(
-            app,
-            song_id_clone,
-            job_token,
-            input_path,
-            song_dir,
-            song_duration_ms,
-            prefer_demucs_cuda,
-        );
+    separation_queue::submit_task(separation_queue::DemucsTask {
+        app,
+        song_id,
+        job_token,
+        input_path,
+        output_dir: song_dir,
+        song_duration_ms,
+        prefer_demucs_cuda,
     });
 
     Ok(())
 }
 
-fn process_song_background(
+pub(crate) fn process_song_background(
     app: AppHandle,
     song_id: String,
     job_token: String,
@@ -5491,6 +5493,10 @@ async fn reprocess_song(
         ));
     }
 
+    if separation_queue::is_queued(&song_id) {
+        return Err("Song is already queued for processing".to_string());
+    }
+
     // Clear output paths for reprocess
     {
         let mut songs = SONGS.lock().unwrap();
@@ -5506,26 +5512,23 @@ async fn reprocess_song(
     }
 
     let job_token = JobManager::prepare_song_job(&song_id);
-    update_song_status(&song_id, "processing", 0, Some("checking_gpu"), None);
+    update_song_status(&song_id, "queued", 0, Some("queued"), None);
 
     let songs_dir = get_songs_dir();
     let song_dir = songs_dir.join(&song_id);
     ensure_dir(&song_dir).map_err(|e| e.to_string())?;
 
     let input_path = song.original_path.clone();
-    let song_id_clone = song_id.clone();
+    let song_duration_ms = song.duration;
 
-    std::thread::spawn(move || {
-        let song_duration_ms = song.duration;
-        process_song_background(
-            app,
-            song_id_clone,
-            job_token,
-            input_path,
-            song_dir,
-            song_duration_ms,
-            prefer_demucs_cuda,
-        );
+    separation_queue::submit_task(separation_queue::DemucsTask {
+        app,
+        song_id,
+        job_token,
+        input_path,
+        output_dir: song_dir,
+        song_duration_ms,
+        prefer_demucs_cuda,
     });
 
     Ok(())
@@ -5585,6 +5588,17 @@ async fn cancel_process(app: AppHandle, song_id: String) -> Result<(), String> {
     };
 
     match status {
+        Some(s) if s == "queued" => {
+            // Task is in queue, not yet started - remove from queue and clean up
+            if separation_queue::cancel_task(&song_id) {
+                JobManager::clear_song_job(&song_id, "用户取消");
+                update_song_status(&song_id, "cancelled", 0, Some("cancelled"), Some("用户取消"));
+                emit_progress(&app, &song_id, "cancelled", 0, "已取消", None);
+                Ok(())
+            } else {
+                Err("Task not found in queue".to_string())
+            }
+        }
         Some(s) if s == "processing" || s == "cancelling" => {
             let cancel_job_token = get_active_job_token(&song_id);
             JobManager::clear_song_job(&song_id, "用户取消");
