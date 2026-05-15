@@ -2095,7 +2095,8 @@ fn ensure_core_runtime_modules(app: &AppHandle, prefer_demucs_cuda: bool) -> Res
     }
 }
 
-/// Install PyTorch with automatic CUDA detection using China-accessible Tsinghua mirror.
+/// Install PyTorch with automatic CUDA detection.
+/// Source priority: Tsinghua CUDA mirror → PyTorch official CUDA index → Tsinghua PyPI (CPU only).
 fn install_torch_with_cuda_detection(
     python_path: &Path,
     prefer_cuda: bool,
@@ -2122,27 +2123,24 @@ fn install_torch_with_cuda_detection(
         }
     };
 
-    let torch_index_url = format!(
+    // --- Source 1: Tsinghua PyTorch CUDA wheel mirror (China-accessible) ---
+    let tsinghua_index = format!(
         "https://mirrors.tuna.tsinghua.edu.cn/pytorch/whl/{}",
         cuda_index
     );
-    let torch_index_host = "mirrors.tuna.tsinghua.edu.cn";
+    let tsinghua_host = "mirrors.tuna.tsinghua.edu.cn";
 
-    // PyPI fallback for torch (from Tsinghua)
-    let pypi_index = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple";
-    let pypi_host = "mirrors.tuna.tsinghua.edu.cn";
-
-    // Try Tsinghua PyTorch mirror first (CUDA-aware)
     let args = [
         "-m",
         "pip",
         "install",
+        "-U",
         "torch",
         "torchaudio",
         "--index-url",
-        &torch_index_url,
+        &tsinghua_index,
         "--trusted-host",
-        torch_index_host,
+        tsinghua_host,
     ];
     let output = Command::new(python_path)
         .args(&args)
@@ -2157,9 +2155,13 @@ fn install_torch_with_cuda_detection(
     }
 
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let _stdout = String::from_utf8_lossy(&output.stdout).to_string();
 
-    // Fallback: try standard PyPI with Tsinghua mirror
+    // --- Source 2: PyTorch official CUDA wheel index (overseas fallback) ---
+    let official_index = format!(
+        "https://download.pytorch.org/whl/{}",
+        cuda_index
+    );
+
     let fallback_args = [
         "-m",
         "pip",
@@ -2167,15 +2169,13 @@ fn install_torch_with_cuda_detection(
         "-U",
         "torch",
         "torchaudio",
-        "-i",
-        pypi_index,
-        "--trusted-host",
-        pypi_host,
+        "--index-url",
+        &official_index,
     ];
     let fallback_output = Command::new(python_path)
         .args(&fallback_args)
         .output()
-        .map_err(|e| format!("调用 pip 安装 torch (fallback) 失败: {}", e))?;
+        .map_err(|e| format!("调用 pip 安装 torch (official fallback) 失败: {}", e))?;
 
     if fallback_output.status.success() {
         let refreshed_capability = runtime::capability::detect_torch_cuda_capability(python_path);
@@ -2186,7 +2186,7 @@ fn install_torch_with_cuda_detection(
 
     let fallback_stderr = String::from_utf8_lossy(&fallback_output.stderr).to_string();
     Err(format!(
-        "torch 安装失败。清华镜像: {} | PyPI 镜像: {}",
+        "torch 安装失败。清华镜像: {} | PyTorch 官方: {}",
         stderr.trim(),
         fallback_stderr.trim()
     ))
