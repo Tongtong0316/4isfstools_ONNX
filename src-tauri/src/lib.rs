@@ -2520,8 +2520,8 @@ pub(crate) fn update_song_status(
     let mut songs = SONGS.lock().unwrap();
     if let Some(ref mut map) = *songs {
         if let Some(song) = map.get_mut(song_id) {
-            // Once cancelled, ignore stale background writes except explicit cancelled/cancelling.
-            if song.status == "cancelled" && status != "cancelled" && status != "cancelling" {
+            // Once cancelled, ignore stale background writes except explicit cancelled/cancelling/pending.
+            if song.status == "cancelled" && status != "cancelled" && status != "cancelling" && status != "pending" {
                 return;
             }
             song.status = status.to_string();

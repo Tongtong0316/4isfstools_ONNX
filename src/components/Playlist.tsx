@@ -295,7 +295,7 @@ export default function Playlist({
   };
 
   const handleSongClick = (song: Song) => {
-    if (song.status === "pending" || song.status === "error" || song.status === "cancelled") {
+    if (song.status === "pending" || song.status === "error" || song.status === "cancelled" || song.status === "queued") {
       onStartProcess(song);
       return;
     }
@@ -343,6 +343,9 @@ export default function Playlist({
           )}
           {song.status === "pending" && (
             <span className="text-xs text-[#71717a]">点击开始处理</span>
+          )}
+          {song.status === "queued" && (
+            <span className="text-xs text-[#60a5fa]">排队中...</span>
           )}
           {song.status === "error" && (
             <span className="text-xs text-[#ef4444] truncate block">

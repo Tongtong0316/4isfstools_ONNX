@@ -732,9 +732,7 @@ function App() {
       setSongs((prev) =>
         prev.map((s) =>
           s.id === song_id
-            ? s.status === "cancelled" && nextStatus === "processing"
-              ? s
-              : { ...s, progress, processingStage: stage as ProcessingStage, status: nextStatus as Song["status"] }
+            ? { ...s, progress, processingStage: stage as ProcessingStage, status: nextStatus as Song["status"] }
             : s
         )
       );
@@ -914,7 +912,7 @@ function App() {
       await invoke(command, { songId: song.id, preferDemucsCuda: demucsGpuRequested });
       setSongs((prev) => prev.map((item) =>
         item.id === song.id
-          ? { ...item, status: "processing" as const, progress: 0, processingStage: "checking_gpu" as ProcessingStage, error_message: undefined }
+          ? { ...item, status: "queued" as const, progress: 0, processingStage: "queued" as ProcessingStage, error_message: undefined }
           : item
       ));
     } catch (e) {
