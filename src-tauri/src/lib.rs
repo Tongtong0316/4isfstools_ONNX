@@ -472,24 +472,16 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
             }),
         },
         RuntimeHealthCheck {
-            name: "Demucs".to_string(),
-            ok: demucs_ready,
-            severity: if demucs_ready {
-                "info".to_string()
+            name: "人声分离".to_string(),
+            ok: demucs_ready && demucs_models_ready,
+            severity: "info".to_string(),
+            detail: Some(if !demucs_ready {
+                "运行时缺失".to_string()
+            } else if !demucs_models_ready {
+                "分离模型缺失".to_string()
             } else {
-                "error".to_string()
-            },
-            detail: Some("伴奏/人声分离".to_string()),
-        },
-        RuntimeHealthCheck {
-            name: "Demucs 分离模型".to_string(),
-            ok: demucs_models_ready,
-            severity: if demucs_models_ready {
-                "info".to_string()
-            } else {
-                "warning".to_string()
-            },
-            detail: Some("人声/伴奏分离模型".to_string()),
+                "已就绪".to_string()
+            }),
         },
         RuntimeHealthCheck {
             name: "SoundFile".to_string(),
@@ -1797,11 +1789,27 @@ fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
     if still_missing.is_empty() {
         Ok(())
     } else {
-        Err(format!(
-            "模型安装未完成，缺少：{}。请在 runtime-manifest.json 配置大陆可达模型源，或放置本地离线模型。细节：{}",
-            still_missing.join("、"),
-            if install_notes.is_empty() { "无安装日志".to_string() } else { install_notes.join(" | ") }
-        ))
+        // Demucs 模型缺失时必须报错，Whisper base 是可选功能不影响核心
+        let demucs_missing = still_missing.iter().any(|s| s.contains("demucs"));
+        let whisper_missing = still_missing.iter().any(|s| s.contains("whisper base"));
+        if demucs_missing {
+            Err(format!(
+                "核心模型（人声分离）安装失败：demucs 模型缺失。请检查网络或配置离线模型。细节：{}",
+                if install_notes.is_empty() { "无安装日志".to_string() } else { install_notes.join(" | ") }
+            ))
+        } else if whisper_missing {
+            // Whisper 可选，降级为成功但记录警告
+            Ok(())
+        } else if !still_missing.is_empty() {
+            // 未知模型缺失不得静默 OK
+            Err(format!(
+                "模型安装失败：{}。仅 Whisper base 缺失可降级，其他模型缺失必须解决。细节：{}",
+                still_missing.join("、"),
+                if install_notes.is_empty() { "无安装日志".to_string() } else { install_notes.join(" | ") }
+            ))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -2193,7 +2201,7 @@ fn detect_bootstrap_status(app: &AppHandle) -> BootstrapStatus {
     } else {
         false
     };
-    let torch_cuda_ready =
+    let _torch_cuda_ready =
         torch_capability.torch_cuda_available || !torch_capability.has_nvidia_gpu;
     let demucs_ready = if python_ready {
         runtime::capability::python_module_is_available(&python_path, "demucs", 4).unwrap_or(false)
@@ -2208,7 +2216,7 @@ fn detect_bootstrap_status(app: &AppHandle) -> BootstrapStatus {
     let can_run_core = is_full_capability_ready(
         python_ready,
         ffmpeg_ready,
-        torch_ready && torch_cuda_ready,
+        torch_ready,
         demucs_ready,
         demucs_models_ready,
         soundfile_ready,
@@ -2243,6 +2251,8 @@ fn format_missing_core_components_with_reason(health: &RuntimeHealthReport) -> S
         .checks
         .iter()
         .filter(|c| !c.ok)
+        // AI 听写草稿是可选功能，不参与核心就绪判断
+        .filter(|c| c.name != "AI 听写草稿")
         .map(|c| {
             let detail = c.detail.as_deref().unwrap_or("").trim();
             if detail.is_empty() {
