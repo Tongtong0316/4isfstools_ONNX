@@ -3,9 +3,7 @@ use std::path::Path;
 
 use tauri::{AppHandle, Manager};
 
-use crate::models::{
-    RuntimeManifest, RuntimeManifestArtifact, RuntimeManifestPlatform,
-};
+use crate::models::{RuntimeManifest, RuntimeManifestArtifact, RuntimeManifestPlatform};
 
 pub fn parse_manifest(path: &Path) -> Option<RuntimeManifest> {
     if !path.exists() {

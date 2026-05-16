@@ -13,10 +13,10 @@ use std::os::windows::process::CommandExt;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 /// Apply platform-specific flags to hide console windows on Windows.
-pub fn configure_console_visibility(command: &mut Command) {
+pub fn configure_console_visibility(_command: &mut Command) {
     #[cfg(windows)]
     {
-        command.creation_flags(CREATE_NO_WINDOW);
+        _command.creation_flags(CREATE_NO_WINDOW);
     }
 }
 

@@ -75,7 +75,13 @@ pub(crate) fn emit_progress_for_job(
     }
 }
 
-pub(crate) fn emit_error_for_job(app: &AppHandle, song_id: &str, job_token: &str, stage: &str, error: &str) {
+pub(crate) fn emit_error_for_job(
+    app: &AppHandle,
+    song_id: &str,
+    job_token: &str,
+    stage: &str,
+    error: &str,
+) {
     if is_active_job(song_id, job_token) {
         emit_error(app, song_id, stage, error);
     }

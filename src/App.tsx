@@ -226,12 +226,26 @@ function App() {
   const audioOutputDeviceIdRef = useRef(audioOutputDeviceId);
   audioOutputDeviceIdRef.current = audioOutputDeviceId;
 
+  const unlockAudioOutputDeviceLabels = useCallback(async () => {
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        return false;
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((track) => track.stop());
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
   const refreshAudioOutputDevices = useCallback(async () => {
     try {
       if (!navigator.mediaDevices?.enumerateDevices) {
         setAudioOutputSupport("unsupported");
         return;
       }
+      await unlockAudioOutputDeviceLabels();
       const devices = await navigator.mediaDevices.enumerateDevices();
       const outputs = devices
         .filter((d) => d.kind === "audiooutput")
@@ -249,7 +263,7 @@ function App() {
     } catch {
       setAudioOutputSupport("unsupported");
     }
-  }, []);
+  }, [unlockAudioOutputDeviceLabels]);
 
   const applyAudioOutputDevice = useCallback(async (audio: HTMLAudioElement) => {
     const deviceId = audioOutputDeviceIdRef.current;
@@ -940,6 +954,11 @@ function App() {
         newSongs.map(async (song) => {
           try {
             await invoke("start_process", { songId: song.id, preferDemucsCuda: demucsGpuRequested });
+            setSongs((prev) => prev.map((item) =>
+              item.id === song.id && item.status !== "processing" && item.status !== "cancelling"
+                ? { ...item, status: "queued" as const, progress: 0, processingStage: "queued" as ProcessingStage, error_message: undefined }
+                : item
+            ));
           } catch (e) {
             console.error(`Failed to auto-start process for ${song.name}:`, e);
           }
@@ -950,6 +969,31 @@ function App() {
     }
   }, [demucsGpuRequested]);
 
+  const handleSaveStorageSettings = useCallback(async (settingsOverride?: FileStorageSettings) => {
+    const settingsToSave = settingsOverride ?? fileStorageSettings;
+    if (!settingsToSave) return;
+    setFileStorageSettingsSaving(true);
+    setFileStorageSettingsMessage(null);
+    try {
+      const normalized = await invoke<FileStorageSettings>("update_file_storage_settings", {
+        settings: settingsToSave,
+      });
+      setFileStorageSettings(normalized);
+      const refreshedSongs = await refreshSongs();
+      const targetSongId = currentSongRef.current?.id ?? null;
+      if (targetSongId) {
+        const updatedSong = refreshedSongs.find((song) => song.id === targetSongId) || null;
+        setCurrentSong(updatedSong);
+      }
+      setFileStorageSettingsMessage("已保存文件管理设置并完成自动迁移。");
+    } catch (error) {
+      console.error("Failed to save file storage settings:", error);
+      setFileStorageSettingsMessage(`保存失败: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setFileStorageSettingsSaving(false);
+    }
+  }, [fileStorageSettings, refreshSongs]);
+
   const handleChooseStorageFolder = useCallback(async (field: keyof FileStorageSettings) => {
     const currentPath = fileStorageSettings?.[field] || "";
     const selected = await open({
@@ -958,23 +1002,27 @@ function App() {
       defaultPath: currentPath.trim() || undefined,
     });
     if (typeof selected === "string" && selected.trim()) {
-      setFileStorageSettings((prev) => ({
-        instrumentalRoot: prev?.instrumentalRoot || "",
-        vocalsRoot: prev?.vocalsRoot || "",
-        lyricsRoot: prev?.lyricsRoot || "",
+      const nextSettings = {
+        instrumentalRoot: fileStorageSettings?.instrumentalRoot || "",
+        vocalsRoot: fileStorageSettings?.vocalsRoot || "",
+        lyricsRoot: fileStorageSettings?.lyricsRoot || "",
         [field]: selected,
-      }));
+      } as FileStorageSettings;
+      setFileStorageSettings(nextSettings);
+      void handleSaveStorageSettings(nextSettings);
     }
-  }, [fileStorageSettings]);
+  }, [fileStorageSettings, handleSaveStorageSettings]);
 
   const handleResetStorageSettings = useCallback(() => {
-    setFileStorageSettings((prev) => ({
-      instrumentalRoot: prev?.instrumentalRoot ? "" : "",
-      vocalsRoot: prev?.vocalsRoot ? "" : "",
-      lyricsRoot: prev?.lyricsRoot ? "" : "",
-    }));
+    const nextSettings = {
+      instrumentalRoot: "",
+      vocalsRoot: "",
+      lyricsRoot: "",
+    };
+    setFileStorageSettings(nextSettings);
     setFileStorageSettingsMessage("已恢复为默认目录，保存后自动迁移。");
-  }, []);
+    void handleSaveStorageSettings(nextSettings);
+  }, [handleSaveStorageSettings]);
 
   // Cancel processing
   const handleCancelProcess = useCallback(async (song: Song) => {
@@ -1000,7 +1048,7 @@ function App() {
       const command = song.status === "ready" ? "reprocess_song" : "start_process";
       await invoke(command, { songId: song.id, preferDemucsCuda: demucsGpuRequested });
       setSongs((prev) => prev.map((item) =>
-        item.id === song.id
+        item.id === song.id && item.status !== "processing" && item.status !== "cancelling"
           ? { ...item, status: "queued" as const, progress: 0, processingStage: "queued" as ProcessingStage, error_message: undefined }
           : item
       ));
@@ -1094,38 +1142,6 @@ function App() {
     }
   }, [songs, loadLyrics, volume, playbackMode, applyModeRouting, stopAllAudio, startPlayback, createAudioTrack, bindAudioError, createTrackGraph, ensureAudioContextRunning]);
 
-  const handleSaveStorageSettings = useCallback(async () => {
-    if (!fileStorageSettings) return;
-    setFileStorageSettingsSaving(true);
-    setFileStorageSettingsMessage(null);
-    const targetSongId = currentSongRef.current?.id ?? null;
-    const wasPlaying = playerState === "playing";
-    try {
-      const normalized = await invoke<FileStorageSettings>("update_file_storage_settings", {
-        settings: fileStorageSettings,
-      });
-      setFileStorageSettings(normalized);
-      const refreshedSongs = await refreshSongs();
-      if (targetSongId) {
-        const updatedSong = refreshedSongs.find((song) => song.id === targetSongId) || null;
-        setCurrentSong(updatedSong);
-        if (updatedSong) {
-          if (wasPlaying && updatedSong.status === "ready") {
-            await handleSelectSong(updatedSong);
-          } else {
-            await loadLyrics(updatedSong);
-          }
-        }
-      }
-      setFileStorageSettingsMessage("已保存文件管理设置并完成自动迁移。");
-    } catch (error) {
-      console.error("Failed to save file storage settings:", error);
-      setFileStorageSettingsMessage(`保存失败: ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      setFileStorageSettingsSaving(false);
-    }
-  }, [fileStorageSettings, handleSelectSong, loadLyrics, playerState, refreshSongs]);
-
   const handlePlayPause = useCallback(async () => {
     if (!audioRef.current || !audioRef.current.src) {
       if (currentSong?.status === "ready") {
@@ -1184,19 +1200,20 @@ function App() {
   const handleDeleteSong = useCallback(async (id: string) => {
     try {
       await invoke("delete_song", { id });
+      stopAllAudio();
+      setSongs((prev) => prev.filter((s) => s.id !== id));
+      if (currentSong?.id === id) {
+        setCurrentSong(null);
+        setCurrentTime(0);
+        setPlayerState("idle");
+        setPlaybackError(null);
+        setLyricsDoc(null);
+        audioRef.current = null;
+        originalAudioRef.current = null;
+      }
     } catch (e) {
       console.error(e);
-    }
-    stopAllAudio();
-    setSongs((prev) => prev.filter((s) => s.id !== id));
-    if (currentSong?.id === id) {
-      setCurrentSong(null);
-      setCurrentTime(0);
-      setPlayerState("idle");
-      setPlaybackError(null);
-      setLyricsDoc(null);
-      audioRef.current = null;
-      originalAudioRef.current = null;
+      return;
     }
   }, [currentSong, stopAllAudio]);
 
@@ -1977,7 +1994,9 @@ function App() {
                                   ? "bg-emerald-300"
                                   : check.severity === "warning"
                                     ? "bg-amber-300"
-                                    : "bg-rose-300"
+                                    : check.severity === "info"
+                                      ? "bg-sky-300"
+                                      : "bg-rose-300"
                               }`}
                               style={{ position: "static", width: 8, height: 8, marginLeft: 0, marginRight: 0, transform: "none", flex: "0 0 8px" }}
                             />
@@ -1997,11 +2016,13 @@ function App() {
                                   ? "border border-emerald-400/20 bg-emerald-400/10 text-emerald-200"
                                   : check.severity === "warning"
                                     ? "border border-amber-400/20 bg-amber-400/10 text-amber-200"
-                                    : "border border-rose-400/20 bg-rose-400/10 text-rose-200"
+                                    : check.severity === "info"
+                                      ? "border border-sky-400/20 bg-sky-400/10 text-sky-200"
+                                      : "border border-rose-400/20 bg-rose-400/10 text-rose-200"
                               }`}
                               style={{ position: "static", width: "auto", height: 24, paddingLeft: 9, paddingRight: 9, marginLeft: 0, marginRight: 0, transform: "none", flex: "0 0 auto", alignSelf: "auto" }}
                             >
-                              {check.ok ? "正常" : check.severity === "warning" ? "注意" : "异常"}
+                              {check.ok ? "正常" : check.severity === "warning" ? "注意" : check.severity === "info" ? "信息" : "异常"}
                             </div>
                           </div>
                         ))}

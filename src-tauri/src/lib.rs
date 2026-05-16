@@ -17,15 +17,14 @@ mod process_control;
 mod runtime;
 mod separation_queue;
 mod storage;
-pub use models::*;
 pub(crate) use events::{
     check_cancel_flag, emit_error_for_job, emit_progress, emit_progress_for_job,
     get_active_job_token, is_active_job,
 };
+pub use models::*;
 use storage::{
     ensure_dir, get_data_dir, get_default_asset_root, get_file_storage_settings_path,
-    get_library_path, get_lyrics_search_cache_path, get_songs_dir,
-    normalize_file_storage_settings,
+    get_library_path, get_lyrics_search_cache_path, get_songs_dir, normalize_file_storage_settings,
 };
 
 pub(crate) static SONGS: Mutex<Option<HashMap<String, Song>>> = Mutex::new(None);
@@ -372,12 +371,14 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
         false
     };
     let faster_whisper_ready = if python_exists {
-        runtime::capability::python_module_is_available(&python_path, "faster_whisper", 6).unwrap_or(false)
+        runtime::capability::python_module_is_available(&python_path, "faster_whisper", 6)
+            .unwrap_or(false)
     } else {
         false
     };
     let soundfile_ready = if python_exists {
-        runtime::capability::python_module_is_available(&python_path, "soundfile", 6).unwrap_or(false)
+        runtime::capability::python_module_is_available(&python_path, "soundfile", 6)
+            .unwrap_or(false)
     } else {
         false
     };
@@ -416,11 +417,7 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
         RuntimeHealthCheck {
             name: "NVIDIA GPU".to_string(),
             ok: torch_capability.has_nvidia_gpu,
-            severity: if torch_capability.has_nvidia_gpu {
-                "info".to_string()
-            } else {
-                "warning".to_string()
-            },
+            severity: "info".to_string(),
             detail: torch_capability.nvidia_gpu_name.clone().or_else(|| {
                 torch_capability
                     .nvidia_driver_cuda_version
@@ -1604,19 +1601,9 @@ fn bootstrap_model_from_manifest_sources(
         }
     }
 
-    // Do not treat "directory exists" as success.
-    // Validate all manifest-declared target files are present.
-    let expected_files: Vec<PathBuf> = sources
-        .iter()
-        .filter_map(|artifact| artifact.target_relpath.as_ref())
-        .map(|rel| runtime_models.join(rel))
-        .collect();
-
-    let all_expected_present =
-        !expected_files.is_empty() && expected_files.iter().all(|p| p.exists());
-
-    if all_expected_present {
-        return Ok(true);
+    match verify_manifest_targets(runtime_models, sources) {
+        Ok(()) => return Ok(true),
+        Err(err) => attempts.push(format!("{}: {}", model_name, err)),
     }
 
     // Fallback for legacy demucs source lists without targetRelpath:
@@ -1634,7 +1621,17 @@ fn bootstrap_model_from_manifest_sources(
     }
 
     let mut missing_files = Vec::new();
-    for p in expected_files {
+    for artifact in sources {
+        let rel = match artifact
+            .target_relpath
+            .as_deref()
+            .map(str::trim)
+            .filter(|rel| !rel.is_empty())
+        {
+            Some(rel) => rel,
+            None => continue,
+        };
+        let p = runtime_models.join(rel);
         if !p.exists() {
             missing_files.push(p.to_string_lossy().to_string());
         }
@@ -1650,6 +1647,110 @@ fn bootstrap_model_from_manifest_sources(
             format!(" | 缺少文件: {}", missing_files.join(", "))
         }
     ))
+}
+
+fn verify_manifest_targets(
+    runtime_models: &Path,
+    sources: &[RuntimeManifestArtifact],
+) -> Result<(), String> {
+    let mut targets: HashMap<String, Option<String>> = HashMap::new();
+
+    for source in sources {
+        let rel = match source
+            .target_relpath
+            .as_deref()
+            .map(str::trim)
+            .filter(|rel| !rel.is_empty())
+        {
+            Some(rel) => rel.to_string(),
+            None => continue,
+        };
+        let sha = source.sha256.as_ref().map(|value| normalize_sha256(value));
+        match targets.get_mut(&rel) {
+            Some(existing_sha) => match (existing_sha.as_ref(), sha.as_ref()) {
+                (Some(existing), Some(next)) if existing != next => {
+                    return Err(format!("targetRelpath {} 的 SHA256 不一致", rel));
+                }
+                (None, Some(next)) => {
+                    *existing_sha = Some(next.clone());
+                }
+                _ => {}
+            },
+            None => {
+                targets.insert(rel, sha);
+            }
+        }
+    }
+
+    if targets.is_empty() {
+        return Err("未配置可验证的 targetRelpath".to_string());
+    }
+
+    let mut missing = Vec::new();
+    for (rel, sha) in targets {
+        let path = runtime_models.join(&rel);
+        if !path.exists() {
+            missing.push(rel);
+            continue;
+        }
+        if let Some(expected) = sha {
+            verify_download_sha256(&path, &Some(expected))?;
+        }
+    }
+
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("缺少文件: {}", missing.join(", ")))
+    }
+}
+
+fn bootstrap_install_whisper_model(app: &AppHandle) -> Result<(), String> {
+    let runtime_models = get_runtime_dir().join("models");
+    let runtime_whisper = runtime_models.join("whisper");
+    let python_path = runtime::python::get_python_path(app);
+    let manifest =
+        runtime::manifest::load_runtime_manifest(app, &get_runtime_dir(), &resolve_project_root());
+    let platform_manifest = runtime::manifest::current_platform_manifest(&manifest);
+    let whisper_sources = if platform_manifest.models.whisper_base.is_empty() {
+        runtime::manifest::legacy_model_artifacts(&manifest, "whisper")
+    } else {
+        platform_manifest.models.whisper_base
+    };
+
+    if runtime_whisper.exists() {
+        if python_path.exists() {
+            let whisper_usable = resolve_whisper_base_model_dir(app)
+                .ok()
+                .and_then(|model_dir| whisper_model_is_usable(&python_path, &model_dir, 8).ok())
+                .unwrap_or(false);
+            if whisper_usable {
+                return Ok(());
+            }
+        }
+        let _ = fs::remove_dir_all(&runtime_whisper);
+    }
+
+    match bootstrap_model_from_manifest_sources(
+        &runtime_models,
+        "whisper",
+        &runtime_whisper,
+        &whisper_sources,
+    ) {
+        Ok(true) => {}
+        Ok(false) => return Err("whisper base: 未配置可用在线源".to_string()),
+        Err(err) => return Err(format!("whisper base 安装失败: {}", err)),
+    }
+
+    if !python_path.exists() {
+        return Err("找不到 Python 运行时，无法校验 Whisper base".to_string());
+    }
+    let model_dir = resolve_whisper_base_model_dir(app)?;
+    if whisper_model_is_usable(&python_path, &model_dir, 8).unwrap_or(false) {
+        Ok(())
+    } else {
+        Err("Whisper base 模型文件存在但不可用，请重新执行一键安装运行环境。".to_string())
+    }
 }
 
 fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
@@ -1692,11 +1793,8 @@ fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
         }
     }
 
-    let manifest = runtime::manifest::load_runtime_manifest(
-        app,
-        &get_runtime_dir(),
-        &resolve_project_root(),
-    );
+    let manifest =
+        runtime::manifest::load_runtime_manifest(app, &get_runtime_dir(), &resolve_project_root());
     let platform_manifest = runtime::manifest::current_platform_manifest(&manifest);
     let demucs_sources = if platform_manifest.models.demucs.is_empty() {
         runtime::manifest::legacy_model_artifacts(&manifest, "demucs")
@@ -1795,7 +1893,11 @@ fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
         if demucs_missing {
             Err(format!(
                 "核心模型（人声分离）安装失败：demucs 模型缺失。请检查网络或配置离线模型。细节：{}",
-                if install_notes.is_empty() { "无安装日志".to_string() } else { install_notes.join(" | ") }
+                if install_notes.is_empty() {
+                    "无安装日志".to_string()
+                } else {
+                    install_notes.join(" | ")
+                }
             ))
         } else if whisper_missing {
             // Whisper 可选，降级为成功但记录警告
@@ -1805,7 +1907,11 @@ fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
             Err(format!(
                 "模型安装失败：{}。仅 Whisper base 缺失可降级，其他模型缺失必须解决。细节：{}",
                 still_missing.join("、"),
-                if install_notes.is_empty() { "无安装日志".to_string() } else { install_notes.join(" | ") }
+                if install_notes.is_empty() {
+                    "无安装日志".to_string()
+                } else {
+                    install_notes.join(" | ")
+                }
             ))
         } else {
             Ok(())
@@ -1991,12 +2097,13 @@ fn ensure_core_runtime_modules(app: &AppHandle, prefer_demucs_cuda: bool) -> Res
     let torch_capability = runtime::capability::detect_torch_cuda_capability(&python_path);
     let needs_cuda_torch_refresh = cfg!(windows)
         && prefer_demucs_cuda
-        && torch_capability.has_nvidia_gpu
         && (!torch_capability.torch_installed || !torch_capability.torch_cuda_available);
 
     let mut missing = Vec::new();
     for module in ["torch", "demucs", "faster_whisper", "soundfile"] {
-        if !runtime::capability::python_module_is_available(&python_path, module, 6).unwrap_or(false) {
+        if !runtime::capability::python_module_is_available(&python_path, module, 6)
+            .unwrap_or(false)
+        {
             missing.push(module.to_string());
         }
     }
@@ -2017,7 +2124,9 @@ fn ensure_core_runtime_modules(app: &AppHandle, prefer_demucs_cuda: bool) -> Res
 
     let mut still_missing = Vec::new();
     for module in ["torch", "demucs", "faster_whisper"] {
-        if !runtime::capability::python_module_is_available(&python_path, module, 6).unwrap_or(false) {
+        if !runtime::capability::python_module_is_available(&python_path, module, 6)
+            .unwrap_or(false)
+        {
             still_missing.push(module.to_string());
         }
     }
@@ -2061,11 +2170,13 @@ fn ensure_core_runtime_modules(app: &AppHandle, prefer_demucs_cuda: bool) -> Res
 
     let mut final_missing = Vec::new();
     for module in ["torch", "demucs", "faster_whisper", "soundfile"] {
-        if !runtime::capability::python_module_is_available(&python_path, module, 6).unwrap_or(false) {
+        if !runtime::capability::python_module_is_available(&python_path, module, 6)
+            .unwrap_or(false)
+        {
             final_missing.push(module.to_string());
         }
     }
-    if torch_capability.has_nvidia_gpu && !runtime::capability::python_torch_cuda_ready(&python_path) {
+    if prefer_demucs_cuda && !runtime::capability::python_torch_cuda_ready(&python_path) {
         final_missing.push("torch[cuda]".to_string());
     }
     if final_missing.is_empty() {
@@ -2087,99 +2198,120 @@ fn ensure_core_runtime_modules(app: &AppHandle, prefer_demucs_cuda: bool) -> Res
 
 /// Install PyTorch with automatic CUDA detection.
 /// Source priority: Tsinghua CUDA mirror → PyTorch official CUDA index → Tsinghua PyPI (CPU only).
-fn install_torch_with_cuda_detection(
-    python_path: &Path,
-    prefer_cuda: bool,
-) -> Result<(), String> {
-    let torch_capability = runtime::capability::detect_torch_cuda_capability(python_path);
-    let prefer_cuda = prefer_cuda && torch_capability.has_nvidia_gpu;
+fn install_torch_with_cuda_detection(python_path: &Path, prefer_cuda: bool) -> Result<(), String> {
     let detected_cuda = if prefer_cuda {
         runtime::capability::detect_nvidia_cuda_version()
     } else {
         None
     };
-    let cuda_index = match &detected_cuda {
-        Some(cuda_ver) => {
-            let idx = runtime::capability::cuda_version_to_pytorch_index(&cuda_ver);
-            eprintln!(
-                "[forisfstools] 检测到 NVIDIA GPU / CUDA {}, 使用 PyTorch {} 版本",
-                cuda_ver, idx
-            );
-            idx
+    let install_from_index = |cuda_index: &str, expect_cuda: bool| -> Result<(), String> {
+        let tsinghua_index = format!(
+            "https://mirrors.tuna.tsinghua.edu.cn/pytorch/whl/{}",
+            cuda_index
+        );
+        let tsinghua_host = "mirrors.tuna.tsinghua.edu.cn";
+
+        let args = [
+            "-m",
+            "pip",
+            "install",
+            "-U",
+            "torch",
+            "torchaudio",
+            "--index-url",
+            &tsinghua_index,
+            "--trusted-host",
+            tsinghua_host,
+        ];
+        let output = Command::new(python_path)
+            .args(&args)
+            .output()
+            .map_err(|e| format!("调用 pip 安装 torch 失败: {}", e))?;
+
+        if output.status.success() {
+            if !expect_cuda {
+                return Ok(());
+            }
+            let refreshed_capability =
+                runtime::capability::detect_torch_cuda_capability(python_path);
+            if refreshed_capability.torch_cuda_available {
+                return Ok(());
+            }
         }
-        None => {
-            eprintln!("[forisfstools] 未检测到 NVIDIA GPU，使用 PyTorch CPU 版本");
-            "cpu"
+
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+        let official_index = format!("https://download.pytorch.org/whl/{}", cuda_index);
+        let fallback_args = [
+            "-m",
+            "pip",
+            "install",
+            "-U",
+            "torch",
+            "torchaudio",
+            "--index-url",
+            &official_index,
+        ];
+        let fallback_output = Command::new(python_path)
+            .args(&fallback_args)
+            .output()
+            .map_err(|e| format!("调用 pip 安装 torch (official fallback) 失败: {}", e))?;
+
+        if fallback_output.status.success() {
+            if !expect_cuda {
+                return Ok(());
+            }
+            let refreshed_capability =
+                runtime::capability::detect_torch_cuda_capability(python_path);
+            if refreshed_capability.torch_cuda_available {
+                return Ok(());
+            }
         }
+
+        let fallback_stderr = String::from_utf8_lossy(&fallback_output.stderr).to_string();
+        Err(format!(
+            "torch 安装失败。清华镜像: {} | PyTorch 官方: {}",
+            stderr.trim(),
+            fallback_stderr.trim()
+        ))
     };
 
-    // --- Source 1: Tsinghua PyTorch CUDA wheel mirror (China-accessible) ---
-    let tsinghua_index = format!(
-        "https://mirrors.tuna.tsinghua.edu.cn/pytorch/whl/{}",
-        cuda_index
-    );
-    let tsinghua_host = "mirrors.tuna.tsinghua.edu.cn";
+    if prefer_cuda {
+        let preferred_cuda_index = match &detected_cuda {
+            Some(cuda_ver) => {
+                let idx = runtime::capability::cuda_version_to_pytorch_index(&cuda_ver);
+                eprintln!(
+                    "[forisfstools] 检测到 NVIDIA GPU / CUDA {}, 使用 PyTorch {} 版本",
+                    cuda_ver, idx
+                );
+                idx
+            }
+            None if cfg!(windows) => {
+                eprintln!(
+                    "[forisfstools] 请求 CUDA 安装但未能读取 nvidia-smi，先尝试使用 cu124 轮子"
+                );
+                "cu124"
+            }
+            None => "cpu",
+        };
 
-    let args = [
-        "-m",
-        "pip",
-        "install",
-        "-U",
-        "torch",
-        "torchaudio",
-        "--index-url",
-        &tsinghua_index,
-        "--trusted-host",
-        tsinghua_host,
-    ];
-    let output = Command::new(python_path)
-        .args(&args)
-        .output()
-        .map_err(|e| format!("调用 pip 安装 torch 失败: {}", e))?;
-
-    if output.status.success() {
-        let refreshed_capability = runtime::capability::detect_torch_cuda_capability(python_path);
-        if detected_cuda.is_none() || refreshed_capability.torch_cuda_available {
-            return Ok(());
+        match install_from_index(preferred_cuda_index, true) {
+            Ok(()) => return Ok(()),
+            Err(cuda_err) => {
+                eprintln!(
+                    "[forisfstools] CUDA torch 安装未成功，回退到 CPU 轮子: {}",
+                    cuda_err
+                );
+                if let Ok(()) = install_from_index("cpu", false) {
+                    return Ok(());
+                }
+                return Err(cuda_err);
+            }
         }
     }
 
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-    // --- Source 2: PyTorch official CUDA wheel index (overseas fallback) ---
-    let official_index = format!(
-        "https://download.pytorch.org/whl/{}",
-        cuda_index
-    );
-
-    let fallback_args = [
-        "-m",
-        "pip",
-        "install",
-        "-U",
-        "torch",
-        "torchaudio",
-        "--index-url",
-        &official_index,
-    ];
-    let fallback_output = Command::new(python_path)
-        .args(&fallback_args)
-        .output()
-        .map_err(|e| format!("调用 pip 安装 torch (official fallback) 失败: {}", e))?;
-
-    if fallback_output.status.success() {
-        let refreshed_capability = runtime::capability::detect_torch_cuda_capability(python_path);
-        if detected_cuda.is_none() || refreshed_capability.torch_cuda_available {
-            return Ok(());
-        }
-    }
-
-    let fallback_stderr = String::from_utf8_lossy(&fallback_output.stderr).to_string();
-    Err(format!(
-        "torch 安装失败。清华镜像: {} | PyTorch 官方: {}",
-        stderr.trim(),
-        fallback_stderr.trim()
-    ))
+    eprintln!("[forisfstools] 未请求 CUDA，使用 PyTorch CPU 版本");
+    install_from_index("cpu", false)
 }
 
 fn detect_bootstrap_status(app: &AppHandle) -> BootstrapStatus {
@@ -2209,7 +2341,8 @@ fn detect_bootstrap_status(app: &AppHandle) -> BootstrapStatus {
         false
     };
     let soundfile_ready = if python_ready {
-        runtime::capability::python_module_is_available(&python_path, "soundfile", 6).unwrap_or(false)
+        runtime::capability::python_module_is_available(&python_path, "soundfile", 6)
+            .unwrap_or(false)
     } else {
         false
     };
@@ -2252,7 +2385,7 @@ fn format_missing_core_components_with_reason(health: &RuntimeHealthReport) -> S
         .iter()
         .filter(|c| !c.ok)
         // AI 听写草稿是可选功能，不参与核心就绪判断
-        .filter(|c| c.name != "AI 听写草稿")
+        .filter(|c| c.name != "AI 听写草稿" && c.name != "Torch CUDA" && c.name != "NVIDIA GPU")
         .map(|c| {
             let detail = c.detail.as_deref().unwrap_or("").trim();
             if detail.is_empty() {
@@ -2506,7 +2639,11 @@ pub(crate) fn update_song_status(
     if let Some(ref mut map) = *songs {
         if let Some(song) = map.get_mut(song_id) {
             // Once cancelled, ignore stale background writes except explicit cancelled/cancelling/pending.
-            if song.status == "cancelled" && status != "cancelled" && status != "cancelling" && status != "pending" {
+            if song.status == "cancelled"
+                && status != "cancelled"
+                && status != "cancelling"
+                && status != "pending"
+            {
                 return;
             }
             song.status = status.to_string();
@@ -2843,6 +2980,9 @@ fn extract_fallback_keywords(hint: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn sample_document() -> LyricDocument {
         build_document_from_plain_lines("song_1", "test", "test", None, "hello world", 0.5).unwrap()
@@ -2954,6 +3094,104 @@ mod tests {
             false,
         );
         assert!(ranked.is_empty());
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("{}_{}_{}", prefix, std::process::id(), stamp));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn format_missing_core_components_filters_optional_checks() {
+        let health = RuntimeHealthReport {
+            level: "error".to_string(),
+            label: "环境异常".to_string(),
+            detail: "core missing".to_string(),
+            torch_cuda_available: false,
+            selected_device: "cpu".to_string(),
+            torch_version: None,
+            torch_cuda_version: None,
+            torch_cuda_device_name: None,
+            has_nvidia_gpu: false,
+            nvidia_driver_visible: false,
+            nvidia_driver_cuda_version: None,
+            checks: vec![
+                RuntimeHealthCheck {
+                    name: "FFmpeg".to_string(),
+                    ok: false,
+                    severity: "error".to_string(),
+                    detail: Some("audio".to_string()),
+                },
+                RuntimeHealthCheck {
+                    name: "AI 听写草稿".to_string(),
+                    ok: false,
+                    severity: "info".to_string(),
+                    detail: Some("optional".to_string()),
+                },
+                RuntimeHealthCheck {
+                    name: "Torch CUDA".to_string(),
+                    ok: false,
+                    severity: "info".to_string(),
+                    detail: Some("optional".to_string()),
+                },
+                RuntimeHealthCheck {
+                    name: "NVIDIA GPU".to_string(),
+                    ok: false,
+                    severity: "info".to_string(),
+                    detail: Some("optional".to_string()),
+                },
+            ],
+        };
+
+        let missing = format_missing_core_components_with_reason(&health);
+        assert_eq!(missing, "FFmpeg（audio）");
+    }
+
+    #[test]
+    fn verify_manifest_targets_rejects_hash_mismatch() {
+        let runtime_models = unique_temp_dir("manifest_targets");
+        let target_relpath = "demucs/test-model.th";
+        let target_path = runtime_models.join(target_relpath);
+        if let Some(parent) = target_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&target_path, b"hello world").unwrap();
+
+        let sources = vec![RuntimeManifestArtifact {
+            url: "https://example.com/test-model.th".to_string(),
+            sha256: Some(
+                "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+            ),
+            note: None,
+            target_relpath: Some(target_relpath.to_string()),
+            inline_text: None,
+        }];
+
+        let result = verify_manifest_targets(&runtime_models, &sources);
+        assert!(result.is_err());
+
+        let _ = fs::remove_dir_all(&runtime_models);
+    }
+
+    #[test]
+    fn cuda_version_mapping_covers_supported_ranges() {
+        assert_eq!(
+            crate::runtime::capability::cuda_version_to_pytorch_index("12.4"),
+            "cu124"
+        );
+        assert_eq!(
+            crate::runtime::capability::cuda_version_to_pytorch_index("12.1"),
+            "cu121"
+        );
+        assert_eq!(
+            crate::runtime::capability::cuda_version_to_pytorch_index("11.8"),
+            "cu118"
+        );
     }
 }
 
@@ -4027,24 +4265,16 @@ fn ensure_whisper_runtime_ready(app: &AppHandle) -> Result<PathBuf, String> {
         return Err("找不到 Python 运行时，无法使用 AI 听写".to_string());
     }
 
-    ensure_core_runtime_modules(app, false)?;
-
-    let mut model_dir = resolve_whisper_base_model_dir(app)?;
-    let mut usable = whisper_model_is_usable(&python_path, &model_dir, 8).unwrap_or(false);
-    if usable {
-        return Ok(model_dir);
+    if !runtime::capability::python_module_is_available(&python_path, "faster_whisper", 6)
+        .unwrap_or(false)
+    {
+        install_python_packages_with_fallbacks(&python_path, &["faster-whisper"])?;
     }
 
-    let runtime_whisper = get_runtime_dir().join("models").join("whisper");
-    if runtime_whisper.exists() {
-        let _ = fs::remove_dir_all(&runtime_whisper);
-    }
+    bootstrap_install_whisper_model(app)?;
 
-    bootstrap_install_models(app)?;
-
-    model_dir = resolve_whisper_base_model_dir(app)?;
-    usable = whisper_model_is_usable(&python_path, &model_dir, 8).unwrap_or(false);
-    if usable {
+    let model_dir = resolve_whisper_base_model_dir(app)?;
+    if whisper_model_is_usable(&python_path, &model_dir, 8).unwrap_or(false) {
         Ok(model_dir)
     } else {
         Err("Whisper base 模型文件存在但不可用（常见原因是 tokenizer/config 损坏），请重新执行一键安装运行环境。".to_string())
@@ -4703,7 +4933,7 @@ pub(crate) fn process_song_background(
     );
     let gpu_available = runtime::capability::check_gpu_availability(&python_path);
     let has_nvidia_gpu = runtime::capability::detect_nvidia_gpu_name().is_some();
-    let gpu_requested = prefer_demucs_cuda && has_nvidia_gpu;
+    let gpu_requested = prefer_demucs_cuda;
     let selected_demucs_device = if gpu_requested && gpu_available {
         "cuda"
     } else {
@@ -4717,7 +4947,15 @@ pub(crate) fn process_song_background(
     let (stage_name, message, estimated) = if selected_demucs_device == "cuda" {
         ("gpu_available", "GPU 可用", Some(180))
     } else if gpu_requested && !gpu_available {
-        ("cpu_fallback", "GPU 请求回退 CPU", Some(600))
+        if has_nvidia_gpu {
+            ("cpu_fallback", "GPU 请求回退 CPU", Some(600))
+        } else {
+            (
+                "cpu_fallback",
+                "未检测到可用 NVIDIA GPU，回退 CPU",
+                Some(600),
+            )
+        }
     } else {
         ("cpu_fallback", "CPU 处理中", Some(600))
     };
@@ -4834,7 +5072,7 @@ try:
 except Exception:
     pass
 
-if prefer_demucs_cuda and has_nvidia_gpu and gpu_available:
+if prefer_demucs_cuda and gpu_available:
     device = "cuda"
 else:
     device = "cpu"
@@ -4850,7 +5088,7 @@ def emit_error(message):
         "error": message,
         "success": False,
         "selected_device": device,
-        "gpu_requested": bool(prefer_demucs_cuda and has_nvidia_gpu),
+        "gpu_requested": bool(prefer_demucs_cuda),
         "has_nvidia_gpu": has_nvidia_gpu,
         "torch_cuda_available": gpu_available,
         "torch_version": torch_version,
@@ -4995,7 +5233,7 @@ payload = {
     "success": True,
     "terminated_by_signal": terminated_by_signal,
     "selected_device": device,
-    "gpu_requested": bool(prefer_demucs_cuda and has_nvidia_gpu),
+    "gpu_requested": bool(prefer_demucs_cuda),
     "has_nvidia_gpu": has_nvidia_gpu,
     "torch_cuda_available": gpu_available,
     "torch_version": torch_version,
@@ -5429,8 +5667,8 @@ async fn delete_song(id: String) -> Result<(), String> {
     };
 
     if let Some(song) = song_to_delete.as_ref() {
-        if song.status == "processing" {
-            return Err("Cannot delete a song that is being processed".to_string());
+        if song.status == "queued" || song.status == "processing" || song.status == "cancelling" {
+            return Err("Cannot delete a song that is queued or being processed".to_string());
         }
     }
 
@@ -5577,7 +5815,25 @@ async fn cancel_process(app: AppHandle, song_id: String) -> Result<(), String> {
             // Task is in queue, not yet started - remove from queue and clean up
             if separation_queue::cancel_task(&song_id) {
                 JobManager::clear_song_job(&song_id, "用户取消");
-                update_song_status(&song_id, "cancelled", 0, Some("cancelled"), Some("用户取消"));
+                update_song_status(
+                    &song_id,
+                    "cancelled",
+                    0,
+                    Some("cancelled"),
+                    Some("用户取消"),
+                );
+                emit_progress(&app, &song_id, "cancelled", 0, "已取消", None);
+                Ok(())
+            } else if get_active_job_token(&song_id).is_some() {
+                JobManager::clear_song_job(&song_id, "用户取消");
+                set_cancel_flag(&song_id);
+                update_song_status(
+                    &song_id,
+                    "cancelled",
+                    0,
+                    Some("cancelled"),
+                    Some("用户取消"),
+                );
                 emit_progress(&app, &song_id, "cancelled", 0, "已取消", None);
                 Ok(())
             } else {

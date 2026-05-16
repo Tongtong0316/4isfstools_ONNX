@@ -51,7 +51,9 @@ pub(crate) fn normalize_storage_root(value: &str, fallback: PathBuf) -> String {
     }
 }
 
-pub(crate) fn normalize_file_storage_settings(mut settings: FileStorageSettings) -> FileStorageSettings {
+pub(crate) fn normalize_file_storage_settings(
+    mut settings: FileStorageSettings,
+) -> FileStorageSettings {
     settings.instrumental_root = normalize_storage_root(
         &settings.instrumental_root,
         get_default_asset_root("instrumental"),

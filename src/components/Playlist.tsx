@@ -295,7 +295,11 @@ export default function Playlist({
   };
 
   const handleSongClick = (song: Song) => {
-    if (song.status === "pending" || song.status === "error" || song.status === "cancelled" || song.status === "queued") {
+    if (song.status === "queued") {
+      onSelectSong(song);
+      return;
+    }
+    if (song.status === "pending" || song.status === "error" || song.status === "cancelled") {
       onStartProcess(song);
       return;
     }
@@ -463,7 +467,7 @@ export default function Playlist({
           >
             {contextMenu.kind === "song" ? (
               <>
-                {contextMenu.song.status !== "processing" && contextMenu.song.status !== "cancelling" && (
+                {contextMenu.song.status !== "processing" && contextMenu.song.status !== "cancelling" && contextMenu.song.status !== "queued" && (
                   <button
                     className="w-full px-4 py-2.5 text-left text-sm text-[#fafafa] hover:bg-[#2e2e2e] flex items-center gap-3"
                     onClick={() => {
@@ -505,7 +509,7 @@ export default function Playlist({
                     <span className="text-[#a855f7]">♪</span> AI 听写（草稿）
                   </button>
                 )}
-                {contextMenu.song.status === "processing" && (
+                {(contextMenu.song.status === "processing" || contextMenu.song.status === "queued" || contextMenu.song.status === "cancelling") && (
                   <button
                     className="w-full px-4 py-2.5 text-left text-sm text-[#ef4444] hover:bg-[#2e2e2e] flex items-center gap-3"
                     onClick={() => {
@@ -531,7 +535,7 @@ export default function Playlist({
                 >
                   <span className="text-[#22c55e]">📂</span> 移动到...
                 </button>
-                {contextMenu.song.status !== "processing" && (
+                {contextMenu.song.status !== "processing" && contextMenu.song.status !== "queued" && contextMenu.song.status !== "cancelling" && (
                   <button
                     className="w-full px-4 py-2.5 text-left text-sm text-[#ef4444] hover:bg-[#2e2e2e] flex items-center gap-3"
                     onClick={() => {
