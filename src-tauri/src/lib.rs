@@ -381,7 +381,7 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
     } else {
         false
     };
-    let (whisper_base_ready, whisper_base_detail) = if python_exists {
+    let (whisper_base_ready, _whisper_base_detail) = if python_exists {
         match resolve_whisper_base_model_dir(app) {
             Ok(model_dir) => match whisper_model_probe(&python_path, &model_dir, 8) {
                 Ok(()) => (true, "AI 听写草稿".to_string()),
@@ -400,9 +400,7 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
         torch_ready,
         demucs_ready,
         demucs_models_ready,
-        faster_whisper_ready,
         soundfile_ready,
-        whisper_base_ready,
     );
     let mut checks = vec![
         RuntimeHealthCheck {
@@ -453,11 +451,7 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
         RuntimeHealthCheck {
             name: "Torch CUDA".to_string(),
             ok: torch_capability.torch_cuda_available,
-            severity: if torch_capability.torch_cuda_available {
-                "info".to_string()
-            } else {
-                "warning".to_string()
-            },
+            severity: "info".to_string(),
             detail: Some(if torch_capability.torch_cuda_available {
                 let device = torch_capability
                     .torch_cuda_device_name
@@ -488,24 +482,14 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
             detail: Some("伴奏/人声分离".to_string()),
         },
         RuntimeHealthCheck {
-            name: "模型".to_string(),
+            name: "Demucs 分离模型".to_string(),
             ok: demucs_models_ready,
             severity: if demucs_models_ready {
                 "info".to_string()
             } else {
                 "warning".to_string()
             },
-            detail: Some("分离模型".to_string()),
-        },
-        RuntimeHealthCheck {
-            name: "Faster-Whisper".to_string(),
-            ok: faster_whisper_ready,
-            severity: if faster_whisper_ready {
-                "info".to_string()
-            } else {
-                "warning".to_string()
-            },
-            detail: Some("AI 听写运行时".to_string()),
+            detail: Some("人声/伴奏分离模型".to_string()),
         },
         RuntimeHealthCheck {
             name: "SoundFile".to_string(),
@@ -518,14 +502,16 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
             detail: Some("torchaudio 兼容音频后端".to_string()),
         },
         RuntimeHealthCheck {
-            name: "Whisper base".to_string(),
-            ok: whisper_base_ready,
-            severity: if whisper_base_ready {
-                "info".to_string()
+            name: "AI 听写草稿".to_string(),
+            ok: faster_whisper_ready && whisper_base_ready,
+            severity: "info".to_string(),
+            detail: Some(if !faster_whisper_ready {
+                "运行时缺失".to_string()
+            } else if !whisper_base_ready {
+                "模型缺失".to_string()
             } else {
-                "warning".to_string()
-            },
-            detail: Some(whisper_base_detail),
+                "已就绪".to_string()
+            }),
         },
     ];
 
@@ -568,18 +554,14 @@ fn is_full_capability_ready(
     torch_ready: bool,
     demucs_ready: bool,
     demucs_models_ready: bool,
-    faster_whisper_ready: bool,
     soundfile_ready: bool,
-    whisper_base_ready: bool,
 ) -> bool {
     python_ready
         && ffmpeg_ready
         && torch_ready
         && demucs_ready
         && demucs_models_ready
-        && faster_whisper_ready
         && soundfile_ready
-        && whisper_base_ready
 }
 
 fn is_demucs_model_ready(app: &AppHandle) -> bool {
@@ -2218,11 +2200,6 @@ fn detect_bootstrap_status(app: &AppHandle) -> BootstrapStatus {
     } else {
         false
     };
-    let faster_whisper_ready = if python_ready {
-        runtime::capability::python_module_is_available(&python_path, "faster_whisper", 6).unwrap_or(false)
-    } else {
-        false
-    };
     let soundfile_ready = if python_ready {
         runtime::capability::python_module_is_available(&python_path, "soundfile", 6).unwrap_or(false)
     } else {
@@ -2234,13 +2211,11 @@ fn detect_bootstrap_status(app: &AppHandle) -> BootstrapStatus {
         torch_ready && torch_cuda_ready,
         demucs_ready,
         demucs_models_ready,
-        faster_whisper_ready,
         soundfile_ready,
-        whisper_base_ready,
     );
 
     let detail = if can_run_core {
-        "完整能力已就绪，可直接处理与听写生成。".to_string()
+        "核心环境与模型已就绪，可运行人声分离。".to_string()
     } else {
         "依赖或模型未就绪，请继续安装/修复直至完整能力可用。".to_string()
     };

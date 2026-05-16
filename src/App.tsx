@@ -1936,7 +1936,7 @@ function App() {
                             <span className="font-medium text-[#f5f5f5]">{runtimeTorchCudaVersion ?? "无"}</span>
                           </div>
                           <div className="flex items-center justify-between gap-3">
-                            <span className="text-[#8f8f99]">Selected device</span>
+                            <span className="text-[#8f8f99]">运行设备</span>
                             <span className="font-medium text-[#f5f5f5]">{runtimeSelectedDevice}</span>
                           </div>
                           <div className="flex items-center justify-between gap-3">
