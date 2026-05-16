@@ -1,4 +1,5 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 
 // ── Core domain types ───────────────────────────────────────────────
 
@@ -171,10 +172,32 @@ pub struct RuntimeManifest {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeManifestModelSources {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_model_source_urls")]
     pub demucs: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_model_source_urls")]
     pub whisper_base: Vec<String>,
+}
+
+fn deserialize_model_source_urls<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let items = Vec::<Value>::deserialize(deserializer)?;
+    let mut urls = Vec::new();
+    for item in items {
+        match item {
+            Value::String(url) if !url.is_empty() => urls.push(url),
+            Value::Object(map) => {
+                if let Some(url) = map.get("url").and_then(|value| value.as_str()) {
+                    if !url.is_empty() {
+                        urls.push(url.to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(urls)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

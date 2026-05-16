@@ -5,12 +5,21 @@ use tauri::{AppHandle, Manager};
 
 use crate::models::{RuntimeManifest, RuntimeManifestArtifact, RuntimeManifestPlatform};
 
+const EMBEDDED_RUNTIME_MANIFEST: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../runtime-manifest.json"
+));
+
 pub fn parse_manifest(path: &Path) -> Option<RuntimeManifest> {
     if !path.exists() {
         return None;
     }
     let raw = fs::read_to_string(path).ok()?;
     serde_json::from_str::<RuntimeManifest>(&raw).ok()
+}
+
+pub fn embedded_runtime_manifest() -> RuntimeManifest {
+    serde_json::from_str::<RuntimeManifest>(EMBEDDED_RUNTIME_MANIFEST).unwrap_or_default()
 }
 
 pub fn load_runtime_manifest(
@@ -31,7 +40,7 @@ pub fn load_runtime_manifest(
         return manifest;
     }
     let project_manifest = project_root.join("runtime-manifest.json");
-    parse_manifest(&project_manifest).unwrap_or_default()
+    parse_manifest(&project_manifest).unwrap_or_else(embedded_runtime_manifest)
 }
 
 pub fn current_platform_manifest(manifest: &RuntimeManifest) -> RuntimeManifestPlatform {
@@ -67,4 +76,20 @@ pub fn legacy_model_artifacts(
             inline_text: None,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedded_manifest_provides_windows_model_sources() {
+        let manifest = embedded_runtime_manifest();
+        assert!(!manifest.platforms.macos.models.demucs.is_empty());
+        assert!(!manifest.platforms.windows.models.demucs.is_empty());
+        assert!(!manifest.model_sources.demucs.is_empty());
+        assert!(!manifest.platforms.macos.models.whisper_base.is_empty());
+        assert!(!manifest.platforms.windows.models.whisper_base.is_empty());
+        assert!(!manifest.model_sources.whisper_base.is_empty());
+    }
 }
