@@ -119,6 +119,8 @@ function App() {
   const isDesktopRuntime = typeof window !== "undefined" && (
     "__TAURI_INTERNALS__" in window || "__TAURI__" in window
   );
+  const isWindowsRuntime = typeof navigator !== "undefined"
+    && /Win32|Win64|Windows/i.test(`${navigator.platform} ${navigator.userAgent}`);
   const [songs, setSongs] = useState<Song[]>([]);
   const [currentSong, setCurrentSong] = useState<Song | null>(null);
   const [playerState, setPlayerState] = useState<"idle" | "playing" | "paused">("idle");
@@ -265,40 +267,43 @@ function App() {
     }
   }, [unlockAudioOutputDeviceLabels]);
 
-  const applyAudioOutputDevice = useCallback(async (audio: HTMLAudioElement) => {
+  const getRequestedAudioSinkId = useCallback(() => {
     const deviceId = audioOutputDeviceIdRef.current;
-    if (!deviceId || deviceId === "default") return;
-    // Prefer AudioContext.setSinkId (routes entire Web Audio graph)
+    return deviceId && deviceId !== "default" ? deviceId : "";
+  }, []);
+
+  const applyAudioOutputDevice = useCallback(async (audio: HTMLAudioElement) => {
+    const sinkId = getRequestedAudioSinkId();
+    // Prefer AudioContext.setSinkId (routes the Web Audio graph when active).
     const ctx = audioAnalyserContextRef.current as (AudioContext & { setSinkId?: (id: string) => Promise<void> }) | null;
     if (ctx && typeof ctx.setSinkId === "function") {
       try {
-        await ctx.setSinkId(deviceId);
-        return;
+        await ctx.setSinkId(sinkId);
       } catch (e) {
         console.warn("[audio] AudioContext.setSinkId failed:", e);
       }
     }
-    // Fallback: HTMLAudioElement.setSinkId
+    // Also apply to the media element for direct-output fallback.
     try {
       if (typeof audio.setSinkId === "function") {
-        await audio.setSinkId(deviceId);
+        await audio.setSinkId(sinkId);
       }
     } catch (e) {
       console.warn("[audio] setSinkId failed, using default output:", e);
     }
-  }, []);
+  }, [getRequestedAudioSinkId]);
 
   const applyToAllAudioOutputs = useCallback(async () => {
-    const deviceId = audioOutputDeviceIdRef.current;
-    // Apply to AudioContext if available
+    const sinkId = getRequestedAudioSinkId();
+    // Apply to AudioContext if available.
     const ctx = audioAnalyserContextRef.current as (AudioContext & { setSinkId?: (id: string) => Promise<void> }) | null;
-    if (ctx && typeof ctx.setSinkId === "function" && deviceId && deviceId !== "default") {
-      try { await ctx.setSinkId(deviceId); } catch { /* fallback below */ }
+    if (ctx && typeof ctx.setSinkId === "function") {
+      try { await ctx.setSinkId(sinkId); } catch { /* fallback below */ }
     }
     // Apply to active HTMLAudioElements
     if (audioRef.current) void applyAudioOutputDevice(audioRef.current);
     if (originalAudioRef.current) void applyAudioOutputDevice(originalAudioRef.current);
-  }, [applyAudioOutputDevice]);
+  }, [applyAudioOutputDevice, getRequestedAudioSinkId]);
 
   useEffect(() => {
     try {
@@ -406,12 +411,12 @@ function App() {
     audio.volume = 1;
     // Apply output device directly on the HTMLAudioElement
     // (AudioContext may not exist yet, so try setSinkId directly)
-    const deviceId = audioOutputDeviceIdRef.current;
-    if (deviceId && deviceId !== "default" && typeof audio.setSinkId === "function") {
-      void audio.setSinkId(deviceId).catch((e) => console.warn("[audio] setSinkId failed:", e));
+    const sinkId = getRequestedAudioSinkId();
+    if (typeof audio.setSinkId === "function") {
+      void audio.setSinkId(sinkId).catch((e) => console.warn("[audio] setSinkId failed:", e));
     }
     return audio;
-  }, []);
+  }, [getRequestedAudioSinkId]);
 
   const waitForMediaReady = useCallback((audio: HTMLAudioElement, timeoutMs = 1500) => {
     if (audio.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
@@ -445,11 +450,14 @@ function App() {
     });
   }, []);
 
-  const createTrackGraph = useCallback(async (audio: HTMLAudioElement): Promise<TrackGraph | null> => {
-    if (!audioAnalyserContextRef.current) {
+  const createTrackGraph = useCallback((audio: HTMLAudioElement): TrackGraph | null => {
+    if (!audioAnalyserContextRef.current && !isWindowsRuntime) {
       audioAnalyserContextRef.current = new AudioContext();
     }
     const context = audioAnalyserContextRef.current;
+    if (!context || (isWindowsRuntime && context.state !== "running")) {
+      return null;
+    }
     try {
       const source = context.createMediaElementSource(audio);
       const gain = context.createGain();
@@ -464,7 +472,7 @@ function App() {
       console.error("Failed to create track graph:", e);
       return null;
     }
-  }, []);
+  }, [isWindowsRuntime]);
 
   const loadVocalWaveform = useCallback(async (song: Song | null) => {
     const seq = ++waveformLoadSeqRef.current;
@@ -515,9 +523,15 @@ function App() {
     }
   }, []);
 
-  const ensureAudioContextRunning = useCallback(async () => {
+  const ensureAudioContextRunning = useCallback(async (createIfMissing = false) => {
+    if (!audioAnalyserContextRef.current && createIfMissing) {
+      const AudioContextCtor =
+        window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioContextCtor) return false;
+      audioAnalyserContextRef.current = new (AudioContextCtor as typeof AudioContext)();
+    }
     const context = audioAnalyserContextRef.current;
-    if (!context) return;
+    if (!context) return false;
     if (context.state === "suspended") {
       try {
         await context.resume();
@@ -527,16 +541,45 @@ function App() {
     }
     // Re-apply audio output device after context resumes
     // (resuming an AudioContext may reset its output device to default)
-    const deviceId = audioOutputDeviceIdRef.current;
+    const sinkId = getRequestedAudioSinkId();
     const ctxWithSink = context as AudioContext & { setSinkId?: (id: string) => Promise<void> };
-    if (deviceId && deviceId !== "default" && typeof ctxWithSink.setSinkId === "function") {
+    if (typeof ctxWithSink.setSinkId === "function") {
       try {
-        await ctxWithSink.setSinkId(deviceId);
+        await ctxWithSink.setSinkId(sinkId);
       } catch (e) {
         console.warn("[audio] setSinkId after resume failed:", e);
       }
     }
-  }, []);
+    return context.state === "running";
+  }, [getRequestedAudioSinkId]);
+
+  const ensurePlaybackGraphs = useCallback(async (mode: PlaybackMode, vol: number) => {
+    const canUseAudioGraph = isWindowsRuntime
+      ? await ensureAudioContextRunning(true)
+      : true;
+    if (isWindowsRuntime && !canUseAudioGraph) {
+      destroyTrackGraphs();
+      applyModeRouting(vol, mode);
+      return false;
+    }
+    if (audioRef.current && !audioGraphRef.current.instrumental) {
+      const instrumentalGraph = createTrackGraph(audioRef.current);
+      if (instrumentalGraph) {
+        audioGraphRef.current.instrumental = instrumentalGraph;
+      }
+    }
+    if (originalAudioRef.current?.src && !audioGraphRef.current.vocals) {
+      const vocalsGraph = createTrackGraph(originalAudioRef.current);
+      if (vocalsGraph) {
+        audioGraphRef.current.vocals = vocalsGraph;
+      }
+    }
+    applyModeRouting(vol, mode);
+    if (!isWindowsRuntime) {
+      await ensureAudioContextRunning(false);
+    }
+    return true;
+  }, [applyModeRouting, createTrackGraph, destroyTrackGraphs, ensureAudioContextRunning, isWindowsRuntime]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -1115,10 +1158,6 @@ function App() {
 
       audioRef.current = createAudioTrack(instrumentalUrl);
       bindAudioError(audioRef.current, (err) => `伴奏加载失败: ${err?.message || "未知错误"}`);
-      const instrumentalGraph = await createTrackGraph(audioRef.current);
-      if (instrumentalGraph) {
-        audioGraphRef.current.instrumental = instrumentalGraph;
-      }
 
       audioRef.current.addEventListener("loadedmetadata", async () => {
         const durationMs = audioRef.current!.duration * 1000;
@@ -1139,24 +1178,19 @@ function App() {
         const vocalsUrl = convertFileSrc(latestSong.vocalsPath);
         originalAudioRef.current = createAudioTrack(vocalsUrl);
         bindAudioError(originalAudioRef.current, (err) => `人声加载失败: ${err?.message || "未知错误"}`);
-        const vocalsGraph = await createTrackGraph(originalAudioRef.current);
-        if (vocalsGraph) {
-          audioGraphRef.current.vocals = vocalsGraph;
-        }
       } else {
         originalAudioRef.current = null;
         audioGraphRef.current.vocals = undefined;
       }
 
-      applyModeRouting(volume, nextMode);
-      await ensureAudioContextRunning();
+      await ensurePlaybackGraphs(nextMode, volume);
       await startPlayback(nextMode, true);
     } catch (e) {
       console.error("Failed to play:", e);
       setPlaybackError(`播放失败: ${e}`);
       setPlayerState("idle");
     }
-  }, [songs, loadLyrics, volume, playbackMode, applyModeRouting, stopAllAudio, startPlayback, createAudioTrack, bindAudioError, createTrackGraph, ensureAudioContextRunning]);
+  }, [songs, loadLyrics, volume, playbackMode, stopAllAudio, startPlayback, createAudioTrack, bindAudioError, ensurePlaybackGraphs]);
 
   const handlePlayPause = useCallback(async () => {
     if (!audioRef.current || !audioRef.current.src) {
@@ -1169,10 +1203,10 @@ function App() {
     if (playerState === "playing") {
       pausePlayback();
     } else {
-      await ensureAudioContextRunning();
+      await ensurePlaybackGraphs(playbackMode, volume);
       await startPlayback(playbackMode, false);
     }
-  }, [currentSong, handleSelectSong, playerState, playbackMode, pausePlayback, startPlayback, ensureAudioContextRunning]);
+  }, [currentSong, handleSelectSong, playerState, playbackMode, volume, pausePlayback, startPlayback, ensurePlaybackGraphs]);
 
   const handleSeek = useCallback((time: number) => {
     if (audioRef.current) audioRef.current.currentTime = time / 1000;
@@ -1197,9 +1231,9 @@ function App() {
     applyModeRouting(volume, mode);
 
     if (playerState === "playing") {
-      await ensureAudioContextRunning();
+      await ensurePlaybackGraphs(mode, volume);
     }
-  }, [volume, currentSong, applyModeRouting, playerState, ensureAudioContextRunning]);
+  }, [volume, currentSong, applyModeRouting, playerState, ensurePlaybackGraphs]);
 
   const handlePrev = useCallback(() => {
     const readySongs = songs.filter((s) => s.status === "ready");
