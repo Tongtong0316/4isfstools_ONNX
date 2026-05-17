@@ -210,6 +210,11 @@ function App() {
     instrumental: 0,
     vocals: 0,
   });
+  const playbackMonitorRef = useRef({
+    lastTime: 0,
+    lastAt: 0,
+    phase: 0,
+  });
   const [vocalWaveformPeaks, setVocalWaveformPeaks] = useState<number[] | null>(null);
   const [vocalWaveformLoading, setVocalWaveformLoading] = useState(false);
   const [vocalWaveformError, setVocalWaveformError] = useState<string | null>(null);
@@ -349,6 +354,31 @@ function App() {
       originalAudioRef.current.volume = vocalsGain;
     }
   }, []);
+
+  const estimatePlaybackLevel = useCallback((kind: keyof TrackLevels) => {
+    if (playerState !== "playing") return 0;
+    const source =
+      kind === "vocals"
+        ? (originalAudioRef.current || audioRef.current)
+        : (audioRef.current || originalAudioRef.current);
+    if (!source || source.paused || source.ended || source.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      return 0;
+    }
+    const audibleByMode =
+      kind === "instrumental"
+        ? playbackMode !== "vocals"
+        : playbackMode !== "instrumental";
+    if (!audibleByMode || volume <= 0) return 0;
+
+    if (kind === "vocals" && vocalWaveformPeaks?.length && currentSong?.duration) {
+      const ratio = Math.max(0, Math.min(0.999, (source.currentTime * 1000) / currentSong.duration));
+      const index = Math.floor(ratio * vocalWaveformPeaks.length);
+      return Math.min(0.5, Math.max(0.02, vocalWaveformPeaks[index] * 0.5)) * (volume / 100);
+    }
+
+    playbackMonitorRef.current.phase = (playbackMonitorRef.current.phase + 0.37) % (Math.PI * 2);
+    return (0.08 + Math.abs(Math.sin(playbackMonitorRef.current.phase)) * 0.12) * (volume / 100);
+  }, [currentSong?.duration, playbackMode, playerState, vocalWaveformPeaks, volume]);
 
   const destroyTrackGraphs = useCallback(() => {
     const graphEntries = [
@@ -594,13 +624,15 @@ function App() {
         }
         return Math.sqrt(sumSquares / buffer.length);
       };
+      const graphInstrumentalLevel = captureLevel(audioGraphRef.current.instrumental);
+      const graphVocalsLevel = captureLevel(audioGraphRef.current.vocals);
       setTrackLevels({
-        instrumental: captureLevel(audioGraphRef.current.instrumental),
-        vocals: captureLevel(audioGraphRef.current.vocals),
+        instrumental: graphInstrumentalLevel || estimatePlaybackLevel("instrumental"),
+        vocals: graphVocalsLevel || estimatePlaybackLevel("vocals"),
       });
     }, 250);
     return () => window.clearInterval(interval);
-  }, []);
+  }, [estimatePlaybackLevel]);
 
   useEffect(() => {
     return () => {
@@ -1406,7 +1438,23 @@ function App() {
           playbackMode === "vocals"
             ? (originalAudioRef.current || audioRef.current)
             : (audioRef.current || originalAudioRef.current);
-        if (audio) setCurrentTime(audio.currentTime * 1000);
+        if (audio) {
+          const nextTime = audio.currentTime * 1000;
+          const now = performance.now();
+          if (nextTime > playbackMonitorRef.current.lastTime + 20) {
+            playbackMonitorRef.current.lastTime = nextTime;
+            playbackMonitorRef.current.lastAt = now;
+          } else if (now - playbackMonitorRef.current.lastAt > 1500 && !audio.paused && !audio.ended) {
+            console.warn("[audio] media element is playing but currentTime is not advancing", {
+              playbackMode,
+              readyState: audio.readyState,
+              currentTime: audio.currentTime,
+              audioContextState: audioAnalyserContextRef.current?.state,
+            });
+            playbackMonitorRef.current.lastAt = now;
+          }
+          setCurrentTime(nextTime);
+        }
       }
     }, 100);
     return () => clearInterval(interval);
