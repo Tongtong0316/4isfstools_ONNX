@@ -2088,7 +2088,11 @@ fn find_return_block_end(content: &str, start: usize) -> Option<usize> {
     None
 }
 
-fn ensure_core_runtime_modules(app: &AppHandle, prefer_demucs_cuda: bool) -> Result<(), String> {
+fn ensure_core_runtime_modules(
+    app: &AppHandle,
+    try_demucs_cuda: bool,
+    require_demucs_cuda: bool,
+) -> Result<(), String> {
     let python_path = runtime::python::get_python_path(app);
     if !python_path.exists() {
         return Err("未检测到 Python 运行时".to_string());
@@ -2096,7 +2100,7 @@ fn ensure_core_runtime_modules(app: &AppHandle, prefer_demucs_cuda: bool) -> Res
 
     let torch_capability = runtime::capability::detect_torch_cuda_capability(&python_path);
     let needs_cuda_torch_refresh = cfg!(windows)
-        && prefer_demucs_cuda
+        && try_demucs_cuda
         && (!torch_capability.torch_installed || !torch_capability.torch_cuda_available);
 
     let mut missing = Vec::new();
@@ -2139,7 +2143,7 @@ fn ensure_core_runtime_modules(app: &AppHandle, prefer_demucs_cuda: bool) -> Res
 
     // Install torch with CUDA detection (China-accessible Tsinghua mirror)
     if still_missing.iter().any(|m| m == "torch") || needs_cuda_torch_refresh {
-        match install_torch_with_cuda_detection(&python_path, prefer_demucs_cuda) {
+        match install_torch_with_cuda_detection(&python_path, try_demucs_cuda) {
             Ok(()) => {}
             Err(e) => errors.push(format!("torch: {}", e)),
         }
@@ -2176,7 +2180,7 @@ fn ensure_core_runtime_modules(app: &AppHandle, prefer_demucs_cuda: bool) -> Res
             final_missing.push(module.to_string());
         }
     }
-    if prefer_demucs_cuda && !runtime::capability::python_torch_cuda_ready(&python_path) {
+    if require_demucs_cuda && !runtime::capability::python_torch_cuda_ready(&python_path) {
         final_missing.push("torch[cuda]".to_string());
     }
     if final_missing.is_empty() {
@@ -2185,7 +2189,7 @@ fn ensure_core_runtime_modules(app: &AppHandle, prefer_demucs_cuda: bool) -> Res
         Ok(())
     } else {
         Err(format!(
-            "一键安装后仍缺少核心模块: {}。已尝试本地离线源与中国大陆 PyPI 镜像。{}",
+            "一键安装后仍缺少核心模块: {}。已尝试本地离线源、中国大陆 PyPI 镜像、PyTorch CUDA 镜像与官方兜底源。{}",
             final_missing.join(", "),
             if errors.is_empty() {
                 String::new()
@@ -2196,8 +2200,20 @@ fn ensure_core_runtime_modules(app: &AppHandle, prefer_demucs_cuda: bool) -> Res
     }
 }
 
+fn uninstall_existing_torch_packages(python_path: &Path) {
+    let output = Command::new(python_path)
+        .args(["-m", "pip", "uninstall", "-y", "torch", "torchaudio"])
+        .output();
+    if let Err(err) = output {
+        eprintln!(
+            "[forisfstools] 卸载既有 torch/torchaudio 时出现错误，继续安装: {}",
+            err
+        );
+    }
+}
+
 /// Install PyTorch with automatic CUDA detection.
-/// Source priority: Tsinghua CUDA mirror → PyTorch official CUDA index → Tsinghua PyPI (CPU only).
+/// Source priority: Aliyun CUDA wheel mirror -> PyTorch official CUDA index -> Tsinghua PyPI/official CPU.
 fn install_torch_with_cuda_detection(python_path: &Path, prefer_cuda: bool) -> Result<(), String> {
     let detected_cuda = if prefer_cuda {
         runtime::capability::detect_nvidia_cuda_version()
@@ -2205,24 +2221,38 @@ fn install_torch_with_cuda_detection(python_path: &Path, prefer_cuda: bool) -> R
         None
     };
     let install_from_index = |cuda_index: &str, expect_cuda: bool| -> Result<(), String> {
-        let tsinghua_index = format!(
-            "https://mirrors.tuna.tsinghua.edu.cn/pytorch/whl/{}",
-            cuda_index
-        );
-        let tsinghua_host = "mirrors.tuna.tsinghua.edu.cn";
-
-        let args = [
-            "-m",
-            "pip",
-            "install",
-            "-U",
-            "torch",
-            "torchaudio",
-            "--index-url",
-            &tsinghua_index,
-            "--trusted-host",
-            tsinghua_host,
+        let mut first_label = "清华 PyPI";
+        let mut args = vec![
+            "-m".to_string(),
+            "pip".to_string(),
+            "install".to_string(),
+            "-U".to_string(),
         ];
+        if expect_cuda {
+            first_label = "阿里云 PyTorch CUDA 镜像";
+            args.extend([
+                "--force-reinstall".to_string(),
+                "--no-cache-dir".to_string(),
+            ]);
+        }
+        args.extend(["torch".to_string(), "torchaudio".to_string()]);
+        if expect_cuda {
+            let aliyun_links = format!("https://mirrors.aliyun.com/pytorch-wheels/{}/", cuda_index);
+            args.extend([
+                "--no-index".to_string(),
+                "--find-links".to_string(),
+                aliyun_links,
+                "--trusted-host".to_string(),
+                "mirrors.aliyun.com".to_string(),
+            ]);
+        } else {
+            args.extend([
+                "--index-url".to_string(),
+                "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple".to_string(),
+                "--trusted-host".to_string(),
+                "mirrors.tuna.tsinghua.edu.cn".to_string(),
+            ]);
+        }
         let output = Command::new(python_path)
             .args(&args)
             .output()
@@ -2242,16 +2272,24 @@ fn install_torch_with_cuda_detection(python_path: &Path, prefer_cuda: bool) -> R
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
         let official_index = format!("https://download.pytorch.org/whl/{}", cuda_index);
-        let fallback_args = [
-            "-m",
-            "pip",
-            "install",
-            "-U",
-            "torch",
-            "torchaudio",
-            "--index-url",
-            &official_index,
+        let mut fallback_args = vec![
+            "-m".to_string(),
+            "pip".to_string(),
+            "install".to_string(),
+            "-U".to_string(),
         ];
+        if expect_cuda {
+            fallback_args.extend([
+                "--force-reinstall".to_string(),
+                "--no-cache-dir".to_string(),
+            ]);
+        }
+        fallback_args.extend([
+            "torch".to_string(),
+            "torchaudio".to_string(),
+            "--index-url".to_string(),
+            official_index,
+        ]);
         let fallback_output = Command::new(python_path)
             .args(&fallback_args)
             .output()
@@ -2270,7 +2308,8 @@ fn install_torch_with_cuda_detection(python_path: &Path, prefer_cuda: bool) -> R
 
         let fallback_stderr = String::from_utf8_lossy(&fallback_output.stderr).to_string();
         Err(format!(
-            "torch 安装失败。清华镜像: {} | PyTorch 官方: {}",
+            "torch 安装失败。{}: {} | PyTorch 官方: {}",
+            first_label,
             stderr.trim(),
             fallback_stderr.trim()
         ))
@@ -2295,6 +2334,7 @@ fn install_torch_with_cuda_detection(python_path: &Path, prefer_cuda: bool) -> R
             None => "cpu",
         };
 
+        uninstall_existing_torch_packages(python_path);
         match install_from_index(preferred_cuda_index, true) {
             Ok(()) => return Ok(()),
             Err(cuda_err) => {
@@ -2302,10 +2342,20 @@ fn install_torch_with_cuda_detection(python_path: &Path, prefer_cuda: bool) -> R
                     "[forisfstools] CUDA torch 安装未成功，回退到 CPU 轮子: {}",
                     cuda_err
                 );
-                if let Ok(()) = install_from_index("cpu", false) {
-                    return Ok(());
+                match install_from_index("cpu", false) {
+                    Ok(()) => {
+                        return Err(format!(
+                            "CUDA torch 安装未成功；已回退安装 CPU torch。{}",
+                            cuda_err
+                        ));
+                    }
+                    Err(cpu_err) => {
+                        return Err(format!(
+                            "{} | CPU torch 回退安装也失败: {}",
+                            cuda_err, cpu_err
+                        ));
+                    }
                 }
-                return Err(cuda_err);
             }
         }
     }
@@ -3182,6 +3232,10 @@ mod tests {
     fn cuda_version_mapping_covers_supported_ranges() {
         assert_eq!(
             crate::runtime::capability::cuda_version_to_pytorch_index("12.4"),
+            "cu124"
+        );
+        assert_eq!(
+            crate::runtime::capability::cuda_version_to_pytorch_index("12.8"),
             "cu124"
         );
         assert_eq!(
@@ -4933,8 +4987,8 @@ pub(crate) fn process_song_background(
     );
     let gpu_available = runtime::capability::check_gpu_availability(&python_path);
     let has_nvidia_gpu = runtime::capability::detect_nvidia_gpu_name().is_some();
-    let gpu_requested = prefer_demucs_cuda;
-    let selected_demucs_device = if gpu_requested && gpu_available {
+    let cuda_allowed = prefer_demucs_cuda;
+    let selected_demucs_device = if cuda_allowed && gpu_available {
         "cuda"
     } else {
         "cpu"
@@ -4946,16 +5000,12 @@ pub(crate) fn process_song_background(
 
     let (stage_name, message, estimated) = if selected_demucs_device == "cuda" {
         ("gpu_available", "GPU 可用", Some(180))
-    } else if gpu_requested && !gpu_available {
-        if has_nvidia_gpu {
-            ("cpu_fallback", "GPU 请求回退 CPU", Some(600))
-        } else {
-            (
-                "cpu_fallback",
-                "未检测到可用 NVIDIA GPU，回退 CPU",
-                Some(600),
-            )
-        }
+    } else if has_nvidia_gpu && cuda_allowed {
+        (
+            "cpu_fallback",
+            "已检测到 NVIDIA GPU，但 Torch CUDA 暂不可用，CPU 处理中",
+            Some(600),
+        )
     } else {
         ("cpu_fallback", "CPU 处理中", Some(600))
     };
@@ -5984,7 +6034,9 @@ async fn bootstrap_install_minimal(
 ) -> Result<BootstrapStatus, String> {
     bootstrap_install_python_runtime(&app).map_err(|e| format!("Python 运行时安装失败：{}", e))?;
     ensure_ffmpeg_runtime().map_err(|e| format!("FFmpeg 安装失败：{}", e))?;
-    ensure_core_runtime_modules(&app, prefer_demucs_cuda)
+    let has_nvidia_gpu = runtime::capability::detect_nvidia_gpu_name().is_some();
+    let try_demucs_cuda = prefer_demucs_cuda || has_nvidia_gpu;
+    ensure_core_runtime_modules(&app, try_demucs_cuda, prefer_demucs_cuda)
         .map_err(|e| format!("核心模块安装失败（torch/demucs/faster-whisper）：{}", e))?;
     bootstrap_install_models(&app)
         .map_err(|e| format!("模型安装失败（demucs/whisper base）：{}", e))?;

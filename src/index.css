@@ -16,6 +16,94 @@
   --error: #ef4444;
 }
 
+:root[data-theme="aurora"] {
+  --bg-primary: #090b10;
+  --bg-secondary: #12161f;
+  --bg-tertiary: #1a2230;
+  --bg-card: #202a38;
+  --accent: #14b8a6;
+  --accent-hover: #2dd4bf;
+  --text-primary: #f8fafc;
+  --text-secondary: #b6c2cf;
+  --text-muted: #7b8794;
+  --border: #263241;
+}
+
+:root[data-theme="graphite"] {
+  --bg-primary: #0b0b0d;
+  --bg-secondary: #151518;
+  --bg-tertiary: #202026;
+  --bg-card: #26262d;
+  --accent: #8b5cf6;
+  --accent-hover: #a78bfa;
+  --text-primary: #fafafa;
+  --text-secondary: #b9b9c3;
+  --text-muted: #7d7d89;
+  --border: #303039;
+}
+
+:root[data-theme="studio"] {
+  --bg-primary: #0d0f12;
+  --bg-secondary: #17191d;
+  --bg-tertiary: #22262b;
+  --bg-card: #272d33;
+  --accent: #f97316;
+  --accent-hover: #fb923c;
+  --text-primary: #fff7ed;
+  --text-secondary: #d7cbc1;
+  --text-muted: #988b82;
+  --border: #37302b;
+}
+
+:root[data-theme="midnight"] {
+  --bg-primary: #070b13;
+  --bg-secondary: #101827;
+  --bg-tertiary: #172235;
+  --bg-card: #1f2e45;
+  --accent: #38bdf8;
+  --accent-hover: #7dd3fc;
+  --text-primary: #f8fafc;
+  --text-secondary: #c4d1e0;
+  --text-muted: #8493a7;
+  --border: #26364d;
+}
+
+:root[data-theme="daylight"] {
+  --bg-primary: #f4f6fb;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #eef2f7;
+  --bg-card: #f8fafc;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --text-primary: #111827;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+  --border: #d7dee9;
+}
+
+:root[data-theme="paper"] {
+  --bg-primary: #f7f4ef;
+  --bg-secondary: #fffaf2;
+  --bg-tertiary: #efe8dc;
+  --bg-card: #fffdf7;
+  --accent: #0f766e;
+  --accent-hover: #115e59;
+  --text-primary: #1f2933;
+  --text-secondary: #58616d;
+  --text-muted: #7a7066;
+  --border: #ded4c4;
+}
+
+:root[data-theme="daylight"] .theme-aware-surface,
+:root[data-theme="paper"] .theme-aware-surface {
+  background-color: color-mix(in srgb, var(--bg-secondary) 94%, transparent);
+}
+
+:root[data-theme="daylight"] .theme-subtle-surface,
+:root[data-theme="paper"] .theme-subtle-surface {
+  background-color: color-mix(in srgb, var(--bg-tertiary) 72%, transparent);
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -67,9 +155,10 @@ html, body {
 .dialog-content {
   display: flex;
   flex-direction: column;
-  padding: 28px 56px 32px;
+  padding: 30px 34px 28px;
   box-sizing: border-box;
   min-height: 188px;
+  width: 100%;
 }
 
 .folder-name-input {
@@ -86,4 +175,24 @@ html, body {
   align-items: center;
   gap: 18px;
   min-height: 44px;
+  flex-wrap: wrap;
+}
+
+.modal-shell {
+  width: min(calc(100vw - 48px), 520px);
+  border-radius: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: color-mix(in srgb, var(--bg-secondary) 94%, black);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.46);
+}
+
+.modal-copy {
+  color: var(--text-secondary);
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.theme-swatch {
+  background:
+    linear-gradient(135deg, var(--theme-bg) 0 48%, var(--theme-card) 48% 100%);
 }

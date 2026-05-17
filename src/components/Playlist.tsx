@@ -44,7 +44,74 @@ type ConfirmDialogState =
 
 const FOLDER_STORAGE_KEY = "4isfstools.playlistFolders";
 const COLLAPSED_STORAGE_KEY = "4isfstools.playlistCollapsedFolders";
+const VIEW_MODE_STORAGE_KEY = "4isfstools.playlistViewMode";
 const DEFAULT_FOLDER = "未分组";
+type PlaylistViewMode = "cards" | "list";
+
+const iconStroke = "currentColor";
+
+function MusicNoteIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M9 18.5a2.5 2.5 0 1 1-2-2.45V6.5l10-2v9.55a2.5 2.5 0 1 1-2-2.45V8.4l-6 1.2v8.9Z" stroke={iconStroke} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function FolderPlusIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M4.5 7.5h5l1.8 2h8.2v8.8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2V9.5a2 2 0 0 1 2-2Z" stroke={iconStroke} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M12 13.2v4M10 15.2h4" stroke={iconStroke} strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function GridIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M5 5h5v5H5V5Zm9 0h5v5h-5V5ZM5 14h5v5H5v-5Zm9 0h5v5h-5v-5Z" stroke={iconStroke} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function SearchIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="m17.2 17.2 3.3 3.3M10.8 18a7.2 7.2 0 1 1 0-14.4 7.2 7.2 0 0 1 0 14.4Z" stroke={iconStroke} strokeWidth="1.9" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function MicIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M8.2 11.8 17.6 2.4a3.2 3.2 0 0 1 4.5 4.5l-9.4 9.4" stroke={iconStroke} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="m7 13 4 4-5.5 3.5-2-2L7 13Z" fill="currentColor" opacity="0.22" />
+      <path d="m7 13 4 4-5.5 3.5-2-2L7 13Z" stroke={iconStroke} strokeWidth="1.8" strokeLinejoin="round" />
+      <path d="m15.7 4.3 4 4" stroke={iconStroke} strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ClockIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z" stroke={iconStroke} strokeWidth="1.8" />
+      <path d="M12 7.5V12l3.1 2" stroke={iconStroke} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function MoreIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <circle cx="6" cy="12" r="1.6" />
+      <circle cx="12" cy="12" r="1.6" />
+      <circle cx="18" cy="12" r="1.6" />
+    </svg>
+  );
+}
 
 export default function Playlist({
   songs,
@@ -67,6 +134,13 @@ export default function Playlist({
   const [inputDialog, setInputDialog] = useState<InputDialogState | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
   const [searchText, setSearchText] = useState("");
+  const [viewMode, setViewMode] = useState<PlaylistViewMode>(() => {
+    try {
+      return window.localStorage.getItem(VIEW_MODE_STORAGE_KEY) === "list" ? "list" : "cards";
+    } catch {
+      return "cards";
+    }
+  });
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -102,6 +176,10 @@ export default function Playlist({
   useEffect(() => {
     window.localStorage.setItem(COLLAPSED_STORAGE_KEY, JSON.stringify(collapsedFolders));
   }, [collapsedFolders]);
+
+  useEffect(() => {
+    window.localStorage.setItem(VIEW_MODE_STORAGE_KEY, viewMode);
+  }, [viewMode]);
 
   useEffect(() => {
     if (inputDialog) {
@@ -215,6 +293,14 @@ export default function Playlist({
     setContextMenu({ kind: "song", x: pos.x, y: pos.y, song });
   };
 
+  const openSongMenuFromButton = (e: React.MouseEvent, song: Song) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pos = clampMenuPosition(rect.right - 8, rect.bottom + 6);
+    setContextMenu({ kind: "song", x: pos.x, y: pos.y, song });
+  };
+
   const openFolderMenu = (e: React.MouseEvent, folderName: string) => {
     e.preventDefault();
     const pos = clampMenuPosition(e.clientX, e.clientY);
@@ -306,109 +392,194 @@ export default function Playlist({
     onSelectSong(song);
   };
 
-  const renderSongCard = (song: Song) => (
-    <div
-      key={song.id}
-      className={`group relative rounded-lg flex items-start gap-3 cursor-pointer hover:bg-[#1e1e1e] transition-colors ${song.status === "error" ? "opacity-80" : ""} ${song.status !== "ready" && song.status !== "processing" && song.status !== "error" ? "opacity-70" : ""} ${draggedSongId === song.id ? "ring-1 ring-[#6366f1] bg-[#1e1e1e]" : ""}`}
-      style={{ padding: "12px 16px" }}
-      draggable
-      onDragStart={() => setDraggedSongId(song.id)}
-      onDragEnd={() => setDraggedSongId(null)}
-      onClick={() => handleSongClick(song)}
-      onContextMenu={(e) => openSongMenu(e, song)}
-    >
-      {currentSong?.id === song.id && (
-        <div className="absolute left-0 top-3 bottom-3 w-1 rounded-full bg-[#6366f1]" />
-      )}
-      <span className="text-lg" style={{ paddingLeft: "8px" }}>{getStatusIcon(song)}</span>
-      <div className="flex-1 min-w-0">
-        <div className="font-medium text-sm text-[#fafafa] truncate">{song.name}</div>
-        <div className="mt-1">
-          {song.status === "ready" && song.duration > 0 && (
-            <span className="text-xs text-[#71717a]">{formatDuration(song.duration)}</span>
-          )}
-          {song.status === "processing" && (
-            <div>
-              <div className="flex items-center gap-2 mb-1">
-                <div className="flex-1 h-1 bg-[#2e2e2e] rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-gradient-to-r from-[#f472b6] to-[#c084fc] transition-all duration-500"
-                    style={{ width: `${song.progress}%` }}
-                  />
+  const renderSongMeta = (song: Song) => {
+    if (song.status === "ready" && song.duration > 0) {
+      return formatDuration(song.duration);
+    }
+    if (song.status === "processing") {
+      return song.processingStage
+        ? `${STAGE_LABELS[song.processingStage as ProcessingStage]} ${song.progress}%`
+        : `${song.progress}%`;
+    }
+    if (song.status === "pending") return "待处理";
+    if (song.status === "queued") return "排队中";
+    if (song.status === "cancelled") return "已取消";
+    if (song.status === "cancelling") return "取消中";
+    if (song.status === "error") return song.error_message || "处理失败";
+    return "";
+  };
+
+  const renderSongCard = (song: Song) => {
+    const meta = renderSongMeta(song);
+    const active = currentSong?.id === song.id;
+    const dimmed = song.status !== "ready" && song.status !== "processing" && song.status !== "error";
+
+    return (
+      <div
+        key={song.id}
+        className={`group relative cursor-pointer overflow-hidden border transition-colors ${
+          viewMode === "list"
+            ? "flex items-center border-transparent hover:bg-[var(--bg-tertiary)]"
+            : "flex items-center border-[rgba(148,163,184,0.18)] bg-[var(--bg-card)] hover:border-[color-mix(in_srgb,var(--accent)_35%,transparent)] hover:bg-[var(--bg-tertiary)]"
+        } ${song.status === "error" ? "opacity-80" : ""} ${dimmed ? "opacity-70" : ""} ${
+          draggedSongId === song.id ? "ring-1 ring-[var(--accent)]/50 bg-[var(--bg-tertiary)]" : ""
+        }`}
+        style={{
+          height: viewMode === "list" ? 40 : 84,
+          margin: viewMode === "list" ? "4px 10px" : "8px 10px",
+          padding: viewMode === "list" ? "0 12px" : "12px",
+          gap: viewMode === "list" ? 8 : 12,
+          borderRadius: 14,
+          background:
+            viewMode === "cards"
+              ? "linear-gradient(135deg, color-mix(in srgb, var(--bg-card) 92%, var(--accent)), var(--bg-card) 68%)"
+              : undefined,
+          boxShadow: viewMode === "cards" ? "0 10px 26px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.035)" : "none",
+        }}
+        draggable
+        onDragStart={() => setDraggedSongId(song.id)}
+        onDragEnd={() => setDraggedSongId(null)}
+        onClick={() => handleSongClick(song)}
+        onContextMenu={(e) => openSongMenu(e, song)}
+      >
+        {active && (
+          <div className={`${viewMode === "list" ? "top-2 bottom-2" : "top-3 bottom-3"} absolute left-0 w-[3px] rounded-r-full bg-[var(--accent)]/80`} />
+        )}
+        {viewMode === "cards" && (
+          <span
+            className="flex shrink-0 items-center justify-center text-[var(--accent)]"
+            style={{
+              width: 48,
+              height: 48,
+              borderRadius: 12,
+              background: "color-mix(in srgb, var(--accent) 14%, var(--bg-tertiary))",
+              boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)",
+            }}
+          >
+            {song.status === "ready" ? <MicIcon className="h-7 w-7" /> : getStatusIcon(song)}
+          </span>
+        )}
+        <div className={viewMode === "list" ? "grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] items-center gap-3" : "min-w-0 flex-1 self-center"}>
+          <div className={`${viewMode === "list" ? "text-[13px]" : "text-[15px]"} min-w-0 truncate font-semibold text-[var(--text-primary)]`}>
+            {song.name}
+          </div>
+          {viewMode === "list" ? (
+            <div className="max-w-[82px] truncate text-right text-[13px] text-[var(--text-muted)]">
+              {meta}
+            </div>
+          ) : (
+            <div className="mt-1.5 min-w-0 text-[13px] text-[var(--text-muted)]">
+              {song.status === "processing" ? (
+                <div className="flex items-center gap-2">
+                  <div className="h-1 flex-1 overflow-hidden rounded-full bg-[var(--border)]">
+                    <div
+                      className="h-full transition-all duration-500"
+                      style={{ width: `${song.progress}%`, background: "var(--accent)" }}
+                    />
+                  </div>
+                  <span className="shrink-0 font-mono text-[11px] text-[var(--accent)]">{song.progress}%</span>
                 </div>
-                <span className="text-xs text-[#f472b6] font-mono">{song.progress}%</span>
-              </div>
-              {song.processingStage && (
-                <div className="text-xs text-[#f472b6]">
-                  {STAGE_LABELS[song.processingStage as ProcessingStage]}
-                </div>
+              ) : (
+                <span className={`${song.status === "error" ? "block truncate text-[#ef4444]" : "inline-flex items-center gap-1.5"}`}>
+                  {song.status === "ready" && <ClockIcon className="h-3.5 w-3.5" />}
+                  {meta}
+                </span>
               )}
             </div>
           )}
-          {song.status === "pending" && (
-            <span className="text-xs text-[#71717a]">点击开始处理</span>
-          )}
-          {song.status === "queued" && (
-            <span className="text-xs text-[#60a5fa]">排队中...</span>
-          )}
-          {song.status === "error" && (
-            <span className="text-xs text-[#ef4444] truncate block">
-              {song.error_message || "处理失败"}
-            </span>
-          )}
-          {song.status === "cancelled" && (
-            <span className="text-xs text-[#f59e0b]">已取消，点击重新处理</span>
-          )}
-          {song.status === "cancelling" && (
-            <span className="text-xs text-[#60a5fa]">正在取消...</span>
-          )}
         </div>
-      </div>
-    </div>
-  );
-
-  return (
-    <div className="h-full rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] overflow-hidden flex flex-col flex-1">
-      <div className="py-4 font-semibold text-sm border-b border-[var(--border)] flex items-center justify-between" style={{ paddingLeft: "24px", paddingRight: "24px" }}>
-        <div className="flex items-center gap-3">
-          <span className="text-[#fafafa]">播放列表</span>
+        {viewMode === "cards" && (
           <button
             type="button"
-            className="rounded-full bg-[#1e1e1e] px-3 py-1 text-xs text-[#d4d4d8] hover:bg-[#2a2a4a]"
+            aria-label="更多操作"
+            className="ml-1 flex shrink-0 items-center justify-center rounded-full text-[var(--text-muted)] opacity-80 transition-colors hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+            style={{ width: 24, height: 24 }}
+            onClick={(e) => openSongMenuFromButton(e, song)}
+          >
+            <MoreIcon className="h-5 w-5" />
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div
+      className="flex h-full flex-1 flex-col overflow-hidden border bg-[var(--bg-secondary)]"
+      style={{
+        borderColor: "color-mix(in srgb, var(--accent) 42%, var(--border))",
+        borderRadius: 14,
+        background:
+          "linear-gradient(180deg, color-mix(in srgb, var(--bg-secondary) 94%, var(--accent)) 0%, var(--bg-secondary) 34%, var(--bg-primary) 100%)",
+        boxShadow: "0 18px 42px rgba(0,0,0,0.18)",
+      }}
+    >
+      <div className="border-b border-[var(--border)]" style={{ padding: "16px 16px 10px" }}>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="shrink-0 text-[22px] font-bold leading-none text-[var(--text-primary)]">播放列表</span>
+          </div>
+          <div className="flex shrink-0 items-center gap-2 text-sm font-medium text-[var(--text-muted)]">
+            <span>{songs.length} 首</span>
+            <span
+              className="flex items-center justify-center border border-[rgba(148,163,184,0.18)] bg-[var(--bg-card)] text-[15px] text-[var(--text-muted)]"
+              style={{ width: 36, height: 36, borderRadius: 10 }}
+            >
+              <MusicNoteIcon className="h-5 w-5" />
+            </span>
+          </div>
+        </div>
+        <div className="flex items-center justify-between" style={{ height: 40, gap: 12, marginTop: 20 }}>
+          <button
+            type="button"
+            className="inline-flex max-w-[48%] flex-1 items-center justify-center gap-2 border border-[rgba(148,163,184,0.18)] bg-[var(--bg-card)] text-[13px] font-semibold text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-tertiary)]"
+            style={{ height: 40, borderRadius: 10, padding: "0 12px" }}
             onClick={openCreateFolderDialog}
           >
-            新建文件夹
+            <FolderPlusIcon className="h-4.5 w-4.5 shrink-0" />
+            <span className="truncate">新建文件夹</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode((mode) => mode === "cards" ? "list" : "cards")}
+            className="inline-flex max-w-[48%] flex-1 items-center justify-center gap-2 border border-[color-mix(in_srgb,var(--accent)_35%,transparent)] bg-[var(--bg-card)] text-[13px] font-semibold text-[var(--accent)] transition-colors hover:bg-[var(--bg-tertiary)]"
+            style={{ height: 40, borderRadius: 10, padding: "0 12px" }}
+          >
+            <GridIcon className="h-4.5 w-4.5 shrink-0" />
+            <span>{viewMode === "cards" ? "卡片视图" : "列表视图"}</span>
           </button>
         </div>
-        <span className="text-xs text-[#71717a] bg-[#1e1e1e] px-3 py-0.5 rounded-full">
-          {songs.filter((s) => s.status === "ready").length} / {songs.length}
-        </span>
       </div>
-      <div className="border-b border-[var(--border)]" style={{ padding: "10px 24px 12px" }}>
-        <input
-          type="text"
-          value={searchText}
-          onChange={(e) => setSearchText(e.target.value)}
-          placeholder="搜索歌曲/文件夹"
-          className="w-full h-9 rounded-lg border border-white/[0.08] bg-[#161616] px-3 text-sm text-[#fafafa] placeholder:text-[#6b7280] outline-none focus:border-[#6366f1] focus:ring-1 focus:ring-[#6366f1]"
-        />
+      <div className="border-b border-[var(--border)]" style={{ padding: "10px 16px 12px" }}>
+        <div className="relative">
+          <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4.5 w-4.5 -translate-y-1/2 text-[#64748b]" />
+          <input
+            type="text"
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            placeholder="搜索歌曲 / 文件夹"
+            className="w-full border border-[rgba(148,163,184,0.18)] bg-[var(--bg-card)] pl-9 pr-3 text-[13px] text-[var(--text-primary)] placeholder:text-[#64748b] outline-none transition-colors focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]"
+            style={{ height: 40, borderRadius: 10 }}
+          />
+        </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto" style={{ padding: "18px 18px 20px" }}>
+      <div className="flex-1 overflow-y-auto py-0">
         {songs.length === 0 && allFolders.length === 1 ? (
           <div className="p-8 text-center text-[#71717a] text-sm">暂无歌曲，点击右上“导入歌曲”开始添加</div>
         ) : normalizedSearch && totalVisibleSongs === 0 ? (
           <div className="p-8 text-center text-[#71717a] text-sm">没有匹配歌曲，换个关键词试试</div>
         ) : (
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col">
             {visibleFolders.map((folderName) => {
               const folderSongs = filteredSongsByFolder.get(folderName) || [];
               const isCollapsed = collapsedFolders[folderName] ?? false;
               const isDropActive = draggedSongId !== null;
               return (
-                <div key={folderName} className="rounded-xl border border-white/[0.04] bg-white/[0.015] overflow-hidden">
+                <div key={folderName} className="overflow-hidden border-b border-[var(--border)] bg-[var(--bg-secondary)]">
                   <div
-                    className={`flex items-center justify-between px-4 py-3 border-b border-white/[0.04] ${isDropActive ? "transition-colors" : ""}`}
+                    className={`flex items-center justify-between bg-[var(--bg-card)] ${isDropActive ? "transition-colors" : ""}`}
+                    style={{ height: 44, padding: "0 16px" }}
                     onClick={() => setCollapsedFolders((prev) => ({ ...prev, [folderName]: !isCollapsed }))}
                     onContextMenu={(e) => openFolderMenu(e, folderName)}
                     onDragOver={(e) => {
@@ -425,23 +596,23 @@ export default function Playlist({
                       setDraggedSongId(null);
                     }}
                   >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <span className="text-[#71717a]">{isCollapsed ? "▸" : "▾"}</span>
-                      <span className="text-sm font-medium text-[#fafafa] truncate">{folderName}</span>
-                      <span className="text-xs text-[#71717a]">({folderSongs.length})</span>
+                    <div className="flex min-w-0 items-center gap-2.5">
+                      <span className="text-[var(--text-muted)]">{isCollapsed ? "▸" : "▾"}</span>
+                      <span className="truncate text-[18px] font-semibold leading-none text-[var(--text-primary)]">{folderName}</span>
+                      <span className="rounded-full bg-[var(--bg-tertiary)] px-2.5 py-0.5 text-xs font-semibold text-[var(--text-secondary)]">{folderSongs.length}</span>
                     </div>
                     <button
-                      className="text-xs text-[#71717a] hover:text-white"
+                      className="flex h-7 w-7 items-center justify-center rounded-full text-[18px] text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
                       onClick={(e) => {
                         e.stopPropagation();
                         setCollapsedFolders((prev) => ({ ...prev, [folderName]: !isCollapsed }));
                       }}
                     >
-                      {isCollapsed ? "展开" : "收起"}
+                      ›
                     </button>
                   </div>
                   {!isCollapsed && (
-                    <div className="p-2 flex flex-col gap-2">
+                    <div className={`${viewMode === "list" ? "py-1" : "py-0"} flex flex-col`}>
                       {folderSongs.length === 0 ? (
                         <div className="px-3 py-4 text-xs text-[#52525b] text-center border border-dashed border-white/[0.06] rounded-lg">
                           可将歌曲拖到这里创建/整理文件夹
@@ -462,14 +633,14 @@ export default function Playlist({
         <>
           <div className="fixed inset-0 z-40" onClick={closeContextMenu} />
           <div
-            className="fixed bg-[#1e1e1e] border border-[#2e2e2e] rounded-lg shadow-xl py-1 z-50 min-w-56"
+            className="fixed bg-[var(--bg-secondary)] border border-[var(--border)] rounded-lg shadow-xl py-1 z-50 min-w-56"
             style={{ left: contextMenu.x, top: contextMenu.y }}
           >
             {contextMenu.kind === "song" ? (
               <>
                 {contextMenu.song.status !== "processing" && contextMenu.song.status !== "cancelling" && contextMenu.song.status !== "queued" && (
                   <button
-                    className="w-full px-4 py-2.5 text-left text-sm text-[#fafafa] hover:bg-[#2e2e2e] flex items-center gap-3"
+                    className="w-full px-4 py-2.5 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center gap-3"
                     onClick={() => {
                       onStartProcess(contextMenu.song);
                       closeContextMenu();
@@ -480,7 +651,7 @@ export default function Playlist({
                 )}
                 {contextMenu.song.status !== "processing" && contextMenu.song.status !== "cancelling" && (
                   <button
-                    className="w-full px-4 py-2.5 text-left text-sm text-[#fafafa] hover:bg-[#2e2e2e] flex items-center gap-3"
+                    className="w-full px-4 py-2.5 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center gap-3"
                     onClick={() => {
                       void onSearchLyrics(contextMenu.song);
                       closeContextMenu();
@@ -490,7 +661,7 @@ export default function Playlist({
                   </button>
                 )}
                 <button
-                  className="w-full px-4 py-2.5 text-left text-sm text-[#fafafa] hover:bg-[#2e2e2e] flex items-center gap-3"
+                  className="w-full px-4 py-2.5 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center gap-3"
                   onClick={() => {
                     void onImportLyricsLrc(contextMenu.song);
                     closeContextMenu();
@@ -500,7 +671,7 @@ export default function Playlist({
                 </button>
                 {contextMenu.song.status !== "processing" && contextMenu.song.status !== "cancelling" && (
                   <button
-                    className="w-full px-4 py-2.5 text-left text-sm text-[#fafafa] hover:bg-[#2e2e2e] flex items-center gap-3"
+                    className="w-full px-4 py-2.5 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center gap-3"
                     onClick={() => {
                       void onGenerateLyricsDraft(contextMenu.song);
                       closeContextMenu();
@@ -511,7 +682,7 @@ export default function Playlist({
                 )}
                 {(contextMenu.song.status === "processing" || contextMenu.song.status === "queued" || contextMenu.song.status === "cancelling") && (
                   <button
-                    className="w-full px-4 py-2.5 text-left text-sm text-[#ef4444] hover:bg-[#2e2e2e] flex items-center gap-3"
+                    className="w-full px-4 py-2.5 text-left text-sm text-[#ef4444] hover:bg-[var(--bg-tertiary)] flex items-center gap-3"
                     onClick={() => {
                       onCancelProcess(contextMenu.song);
                       closeContextMenu();
@@ -521,13 +692,13 @@ export default function Playlist({
                   </button>
                 )}
                 <button
-                  className="w-full px-4 py-2.5 text-left text-sm text-[#fafafa] hover:bg-[#2e2e2e] flex items-center gap-3"
+                  className="w-full px-4 py-2.5 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center gap-3"
                   onClick={() => handleSongRename(contextMenu.song)}
                 >
                   <span className="text-[#60a5fa]">✎</span> 重命名
                 </button>
                 <button
-                  className="w-full px-4 py-2.5 text-left text-sm text-[#fafafa] hover:bg-[#2e2e2e] flex items-center gap-3"
+                  className="w-full px-4 py-2.5 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center gap-3"
                   onClick={() => {
                     openMoveSongDialog(contextMenu.song);
                     closeContextMenu();
@@ -537,7 +708,7 @@ export default function Playlist({
                 </button>
                 {contextMenu.song.status !== "processing" && contextMenu.song.status !== "queued" && contextMenu.song.status !== "cancelling" && (
                   <button
-                    className="w-full px-4 py-2.5 text-left text-sm text-[#ef4444] hover:bg-[#2e2e2e] flex items-center gap-3"
+                    className="w-full px-4 py-2.5 text-left text-sm text-[#ef4444] hover:bg-[var(--bg-tertiary)] flex items-center gap-3"
                     onClick={() => {
                       openDeleteSongDialog(contextMenu.song);
                       closeContextMenu();
@@ -550,7 +721,7 @@ export default function Playlist({
             ) : (
               <>
                 <button
-                  className="w-full px-4 py-2.5 text-left text-sm text-[#fafafa] hover:bg-[#2e2e2e] flex items-center gap-3"
+                  className="w-full px-4 py-2.5 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center gap-3"
                   onClick={() => {
                     openRenameFolderDialog(contextMenu.folderName);
                     closeContextMenu();
@@ -559,7 +730,7 @@ export default function Playlist({
                   <span className="text-[#60a5fa]">✎</span> 重命名文件夹
                 </button>
                 <button
-                  className="w-full px-4 py-2.5 text-left text-sm text-[#fafafa] hover:bg-[#2e2e2e] flex items-center gap-3"
+                  className="w-full px-4 py-2.5 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center gap-3"
                   onClick={() => {
                     setCollapsedFolders((prev) => ({ ...prev, [contextMenu.folderName]: !(prev[contextMenu.folderName] ?? false) }));
                     closeContextMenu();
@@ -569,7 +740,7 @@ export default function Playlist({
                 </button>
                 {contextMenu.folderName !== DEFAULT_FOLDER && (
                   <button
-                    className="w-full px-4 py-2.5 text-left text-sm text-[#ef4444] hover:bg-[#2e2e2e] flex items-center gap-3"
+                    className="w-full px-4 py-2.5 text-left text-sm text-[#ef4444] hover:bg-[var(--bg-tertiary)] flex items-center gap-3"
                     onClick={() => {
                       openDeleteFolderDialog(contextMenu.folderName);
                       closeContextMenu();
@@ -591,15 +762,15 @@ export default function Playlist({
             onClick={() => setInputDialog(null)}
           />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
-            <div className="w-full max-w-md rounded-3xl border border-white/[0.08] bg-[#171717] shadow-2xl shadow-black/50">
+            <div className="modal-shell">
               <div className="dialog-content">
-                <div className="text-base font-semibold text-[#fafafa]">
+                <div className="text-[18px] font-semibold leading-7 text-[var(--text-primary)]">
                   {inputDialog.kind === "create-folder" && "新建文件夹"}
                   {inputDialog.kind === "rename-song" && "重命名歌曲"}
                   {inputDialog.kind === "rename-folder" && "重命名文件夹"}
                   {inputDialog.kind === "move-song" && "移动到文件夹"}
                 </div>
-                <div className="mt-2 text-sm leading-6 text-[#8a8a94]">
+                <div className="modal-copy mt-2 text-sm">
                   {inputDialog.kind === "create-folder" && "输入名称后回车即可创建"}
                   {inputDialog.kind === "rename-song" && "输入新名称后回车保存"}
                   {inputDialog.kind === "rename-folder" && "输入新名称后回车保存"}
@@ -646,19 +817,19 @@ export default function Playlist({
                         ? "例如：待整理、演出备份"
                         : "请输入名称"
                   }
-                  className="folder-name-input rounded-2xl border border-white/[0.08] bg-[#101010] px-6 py-0 text-base leading-[48px] text-[#fafafa] outline-none ring-0 placeholder:text-[#5b5b66] focus:border-[#6366f1] focus:ring-2 focus:ring-[#6366f1]/25"
+                  className="folder-name-input rounded-2xl border border-white/[0.08] bg-[var(--bg-primary)] px-5 py-0 text-base leading-[48px] text-[var(--text-primary)] outline-none ring-0 placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/25"
                 />
                 <div className="dialog-actions">
                   <button
                     type="button"
-                    className="inline-flex min-w-[92px] items-center justify-center whitespace-nowrap rounded-full px-6 py-2.5 text-sm font-medium text-[#d4d4d8] hover:bg-white/[0.06]"
+                    className="inline-flex min-w-[92px] items-center justify-center whitespace-nowrap rounded-full px-6 py-2.5 text-sm font-medium text-[var(--text-secondary)] hover:bg-white/[0.06]"
                     onClick={() => setInputDialog(null)}
                   >
                     取消
                   </button>
                   <button
                     type="button"
-                    className="inline-flex min-w-[92px] items-center justify-center whitespace-nowrap rounded-full bg-[#6366f1] px-6 py-2.5 text-sm font-semibold text-white hover:bg-[#4f46e5]"
+                    className="inline-flex min-w-[92px] items-center justify-center whitespace-nowrap rounded-full bg-[var(--accent)] px-6 py-2.5 text-sm font-semibold text-white hover:bg-[var(--accent-hover)]"
                     onClick={() => {
                       if (inputDialog.kind === "create-folder") {
                         handleCreateFolderSubmit(inputDialog.value);
@@ -693,19 +864,19 @@ export default function Playlist({
         <>
           <div className="fixed inset-0 z-40 bg-black/55 backdrop-blur-[2px]" onClick={() => setConfirmDialog(null)} />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
-            <div className="w-full max-w-sm rounded-3xl border border-white/[0.08] bg-[#171717] shadow-2xl shadow-black/50 px-7 py-6">
-              <div className="text-base font-semibold text-[#fafafa]">
+            <div className="modal-shell px-8 py-7">
+              <div className="text-[18px] font-semibold leading-7 text-[var(--text-primary)]">
                 {confirmDialog.kind === "delete-song" ? "删除歌曲" : "删除文件夹"}
               </div>
-              <div className="mt-2 text-sm text-[#8a8a94]">
+              <div className="modal-copy mt-3 text-sm">
                 {confirmDialog.kind === "delete-song"
                   ? `确认删除「${confirmDialog.song.name}」？此操作会同时移除本地数据。`
                   : `确认删除文件夹「${confirmDialog.folderName}」？里面的歌曲会回到未分组。`}
               </div>
-              <div className="mt-6 flex items-center justify-end gap-4">
+              <div className="mt-7 flex flex-wrap items-center justify-end gap-3">
                 <button
                   type="button"
-                  className="inline-flex min-w-[92px] items-center justify-center whitespace-nowrap rounded-full px-6 py-2.5 text-sm font-medium text-[#d4d4d8] hover:bg-white/[0.06]"
+                  className="inline-flex min-w-[92px] items-center justify-center whitespace-nowrap rounded-full px-6 py-2.5 text-sm font-medium text-[var(--text-secondary)] hover:bg-white/[0.06]"
                   onClick={() => setConfirmDialog(null)}
                 >
                   取消

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import type { CSSProperties } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -103,6 +104,75 @@ type BootstrapStatus = {
   detail: string;
 };
 
+type SettingsPane = "paths" | "runtime" | "audioOutput" | "appearance";
+
+type ColorThemeId = "graphite" | "aurora" | "studio" | "midnight" | "daylight" | "paper";
+
+const COLOR_THEMES: Array<{
+  id: ColorThemeId;
+  name: string;
+  description: string;
+  bg: string;
+  card: string;
+  accent: string;
+  text: string;
+}> = [
+  {
+    id: "graphite",
+    name: "石墨夜色",
+    description: "低眩光深色，适合长时间编辑。",
+    bg: "#0b0b0d",
+    card: "#202026",
+    accent: "#8b5cf6",
+    text: "#fafafa",
+  },
+  {
+    id: "aurora",
+    name: "极光青绿",
+    description: "冷静、清晰，强调音频状态。",
+    bg: "#090b10",
+    card: "#1a2230",
+    accent: "#14b8a6",
+    text: "#f8fafc",
+  },
+  {
+    id: "studio",
+    name: "录音棚暖调",
+    description: "暖色强调但保留足够对比度。",
+    bg: "#0d0f12",
+    card: "#22262b",
+    accent: "#f97316",
+    text: "#fff7ed",
+  },
+  {
+    id: "midnight",
+    name: "午夜蓝调",
+    description: "深蓝基调，适合暗光环境。",
+    bg: "#070b13",
+    card: "#172235",
+    accent: "#38bdf8",
+    text: "#f8fafc",
+  },
+  {
+    id: "daylight",
+    name: "日间清爽",
+    description: "浅色高对比，适合明亮环境。",
+    bg: "#f4f6fb",
+    card: "#ffffff",
+    accent: "#2563eb",
+    text: "#111827",
+  },
+  {
+    id: "paper",
+    name: "纸面暖白",
+    description: "柔和浅色，减少白底刺眼感。",
+    bg: "#f7f4ef",
+    card: "#fffaf2",
+    accent: "#0f766e",
+    text: "#1f2933",
+  },
+];
+
 type TrackGraph = {
   source: MediaElementAudioSourceNode;
   gain: GainNode;
@@ -146,13 +216,23 @@ function App() {
   const [lyricsImportError, setLyricsImportError] = useState<string | null>(null);
   const [fileStorageSettings, setFileStorageSettings] = useState<FileStorageSettings | null>(null);
   const [fileStorageSettingsOpen, setFileStorageSettingsOpen] = useState(false);
-  const [settingsPane, setSettingsPane] = useState<"paths" | "runtime" | "audioOutput">("runtime");
+  const [settingsPane, setSettingsPane] = useState<SettingsPane>("runtime");
   const [fileStorageSettingsSaving, setFileStorageSettingsSaving] = useState(false);
   const [fileStorageSettingsMessage, setFileStorageSettingsMessage] = useState<string | null>(null);
   const [runtimeHealth, setRuntimeHealth] = useState<RuntimeHealthReport | null>(null);
   const [bootstrapStatus, setBootstrapStatus] = useState<BootstrapStatus | null>(null);
   const [bootstrapInstalling, setBootstrapInstalling] = useState(false);
   const [bootstrapMessage, setBootstrapMessage] = useState<string | null>(null);
+  const themeStorageKey = "4isfstools.color_theme";
+  const [colorTheme, setColorTheme] = useState<ColorThemeId>(() => {
+    if (typeof window === "undefined") return "graphite";
+    try {
+      const stored = window.localStorage.getItem(themeStorageKey);
+      return COLOR_THEMES.some((theme) => theme.id === stored) ? stored as ColorThemeId : "graphite";
+    } catch {
+      return "graphite";
+    }
+  });
 
   const runtimeSelectedDevice =
     bootstrapStatus?.selectedDevice ??
@@ -166,33 +246,21 @@ function App() {
   const runtimeHasNvidiaGpu = bootstrapStatus?.hasNvidiaGpu ?? runtimeHealth?.hasNvidiaGpu ?? false;
   const runtimeTorchCudaAvailable =
     bootstrapStatus?.torchCudaAvailable ?? runtimeHealth?.torchCudaAvailable ?? false;
-  const gpuRuntimePreferenceStorageKey = "4isfstools.prefer_demucs_cuda";
-  const [preferDemucsCuda, setPreferDemucsCuda] = useState(() => {
-    if (typeof window === "undefined") {
-      return false;
-    }
-    try {
-      return window.localStorage.getItem(gpuRuntimePreferenceStorageKey) === "true";
-    } catch {
-      return false;
-    }
-  });
+  const runtimeDeviceLabel = runtimeTorchCudaAvailable ? "GPU 运行" : "CPU 运行";
+  const runtimeDeviceTitle = runtimeTorchCudaAvailable
+    ? `Torch CUDA 可用${runtimeTorchCudaDeviceName ? `：${runtimeTorchCudaDeviceName}` : ""}`
+    : runtimeHasNvidiaGpu
+      ? "已检测到 NVIDIA GPU，但 Torch CUDA 暂不可用，当前使用 CPU"
+      : "未检测到 NVIDIA GPU，当前使用 CPU";
 
   useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
+    document.documentElement.dataset.theme = colorTheme;
     try {
-      window.localStorage.setItem(
-        gpuRuntimePreferenceStorageKey,
-        preferDemucsCuda ? "true" : "false"
-      );
+      window.localStorage.setItem(themeStorageKey, colorTheme);
     } catch {
       // ignore persistence failures
     }
-  }, [preferDemucsCuda]);
-
-  const demucsGpuRequested = runtimeHasNvidiaGpu && preferDemucsCuda;
+  }, [colorTheme]);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const originalAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -883,7 +951,7 @@ function App() {
     setBootstrapMessage("正在安装运行时与模型...");
     try {
       const status = await invoke<BootstrapStatus>("bootstrap_install_minimal", {
-        preferDemucsCuda,
+        preferDemucsCuda: false,
       });
       const health = await invoke<RuntimeHealthReport>("get_runtime_health");
       setBootstrapStatus(status);
@@ -903,7 +971,7 @@ function App() {
     } finally {
       setBootstrapInstalling(false);
     }
-  }, [isDesktopRuntime, preferDemucsCuda]);
+  }, [isDesktopRuntime]);
 
   // Listen for processing events
   useEffect(() => {
@@ -1039,7 +1107,7 @@ function App() {
       await Promise.all(
         newSongs.map(async (song) => {
           try {
-            await invoke("start_process", { songId: song.id, preferDemucsCuda: demucsGpuRequested });
+            await invoke("start_process", { songId: song.id, preferDemucsCuda: true });
             setSongs((prev) => prev.map((item) =>
               item.id === song.id && item.status !== "processing" && item.status !== "cancelling"
                 ? { ...item, status: "queued" as const, progress: 0, processingStage: "queued" as ProcessingStage, error_message: undefined }
@@ -1053,7 +1121,7 @@ function App() {
     } catch (e) {
       console.error("Failed to import songs:", e);
     }
-  }, [demucsGpuRequested]);
+  }, []);
 
   const handleSaveStorageSettings = useCallback(async (settingsOverride?: FileStorageSettings) => {
     const settingsToSave = settingsOverride ?? fileStorageSettings;
@@ -1132,7 +1200,7 @@ function App() {
   const handleSeparateInstrumental = useCallback(async (song: Song) => {
     try {
       const command = song.status === "ready" ? "reprocess_song" : "start_process";
-      await invoke(command, { songId: song.id, preferDemucsCuda: demucsGpuRequested });
+      await invoke(command, { songId: song.id, preferDemucsCuda: true });
       setSongs((prev) => prev.map((item) =>
         item.id === song.id && item.status !== "processing" && item.status !== "cancelling"
           ? { ...item, status: "queued" as const, progress: 0, processingStage: "queued" as ProcessingStage, error_message: undefined }
@@ -1141,7 +1209,7 @@ function App() {
     } catch (e) {
       console.error("Failed to start separation:", e);
     }
-  }, [demucsGpuRequested]);
+  }, []);
 
   // Select a song - always select, auto-play only when ready
   const handleSelectSong = useCallback(async (song: Song) => {
@@ -1495,7 +1563,7 @@ function App() {
                 setFileStorageSettingsOpen(true);
                 setSettingsPane("runtime");
               }}
-              className="ml-2 inline-flex items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-xs text-[#d4d4d8] transition-colors hover:bg-white/[0.05]"
+              className="ml-2 inline-flex items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-xs text-[var(--text-secondary)] transition-colors hover:bg-white/[0.05]"
               aria-label="查看运行环境状态"
             >
               <span
@@ -1511,27 +1579,21 @@ function App() {
                 {runtimeHealth?.label ?? "检测中..."}
               </span>
             </button>
-            <label
-              className={`ml-1 inline-flex items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-xs text-[#d4d4d8] transition-colors ${
-                runtimeHasNvidiaGpu ? "hover:bg-white/[0.05] cursor-pointer" : "cursor-not-allowed opacity-45"
+            <div
+              className={`ml-1 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs ${
+                runtimeTorchCudaAvailable
+                  ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-200"
+                  : "border-white/[0.08] bg-white/[0.03] text-[var(--text-secondary)]"
               }`}
-              title={
-                runtimeHasNvidiaGpu
-                  ? demucsGpuRequested
-                    ? "Demucs 将在可用时优先请求 GPU"
-                    : "未启用 GPU 运行"
-                  : "未检测到 NVIDIA GPU"
-              }
+              title={runtimeDeviceTitle}
             >
-              <input
-                type="checkbox"
-                checked={demucsGpuRequested}
-                disabled={!runtimeHasNvidiaGpu}
-                onChange={(event) => setPreferDemucsCuda(event.target.checked)}
-                className="h-3.5 w-3.5 rounded border-white/20 bg-white/5 text-indigo-500 accent-indigo-500 focus:ring-0 disabled:cursor-not-allowed"
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  runtimeTorchCudaAvailable ? "bg-emerald-400" : "bg-zinc-500"
+                }`}
               />
-              <span className="whitespace-nowrap">GPU 运行</span>
-            </label>
+              <span className="whitespace-nowrap">{runtimeDeviceLabel}</span>
+            </div>
           </div>
           <div className="flex items-center gap-5">
             <div className="flex items-center gap-2 text-xs text-[var(--text-muted)] whitespace-nowrap">
@@ -1546,7 +1608,7 @@ function App() {
                 setFileStorageSettingsOpen(true);
                 setSettingsPane("paths");
               }}
-              className="inline-flex h-9 min-w-[88px] items-center justify-center rounded-full border border-white/10 bg-white/[0.03] px-4 text-xs font-semibold leading-none text-[#d4d4d8] transition-colors hover:bg-white/[0.06]"
+              className="inline-flex h-9 min-w-[88px] items-center justify-center rounded-full border border-white/10 bg-white/[0.03] px-4 text-xs font-semibold leading-none text-[var(--text-secondary)] transition-colors hover:bg-white/[0.06]"
             >
               偏好设置
             </button>
@@ -1561,7 +1623,7 @@ function App() {
                   if (paths.length > 0) handleFilesSelected(paths);
                 }
               }}
-              className="inline-flex h-9 min-w-[96px] items-center justify-center rounded-full bg-[#6366f1] px-4 text-xs font-semibold leading-none text-white shadow-lg transition-colors hover:bg-[#5558e3] whitespace-nowrap"
+              className="inline-flex h-9 min-w-[96px] items-center justify-center rounded-full bg-[var(--accent)] px-4 text-xs font-semibold leading-none text-white shadow-lg transition-colors hover:bg-[var(--accent-hover)] whitespace-nowrap"
             >
               导入歌曲
             </button>
@@ -1595,15 +1657,15 @@ function App() {
                 {/* Track meter */}
                 <div className="shrink-0 relative mt-2 h-[88px]">
                   <div className="pointer-events-none absolute left-1/2 top-3 z-20 w-[min(50vw,640px)] -translate-x-1/2">
-                    <div className="rounded-[10px] border border-white/[0.06] bg-white/[0.04] px-5 py-3 shadow-[0_14px_32px_rgba(0,0,0,0.22)] backdrop-blur-sm">
+                    <div className="rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] px-5 py-3 shadow-[0_14px_32px_rgba(0,0,0,0.16)] backdrop-blur-sm">
                       <div className="space-y-1">
                         {([
                           ["伴奏", trackLevels.instrumental, "#6366f1"],
                           ["人声", trackLevels.vocals, "#22c55e"],
                         ] as Array<[string, number, string]>).map(([label, level, color]) => (
-                          <div key={label} className="flex items-center gap-3 text-[9px] text-white/50">
+                          <div key={label} className="flex items-center gap-3 text-[9px] text-[var(--text-muted)]">
                             <span className="w-7 shrink-0 text-right font-medium">{label}</span>
-                            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[#2a2a4a]">
+                            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--bg-tertiary)]">
                               <div
                                 className="h-full rounded-full transition-all duration-150"
                                 style={{
@@ -1630,7 +1692,7 @@ function App() {
                         onSaveDocument={handleSaveLyricsDocument}
                       />
                     ) : (
-                      <div className="text-[#3f3f46] text-base text-center py-8">
+                      <div className="text-[var(--text-muted)] text-base text-center py-8">
                         暂无歌词
                       </div>
                     )}
@@ -1649,13 +1711,13 @@ function App() {
                   </div>
                 )}
                 {/* Controls - structured layout with breathing room */}
-                <div className="shrink-0 h-[112px] px-8 pt-2 pb-2 flex flex-col justify-start border-t border-white/[0.03]">
+                <div className="shrink-0 h-[112px] px-8 pt-2 pb-2 flex flex-col justify-start border-t border-[var(--border)] bg-[var(--bg-secondary)]">
                   {/* Song Info */}
                   <div className="flex items-center gap-3 mb-2">
                     <div className="w-10 h-10 flex items-center justify-center text-xl">🎵</div>
                     <div className="flex-1 min-w-0">
                       <div className="font-medium text-sm truncate">{currentSong.name}</div>
-                      <div className="text-xs text-[#71717a]">
+                      <div className="text-xs text-[var(--text-muted)]">
                         {playbackMode === "original" ? "原唱模式" : playbackMode === "vocals" ? "人声模式" : "伴奏模式"}
                       </div>
                       {whisperDraftLoadingSongId === currentSong.id && (
@@ -1680,17 +1742,17 @@ function App() {
                     <button
                       onClick={() => setVocalWaveformEnabled((value) => !value)}
                       className={`absolute right-4 -top-8 z-10 h-8 w-[88px] rounded-full text-[11px] font-semibold leading-none transition-all ${
-                        vocalWaveformEnabled ? "bg-[#a855f7] text-white" : "bg-[#1e1e1e] text-[#a1a1aa] hover:bg-[#2a2a4a]"
+                        vocalWaveformEnabled ? "bg-[var(--accent)] text-white" : "bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--bg-card)]"
                       }`}
                     >
                       {vocalWaveformEnabled ? "显示原唱波形" : "隐藏原唱波形"}
                     </button>
                     <div className="flex items-center gap-3">
-                      <span className="text-xs text-[#71717a] w-10 text-right font-mono">
+                      <span className="text-xs text-[var(--text-muted)] w-10 text-right font-mono">
                         {formatTime(currentTime)}
                       </span>
                       <div
-                        className="flex-1 h-2 bg-[#2a2a4a] rounded-full cursor-pointer"
+                        className="flex-1 h-2 bg-[var(--bg-tertiary)] rounded-full cursor-pointer"
                         onClick={(e) => {
                           const rect = e.currentTarget.getBoundingClientRect();
                           const pct = (e.clientX - rect.left) / rect.width;
@@ -1700,11 +1762,11 @@ function App() {
                         }}
                       >
                         <div
-                          className="h-full bg-gradient-to-r from-[#6366f1] to-[#a855f7] rounded-full transition-all"
-                          style={{ width: `${currentSong.duration > 0 ? (currentTime / currentSong.duration) * 100 : 0}%` }}
+                          className="h-full rounded-full transition-all"
+                          style={{ width: `${currentSong.duration > 0 ? (currentTime / currentSong.duration) * 100 : 0}%`, background: "var(--accent)" }}
                         />
                       </div>
-                      <span className="text-xs text-[#71717a] w-10 font-mono">
+                      <span className="text-xs text-[var(--text-muted)] w-10 font-mono">
                         {formatTime(currentSong.duration)}
                       </span>
                     </div>
@@ -1714,7 +1776,7 @@ function App() {
 
                   {/* Controls Row - centered with enforced separation */}
                   <div className="flex flex-wrap items-center justify-center gap-3">
-                    <button onClick={handlePrev} className="p-2 hover:bg-white/10 rounded-full transition-colors text-white/70 hover:text-white">
+                    <button onClick={handlePrev} className="p-2 hover:bg-[var(--bg-card)] rounded-full transition-colors text-[var(--text-secondary)] hover:text-[var(--text-primary)]">
                       <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
                         <path d="M6 6h2v12H6V6zm3.5 6l8.5 6V6l-8.5 6z"/>
                       </svg>
@@ -1733,7 +1795,7 @@ function App() {
                         </svg>
                       )}
                     </button>
-                    <button onClick={handleNext} className="p-2 hover:bg-white/10 rounded-full transition-colors text-white/70 hover:text-white">
+                    <button onClick={handleNext} className="p-2 hover:bg-[var(--bg-card)] rounded-full transition-colors text-[var(--text-secondary)] hover:text-[var(--text-primary)]">
                       <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
                         <path d="M6 18l8.5-6L6 6v12zm2-8.14L11.03 12 8 14.14V9.86zM16 6h2v12h-2V6z"/>
                       </svg>
@@ -1741,7 +1803,7 @@ function App() {
                     <button
                       onClick={() => handleModeChange("original")}
                       className={`ml-3 h-9 w-[96px] rounded-full text-sm font-semibold leading-none transition-all ${
-                        playbackMode === "original" ? "bg-[#6366f1] text-white" : "bg-[#1e1e1e] text-[#a1a1aa] hover:bg-[#2a2a4a]"
+                        playbackMode === "original" ? "bg-[var(--accent)] text-white" : "bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--bg-card)]"
                       }`}
                     >
                       原唱
@@ -1749,7 +1811,7 @@ function App() {
                     <button
                       onClick={() => handleModeChange("instrumental")}
                       className={`h-9 w-[96px] rounded-full text-sm font-semibold leading-none transition-all ${
-                        playbackMode === "instrumental" ? "bg-[#6366f1] text-white" : "bg-[#1e1e1e] text-[#a1a1aa] hover:bg-[#2a2a4a]"
+                        playbackMode === "instrumental" ? "bg-[var(--accent)] text-white" : "bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--bg-card)]"
                       }`}
                     >
                       伴奏
@@ -1757,13 +1819,13 @@ function App() {
                     <button
                       onClick={() => handleModeChange("vocals")}
                       className={`h-9 w-[96px] rounded-full text-sm font-semibold leading-none transition-all ${
-                        playbackMode === "vocals" ? "bg-[#22c55e] text-white" : "bg-[#1e1e1e] text-[#a1a1aa] hover:bg-[#2a2a4a]"
+                        playbackMode === "vocals" ? "bg-[#22c55e] text-white" : "bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--bg-card)]"
                       }`}
                     >
                       人声
                     </button>
                     <div className="flex items-center gap-2 ml-3">
-                      <button onClick={() => handleVolumeChange(volume > 0 ? 0 : 80)} className="p-1.5 hover:bg-white/10 rounded-full transition-colors text-white/70 hover:text-white">
+                      <button onClick={() => handleVolumeChange(volume > 0 ? 0 : 80)} className="p-1.5 hover:bg-[var(--bg-card)] rounded-full transition-colors text-[var(--text-secondary)] hover:text-[var(--text-primary)]">
                         {volume > 0 ? (
                           <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                             <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>
@@ -1775,7 +1837,7 @@ function App() {
                         )}
                       </button>
                       <div
-                        className="w-24 h-2 bg-[#2a2a4a] rounded-full cursor-pointer"
+                        className="w-24 h-2 bg-[var(--bg-tertiary)] rounded-full cursor-pointer"
                         onClick={(event) => {
                           const rect = event.currentTarget.getBoundingClientRect();
                           const pct = (event.clientX - rect.left) / rect.width;
@@ -1783,17 +1845,17 @@ function App() {
                           handleVolumeChange(next);
                         }}
                       >
-                        <div className="h-full bg-[#6366f1] rounded-full transition-all" style={{ width: `${volume}%` }} />
+                        <div className="h-full bg-[var(--accent)] rounded-full transition-all" style={{ width: `${volume}%` }} />
                       </div>
                     </div>
                   </div>
                 </div>
               </div>
             ) : (
-              <div className="h-full flex flex-col items-center justify-center text-[#71717a]">
+              <div className="h-full flex flex-col items-center justify-center text-[var(--text-muted)]">
                 <div className="text-4xl mb-4">🎤</div>
                 <div className="text-sm">从左侧列表选择歌曲</div>
-                <div className="text-xs text-[#3f3f46] mt-2">使用右上“导入歌曲”按钮添加音乐</div>
+                <div className="text-xs text-[var(--text-muted)] mt-2">使用右上“导入歌曲”按钮添加音乐</div>
               </div>
             )}
           </div>
@@ -1806,21 +1868,21 @@ function App() {
             className="absolute inset-0 bg-black/55 backdrop-blur-[2px]"
             onClick={() => setFileStorageSettingsOpen(false)}
           />
-          <div data-debug-id="preferences-modal" className="relative flex h-[78vh] w-full max-w-6xl overflow-hidden rounded-[24px] border border-white/[0.10] bg-[rgba(18,18,20,0.88)] shadow-[0_20px_60px_rgba(0,0,0,0.45)] backdrop-blur-xl">
+          <div data-debug-id="preferences-modal" className="theme-aware-surface relative flex h-[78vh] w-full max-w-6xl overflow-hidden rounded-[24px] border border-[var(--border)] bg-[var(--bg-secondary)] shadow-[0_20px_60px_rgba(0,0,0,0.35)] backdrop-blur-xl">
             <button
               type="button"
-              className="absolute right-6 top-5 z-10 rounded-[10px] px-[10px] py-[6px] text-sm font-medium text-[#d4d4d8] transition-colors hover:bg-white/[0.06]"
+              className="absolute right-6 top-5 z-10 rounded-[10px] px-[10px] py-[6px] text-sm font-medium text-[var(--text-secondary)] transition-colors hover:bg-white/[0.06]"
               onClick={() => setFileStorageSettingsOpen(false)}
             >
               关闭
             </button>
             <aside
               data-debug-id="settings-sidebar"
-              className="settings-sidebar flex w-[280px] min-w-[260px] shrink-0 flex-col box-border border-r border-white/[0.06] bg-white/[0.025] pl-[32px] pr-[20px] pt-[28px] pb-[24px]"
+              className="settings-sidebar theme-subtle-surface flex w-[280px] min-w-[260px] shrink-0 flex-col box-border border-r border-[var(--border)] bg-white/[0.025] pl-[32px] pr-[20px] pt-[28px] pb-[24px]"
               style={{ width: 280, flexShrink: 0, paddingTop: 28, paddingRight: 20, paddingBottom: 24, paddingLeft: 32, boxSizing: "border-box" }}
             >
               <div className="settings-sidebar-header">
-                <div className="settings-sidebar-title text-[18px] font-bold leading-[1.25] tracking-tight text-[#f5f5f5]">偏好设置</div>
+                <div className="settings-sidebar-title text-[18px] font-bold leading-[1.25] tracking-tight text-[var(--text-primary)]">偏好设置</div>
               </div>
               <div aria-hidden="true" className="h-[12px]" />
               <div className="settings-sidebar-nav flex flex-col gap-2">
@@ -1828,7 +1890,8 @@ function App() {
                   ["依赖与模型", "runtime", "启动环境与模型状态"],
                   ["声音输出源", "audioOutput", "音频播放设备选择"],
                   ["自定义路径", "paths", "文件归档位置"],
-                ] as Array<[string, typeof settingsPane, string]>).map(([label, pane, hint]) => {
+                  ["外观色彩", "appearance", "界面配色与阅读对比"],
+                ] as Array<[string, SettingsPane, string]>).map(([label, pane, hint]) => {
                   const active = settingsPane === pane;
                   return (
                     <button
@@ -1836,11 +1899,11 @@ function App() {
                       type="button"
                       onClick={() => setSettingsPane(pane)}
                       className={`settings-nav-item flex w-full flex-col items-start box-border rounded-[16px] px-[14px] py-[12px] text-left transition-colors ${
-                        active ? "bg-white/[0.08] text-[#fafafa]" : "text-[#d4d4d8] hover:bg-white/[0.05]"
+                        active ? "bg-[var(--bg-card)] text-[var(--text-primary)]" : "text-[var(--text-secondary)] hover:bg-[var(--bg-card)]"
                       }`}
                     >
                       <span className="text-[15px] font-semibold leading-[1.25] tracking-tight">{label}</span>
-                      <span className="mt-[4px] text-[12px] leading-[1.35] text-[#8a8a94]">{hint}</span>
+                      <span className="mt-[4px] text-[12px] leading-[1.35] text-[var(--text-muted)]">{hint}</span>
                     </button>
                   );
                 })}
@@ -1855,21 +1918,29 @@ function App() {
               >
                 <div data-debug-id="settings-main-inner" className="settings-main-inner flex w-full max-w-[1040px] flex-col box-border">
                   <div className="settings-page-header mb-[28px] max-w-[760px]">
-                    <div data-debug-id="settings-page-title" className="settings-page-title text-[30px] font-[750] leading-[1.15] tracking-tight text-[#f5f5f5]">
-                      {settingsPane === "runtime" ? "依赖与模型" : settingsPane === "audioOutput" ? "声音输出源" : "自定义路径"}
+                    <div data-debug-id="settings-page-title" className="settings-page-title text-[30px] font-[750] leading-[1.15] tracking-tight text-[var(--text-primary)]">
+                      {settingsPane === "runtime"
+                        ? "依赖与模型"
+                        : settingsPane === "audioOutput"
+                          ? "声音输出源"
+                          : settingsPane === "appearance"
+                            ? "外观色彩"
+                            : "自定义路径"}
                     </div>
-                    <div className="settings-page-description mt-2 text-[14px] leading-6 text-white/55">
+                    <div className="settings-page-description mt-2 text-[14px] leading-6 text-[var(--text-secondary)]">
                       {settingsPane === "runtime"
                         ? "启动时会做最小环境检测，核心依赖异常时会以颜色提示。"
                         : settingsPane === "audioOutput"
                           ? "选择音频播放的输出设备，切换后立即生效。"
-                          : "伴奏、人声、歌词会自动归档到指定目录，保存后可随时迁移历史文件。"}
+                          : settingsPane === "appearance"
+                            ? "选择适合当前环境的配色方案，所有方案都保持正文与控件的可读对比度。"
+                            : "伴奏、人声、歌词会自动归档到指定目录，保存后可随时迁移历史文件。"}
                     </div>
                   </div>
 
                   {settingsPane === "paths" ? (
                     !fileStorageSettings ? (
-                      <div className="path-card rounded-[18px] border border-white/[0.08] bg-white/[0.035] px-[24px] py-[22px] text-sm text-[#a1a1aa]">
+                      <div className="path-card rounded-[18px] border border-[var(--border)] bg-[var(--bg-card)] px-[24px] py-[22px] text-sm text-[var(--text-secondary)]">
                         正在加载文件管理设置...
                       </div>
                     ) : (
@@ -1881,20 +1952,20 @@ function App() {
                         ] as Array<[string, keyof FileStorageSettings, string]>).map(([label, field, hint]) => (
                           <div
                             key={field}
-                            className="path-card rounded-[18px] border border-white/[0.08] bg-white/[0.035] px-[24px] py-[22px] transition-colors hover:bg-white/[0.05]"
+                            className="path-card rounded-[18px] border border-[var(--border)] bg-[var(--bg-card)] px-[24px] py-[22px] transition-colors"
                           >
                             <div className="path-card-header mb-[18px] flex items-start justify-between gap-5">
                               <div className="flex min-w-0 items-start gap-4">
                                 <div className="min-w-0">
-                                  <div className="path-card-title text-[16px] font-semibold leading-[1.3] tracking-tight text-[#f5f5f5]">
+                                  <div className="path-card-title text-[16px] font-semibold leading-[1.3] tracking-tight text-[var(--text-primary)]">
                                     {label}
                                   </div>
-                                  <div className="path-card-description mt-[5px] text-[13px] leading-[1.4] text-white/52">{hint}</div>
+                                  <div className="path-card-description mt-[5px] text-[13px] leading-[1.4] text-[var(--text-secondary)]">{hint}</div>
                                 </div>
                               </div>
                               <button
                                 type="button"
-                                className="path-card-action inline-flex h-[30px] shrink-0 items-center justify-center rounded-full bg-white/[0.05] px-[14px] text-xs font-medium whitespace-nowrap text-[#d4d4d8] transition-colors hover:bg-white/[0.08]"
+                                className="path-card-action inline-flex h-[30px] shrink-0 items-center justify-center rounded-full bg-[var(--bg-tertiary)] px-[14px] text-xs font-medium whitespace-nowrap text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-card)]"
                                 onClick={() => void handleChooseStorageFolder(field)}
                                 disabled={fileStorageSettingsSaving}
                               >
@@ -1910,13 +1981,13 @@ function App() {
                                 )
                               }
                               placeholder="留空则恢复默认目录"
-                              className="path-input mt-0 h-[54px] w-full rounded-[16px] border border-white/[0.10] bg-white/[0.04] px-[18px] text-sm text-[#fafafa] outline-none transition-colors placeholder:text-[#52525b] focus:border-[#818cf8]"
+                              className="path-input mt-0 h-[54px] w-full rounded-[16px] border border-[var(--border)] bg-[var(--bg-secondary)] px-[18px] text-sm text-[var(--text-primary)] outline-none transition-colors placeholder:text-[var(--text-muted)] focus:border-[var(--accent)]"
                             />
                           </div>
                         ))}
 
                         {fileStorageSettingsMessage && (
-                          <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] px-4 py-3 text-sm text-[#d4d4d8]">
+                          <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] px-4 py-3 text-sm text-[var(--text-secondary)]">
                             {fileStorageSettingsMessage}
                           </div>
                         )}
@@ -1924,7 +1995,7 @@ function App() {
                         <div className="settings-actions mt-[28px] flex items-center justify-between gap-4">
                           <button
                             type="button"
-                            className="inline-flex min-w-[92px] items-center justify-center whitespace-nowrap rounded-full px-6 py-2.5 text-sm font-medium text-[#d4d4d8] transition-colors hover:bg-white/[0.06]"
+                            className="inline-flex min-w-[92px] items-center justify-center whitespace-nowrap rounded-full px-6 py-2.5 text-sm font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-card)]"
                             onClick={handleResetStorageSettings}
                             disabled={fileStorageSettingsSaving || !fileStorageSettings}
                           >
@@ -1933,14 +2004,14 @@ function App() {
                           <div className="settings-actions-right flex items-center gap-[14px]">
                             <button
                               type="button"
-                              className="inline-flex min-w-[92px] items-center justify-center whitespace-nowrap rounded-full px-6 py-2.5 text-sm font-medium text-[#d4d4d8] transition-colors hover:bg-white/[0.06]"
+                              className="inline-flex min-w-[92px] items-center justify-center whitespace-nowrap rounded-full px-6 py-2.5 text-sm font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-card)]"
                               onClick={() => setFileStorageSettingsOpen(false)}
                             >
                               取消
                             </button>
                             <button
                               type="button"
-                              className="inline-flex min-w-[112px] items-center justify-center whitespace-nowrap rounded-full bg-[#6366f1] px-6 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#5558e3] disabled:cursor-not-allowed disabled:opacity-60"
+                              className="inline-flex min-w-[112px] items-center justify-center whitespace-nowrap rounded-full bg-[var(--accent)] px-6 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[var(--accent-hover)] disabled:cursor-not-allowed disabled:opacity-60"
                               onClick={() => void handleSaveStorageSettings()}
                               disabled={fileStorageSettingsSaving || !fileStorageSettings}
                             >
@@ -1952,17 +2023,17 @@ function App() {
                     )
                   ) : settingsPane === "audioOutput" ? (
                     <div className="flex w-full flex-col gap-[20px]">
-                      <div className="rounded-[18px] border border-white/[0.08] bg-white/[0.035] px-[24px] py-[22px]">
+                      <div className="rounded-[18px] border border-[var(--border)] bg-[var(--bg-card)] px-[24px] py-[22px]">
                         <div className="flex items-center justify-between gap-4">
                           <div>
-                            <div className="text-[16px] font-semibold leading-[1.3] tracking-tight text-[#f5f5f5]">声音输出源</div>
-                            <div className="mt-[5px] text-[13px] leading-[1.4] text-white/52">
+                            <div className="text-[16px] font-semibold leading-[1.3] tracking-tight text-[var(--text-primary)]">声音输出源</div>
+                            <div className="mt-[5px] text-[13px] leading-[1.4] text-[var(--text-secondary)]">
                               选择音频播放的输出设备。需要浏览器授予音频设备权限。
                             </div>
                           </div>
                           <button
                             type="button"
-                            className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-white/[0.10] px-3 py-1.5 text-[12px] font-medium text-[#d4d4d8] transition-colors hover:bg-white/[0.06]"
+                            className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--border)] px-3 py-1.5 text-[12px] font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-tertiary)]"
                             onClick={() => void refreshAudioOutputDevices()}
                           >
                             刷新设备
@@ -1972,18 +2043,18 @@ function App() {
                           <select
                             value={audioOutputDeviceId}
                             onChange={(e) => setAudioOutputDeviceId(e.target.value)}
-                            style={{ backgroundColor: 'rgba(255,255,255,0.05)', color: '#f5f5f5' }}
-                            className="w-full max-w-[420px] rounded-[12px] border border-white/[0.10] px-4 py-2.5 text-[14px] outline-none transition-colors focus:border-[#6366f1]/60"
+                            style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
+                            className="w-full max-w-[420px] rounded-[12px] border border-[var(--border)] px-4 py-2.5 text-[14px] outline-none transition-colors focus:border-[var(--accent)]"
                           >
-                            <option value="default" style={{ backgroundColor: '#1a1a2e', color: '#f5f5f5' }}>系统默认</option>
+                            <option value="default" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>系统默认</option>
                             {audioOutputDevices.map((d) => (
-                              <option key={d.deviceId} value={d.deviceId} style={{ backgroundColor: '#1a1a2e', color: '#f5f5f5' }}>
+                              <option key={d.deviceId} value={d.deviceId} style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>
                                 {d.label}
                               </option>
                             ))}
                           </select>
                           {audioOutputDeviceId !== "default" && (
-                            <div className="mt-2 text-[12px] text-white/40">
+                            <div className="mt-2 text-[12px] text-[var(--text-muted)]">
                               当前输出：{audioOutputDevices.find((d) => d.deviceId === audioOutputDeviceId)?.label ?? audioOutputDeviceId}
                             </div>
                           )}
@@ -1995,13 +2066,68 @@ function App() {
                         </div>
                       </div>
                     </div>
+                  ) : settingsPane === "appearance" ? (
+                    <div className="grid w-full gap-4 md:grid-cols-2">
+                      {COLOR_THEMES.map((theme) => {
+                        const active = colorTheme === theme.id;
+                        return (
+                          <button
+                            key={theme.id}
+                            type="button"
+                            onClick={() => setColorTheme(theme.id)}
+                            className={`group flex min-h-[140px] flex-col items-start rounded-[18px] border px-5 py-4 text-left transition-colors ${
+                              active
+                                ? "border-[var(--accent)] bg-[var(--bg-card)]"
+                                : "border-[var(--border)] bg-[var(--bg-secondary)] hover:bg-[var(--bg-card)]"
+                            }`}
+                          >
+                            <div className="flex w-full items-start justify-between gap-4">
+                              <div className="flex min-w-0 items-center gap-3">
+                                <span
+                                  className="theme-swatch h-11 w-11 shrink-0 rounded-[12px] border border-white/10"
+                                  style={{
+                                    "--theme-bg": theme.bg,
+                                    "--theme-card": theme.card,
+                                  } as CSSProperties & Record<string, string>}
+                                />
+                                <div className="min-w-0">
+                                  <div className="text-[15px] font-semibold leading-[1.3] text-[var(--text-primary)]">
+                                    {theme.name}
+                                  </div>
+                                  <div className="mt-1 text-[12px] leading-5 text-[var(--text-muted)]">
+                                    {theme.description}
+                                  </div>
+                                </div>
+                              </div>
+                              <span
+                                className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${
+                                  active ? "bg-[var(--accent)]" : "bg-white/20"
+                                }`}
+                              />
+                            </div>
+                            <div className="mt-4 flex w-full items-center gap-2">
+                              {[theme.bg, theme.card, theme.accent, theme.text].map((color) => (
+                                <span
+                                  key={color}
+                                  className="h-7 flex-1 rounded-[8px] border border-white/10"
+                                  style={{ backgroundColor: color }}
+                                />
+                              ))}
+                            </div>
+                            <div className="mt-3 text-[12px] leading-5 text-[var(--text-secondary)]">
+                              示例文字：歌词编辑、依赖状态与按钮文本保持清晰可读。
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
                   ) : (
                     <div className="flex w-full flex-col gap-[20px]">
-                      <div data-debug-id="env-summary-card" className="env-summary-card rounded-[18px] border border-white/[0.08] bg-white/[0.04] p-[22px] shadow-[0_1px_0_rgba(255,255,255,0.03)_inset]">
+                      <div data-debug-id="env-summary-card" className="env-summary-card rounded-[18px] border border-[var(--border)] bg-[var(--bg-card)] p-[22px] shadow-[0_1px_0_rgba(255,255,255,0.03)_inset]">
                         <div className="flex items-start justify-between gap-5">
                           <div className="min-w-0 max-w-[620px]">
-                            <div className="text-[16px] font-semibold leading-[1.3] tracking-tight text-[#f5f5f5]">启动环境检测</div>
-                            <div className="mt-[5px] text-[13px] leading-[1.4] text-white/52">
+                            <div className="text-[16px] font-semibold leading-[1.3] tracking-tight text-[var(--text-primary)]">启动环境检测</div>
+                            <div className="mt-[5px] text-[13px] leading-[1.4] text-[var(--text-secondary)]">
                               启动后自动检测最小运行条件，核心依赖异常会标红或标黄。
                             </div>
                           </div>
@@ -2026,42 +2152,42 @@ function App() {
                             <span>{runtimeHealth?.label ?? "检测中..."}</span>
                           </div>
                         </div>
-                        <div className="mt-4 text-[14px] leading-6 text-[#e5e7eb]">
+                        <div className="mt-4 text-[14px] leading-6 text-[var(--text-secondary)]">
                           {bootstrapStatus?.detail ?? runtimeHealth?.detail ?? "正在获取环境状态..."}
                         </div>
-                        <div className="mt-4 grid gap-2 rounded-2xl border border-white/[0.06] bg-black/20 p-3 text-[12px] leading-5 text-[#d4d4d8] sm:grid-cols-2 lg:grid-cols-3">
+                        <div className="mt-4 grid gap-2 rounded-2xl border border-[var(--border)] bg-[var(--bg-secondary)] p-3 text-[12px] leading-5 text-[var(--text-secondary)] sm:grid-cols-2 lg:grid-cols-3">
                           <div className="flex items-center justify-between gap-3">
-                            <span className="text-[#8f8f99]">NVIDIA GPU</span>
-                            <span className="font-medium text-[#f5f5f5]">{runtimeHasNvidiaGpu ? "已检测" : "未检测"}</span>
+                            <span className="text-[var(--text-muted)]">NVIDIA GPU</span>
+                            <span className="font-medium text-[var(--text-primary)]">{runtimeHasNvidiaGpu ? "已检测" : "未检测"}</span>
                           </div>
                           <div className="flex items-center justify-between gap-3">
-                            <span className="text-[#8f8f99]">Torch 版本</span>
-                            <span className="font-medium text-[#f5f5f5]">{runtimeTorchVersion ?? "未安装"}</span>
+                            <span className="text-[var(--text-muted)]">Torch 版本</span>
+                            <span className="font-medium text-[var(--text-primary)]">{runtimeTorchVersion ?? "未安装"}</span>
                           </div>
                           <div className="flex items-center justify-between gap-3">
-                            <span className="text-[#8f8f99]">Torch CUDA</span>
-                            <span className="font-medium text-[#f5f5f5]">{runtimeTorchCudaAvailable ? "可用" : "不可用"}</span>
+                            <span className="text-[var(--text-muted)]">Torch CUDA</span>
+                            <span className="font-medium text-[var(--text-primary)]">{runtimeTorchCudaAvailable ? "可用" : "不可用"}</span>
                           </div>
                           <div className="flex items-center justify-between gap-3">
-                            <span className="text-[#8f8f99]">CUDA 版本</span>
-                            <span className="font-medium text-[#f5f5f5]">{runtimeTorchCudaVersion ?? "无"}</span>
+                            <span className="text-[var(--text-muted)]">CUDA 版本</span>
+                            <span className="font-medium text-[var(--text-primary)]">{runtimeTorchCudaVersion ?? "无"}</span>
                           </div>
                           <div className="flex items-center justify-between gap-3">
-                            <span className="text-[#8f8f99]">运行设备</span>
-                            <span className="font-medium text-[#f5f5f5]">{runtimeSelectedDevice}</span>
+                            <span className="text-[var(--text-muted)]">运行设备</span>
+                            <span className="font-medium text-[var(--text-primary)]">{runtimeSelectedDevice}</span>
                           </div>
                           <div className="flex items-center justify-between gap-3">
-                            <span className="text-[#8f8f99]">GPU 设备名</span>
-                            <span className="font-medium text-[#f5f5f5]">{runtimeTorchCudaDeviceName ?? "无"}</span>
+                            <span className="text-[var(--text-muted)]">GPU 设备名</span>
+                            <span className="font-medium text-[var(--text-primary)]">{runtimeTorchCudaDeviceName ?? "无"}</span>
                           </div>
                         </div>
                         <div className="mt-4 flex items-center justify-between gap-4">
-                          <div className="text-[12px] leading-5 text-[#9ca3af]">
+                          <div className="text-[12px] leading-5 text-[var(--text-muted)]">
                             最小壳模式下将按需安装 Python 运行时与模型（支持后续镜像源扩展）。
                           </div>
                           <button
                             type="button"
-                            className="inline-flex min-w-[128px] items-center justify-center rounded-full bg-[#6366f1] px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#5558e3] disabled:cursor-not-allowed disabled:opacity-60"
+                            className="inline-flex min-w-[128px] items-center justify-center rounded-full bg-[var(--accent)] px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-[var(--accent-hover)] disabled:cursor-not-allowed disabled:opacity-60"
                             onClick={() => void handleBootstrapInstall()}
                             disabled={bootstrapInstalling}
                           >
@@ -2069,7 +2195,7 @@ function App() {
                           </button>
                         </div>
                         {bootstrapMessage && (
-                          <div className="mt-2 text-[12px] text-[#a5b4fc]">{bootstrapMessage}</div>
+                          <div className="mt-2 text-[12px] text-[var(--accent)]">{bootstrapMessage}</div>
                         )}
                       </div>
 
@@ -2078,7 +2204,7 @@ function App() {
                           <div
                             key={check.name}
                             data-debug-id="dependency-card"
-                            className="dependency-card relative flex h-[60px] min-h-[60px] max-h-[64px] items-center gap-[14px] rounded-[16px] border border-white/[0.08] bg-white/[0.035] px-[22px] transition-colors hover:bg-white/[0.055]"
+                            className="dependency-card relative flex h-[60px] min-h-[60px] max-h-[64px] items-center gap-[14px] rounded-[16px] border border-[var(--border)] bg-[var(--bg-card)] px-[22px] transition-colors"
                             style={{ height: 60, minHeight: 60, maxHeight: 64, paddingLeft: 22, paddingRight: 22, gap: 14 }}
                           >
                             <span
@@ -2095,11 +2221,11 @@ function App() {
                               style={{ position: "static", width: 8, height: 8, marginLeft: 0, marginRight: 0, transform: "none", flex: "0 0 8px" }}
                             />
                             <div className="dependency-text flex min-w-0 flex-[0_1_auto] flex-col gap-[3px]">
-                              <div className="dependency-title min-w-0 text-[15px] font-semibold leading-[1.25] tracking-tight text-[#f5f5f5]">
+                              <div className="dependency-title min-w-0 text-[15px] font-semibold leading-[1.25] tracking-tight text-[var(--text-primary)]">
                                 {check.name}
                               </div>
                               {check.detail && (
-                                <div className="dependency-description min-w-0 text-[12px] leading-[1.3] text-[#8f8f99]">{check.detail}</div>
+                                <div className="dependency-description min-w-0 text-[12px] leading-[1.3] text-[var(--text-muted)]">{check.detail}</div>
                               )}
                             </div>
                             <div className="dependency-spacer min-w-[16px] flex-[1_1_auto]" />
@@ -2121,7 +2247,7 @@ function App() {
                           </div>
                         ))}
                         {(!runtimeHealth?.checks || runtimeHealth.checks.length === 0) && (
-                          <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] px-4 py-3 text-sm text-[#a1a1aa]">
+                          <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] px-4 py-3 text-sm text-[var(--text-secondary)]">
                             暂无检测结果。
                           </div>
                         )}
@@ -2141,15 +2267,15 @@ function App() {
             className="absolute inset-0 bg-black/55 backdrop-blur-[2px]"
             onClick={closeLyricsCandidateModal}
           />
-          <div className="relative w-full max-w-3xl rounded-3xl border border-white/[0.08] bg-[#171717] shadow-2xl shadow-black/50 p-7">
+          <div className="theme-aware-surface relative w-full max-w-3xl rounded-3xl border border-[var(--border)] bg-[var(--bg-secondary)] p-7 shadow-2xl shadow-black/30">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <div className="text-base font-semibold text-[#fafafa]">选择歌词候选</div>
-                <div className="mt-2 text-sm text-[#8a8a94]">{lyricsCandidateSong.name}</div>
+                <div className="text-base font-semibold text-[var(--text-primary)]">选择歌词候选</div>
+                <div className="mt-2 text-sm text-[var(--text-muted)]">{lyricsCandidateSong.name}</div>
               </div>
                 <button
                   type="button"
-                  className="inline-flex min-w-[92px] items-center justify-center whitespace-nowrap rounded-full px-6 py-2.5 text-sm font-medium text-[#d4d4d8] hover:bg-white/[0.06]"
+                  className="inline-flex min-w-[92px] items-center justify-center whitespace-nowrap rounded-full px-6 py-2.5 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-card)]"
                   onClick={closeLyricsCandidateModal}
                 >
                   关闭
@@ -2167,11 +2293,11 @@ function App() {
                   void handleSearchLyrics(lyricsCandidateSong, lyricsSearchQuery);
                 }}
                 placeholder="输入关键词，例如歌手名、歌名、专辑名"
-                className="h-11 flex-1 rounded-2xl border border-white/[0.10] bg-white/[0.04] px-4 text-sm text-[#fafafa] outline-none transition-colors placeholder:text-[#52525b] focus:border-[#818cf8]"
+                className="h-11 flex-1 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] px-4 text-sm text-[var(--text-primary)] outline-none transition-colors placeholder:text-[var(--text-muted)] focus:border-[var(--accent)]"
               />
               <button
                 type="button"
-                className="inline-flex h-11 min-w-[96px] items-center justify-center whitespace-nowrap rounded-full bg-[#6366f1] px-5 text-sm font-semibold text-white transition-colors hover:bg-[#5558e3] disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex h-11 min-w-[96px] items-center justify-center whitespace-nowrap rounded-full bg-[var(--accent)] px-5 text-sm font-semibold text-white transition-colors hover:bg-[var(--accent-hover)] disabled:cursor-not-allowed disabled:opacity-60"
                 disabled={lyricsCandidateLoading || !lyricsCandidateSong || !lyricsSearchQuery.trim()}
                 onClick={() => {
                   if (lyricsCandidateSong) {
@@ -2184,13 +2310,13 @@ function App() {
             </div>
 
             {lyricsCandidateError && (
-              <div className="mt-4 rounded-2xl border border-white/[0.08] bg-white/[0.03] px-4 py-3 text-sm text-[#fca5a5]">
+              <div className="mt-4 rounded-2xl border border-rose-400/25 bg-rose-400/[0.08] px-4 py-3 text-sm text-[#ef4444]">
                 {lyricsCandidateError}
               </div>
             )}
 
             {lyricsCandidateLoading && !lyricsCandidates && !lyricsCandidateError && (
-              <div className="mt-4 rounded-2xl border border-white/[0.08] bg-white/[0.03] px-4 py-3 text-sm text-[#a1a1aa]">
+              <div className="mt-4 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] px-4 py-3 text-sm text-[var(--text-secondary)]">
                 搜索中...
               </div>
             )}
@@ -2202,29 +2328,29 @@ function App() {
                     key={candidate.id}
                     type="button"
                     onClick={() => void handleApplyLyricsCandidate(candidate)}
-                    className="w-full rounded-2xl border border-white/[0.08] bg-white/[0.03] px-4 py-4 text-left transition-colors hover:bg-white/[0.06]"
+                    className="w-full rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] px-4 py-4 text-left transition-colors hover:bg-[var(--bg-tertiary)]"
                   >
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
-                        <div className="truncate text-sm font-semibold text-[#fafafa]">{candidate.title}</div>
-                        <div className="mt-1 text-xs text-[#a1a1aa]">
+                        <div className="truncate text-sm font-semibold text-[var(--text-primary)]">{candidate.title}</div>
+                        <div className="mt-1 text-xs text-[var(--text-secondary)]">
                           {candidate.artist || "未知歌手"}
                           {candidate.album ? ` · ${candidate.album}` : ""}
                         </div>
                       </div>
                       <div className="flex shrink-0 items-center gap-2">
-                        <span className="rounded-full bg-[#1e1e1e] px-3 py-1 text-xs text-[#d4d4d8]">
+                        <span className="rounded-full bg-[var(--bg-tertiary)] px-3 py-1 text-xs text-[var(--text-secondary)]">
                           {candidate.sourceLabel}
                         </span>
-                        <span className="rounded-full bg-[#6366f1] px-3 py-1 text-xs font-semibold text-white">
+                        <span className="rounded-full bg-[var(--accent)] px-3 py-1 text-xs font-semibold text-white">
                           {candidate.score}
                         </span>
                       </div>
                     </div>
-                    <div className="mt-3 whitespace-pre-line text-sm leading-6 text-[#d4d4d8]">
+                    <div className="mt-3 whitespace-pre-line text-sm leading-6 text-[var(--text-secondary)]">
                       {candidate.preview || "（无预览）"}
                     </div>
-                    <div className="mt-3 text-xs text-[#71717a]">
+                    <div className="mt-3 text-xs text-[var(--text-muted)]">
                       点击即可采用此候选
                     </div>
                   </button>
@@ -2233,7 +2359,7 @@ function App() {
             )}
 
             {lyricsCandidates && lyricsCandidates.length === 0 && !lyricsCandidateLoading && !lyricsCandidateError && (
-              <div className="mt-4 rounded-2xl border border-white/[0.08] bg-white/[0.03] px-4 py-3 text-sm text-[#a1a1aa]">
+              <div className="mt-4 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] px-4 py-3 text-sm text-[var(--text-secondary)]">
                 没有找到可用的歌词候选，可以换个关键词继续搜索。
               </div>
             )}
@@ -2241,7 +2367,7 @@ function App() {
             <div className="mt-6 flex items-center justify-end">
               <button
                 type="button"
-                className="inline-flex min-w-[92px] items-center justify-center whitespace-nowrap rounded-full px-6 py-2.5 text-sm font-medium text-[#d4d4d8] hover:bg-white/[0.06]"
+                className="inline-flex min-w-[92px] items-center justify-center whitespace-nowrap rounded-full px-6 py-2.5 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-card)]"
                 onClick={closeLyricsCandidateModal}
               >
                 取消
