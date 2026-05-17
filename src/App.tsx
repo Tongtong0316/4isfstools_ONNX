@@ -404,9 +404,14 @@ function App() {
     audio.preload = "auto";
     audio.load();
     audio.volume = 1;
-    void applyAudioOutputDevice(audio);
+    // Apply output device directly on the HTMLAudioElement
+    // (AudioContext may not exist yet, so try setSinkId directly)
+    const deviceId = audioOutputDeviceIdRef.current;
+    if (deviceId && deviceId !== "default" && typeof audio.setSinkId === "function") {
+      void audio.setSinkId(deviceId).catch((e) => console.warn("[audio] setSinkId failed:", e));
+    }
     return audio;
-  }, [applyAudioOutputDevice]);
+  }, []);
 
   const waitForMediaReady = useCallback((audio: HTMLAudioElement, timeoutMs = 1500) => {
     if (audio.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
@@ -518,6 +523,17 @@ function App() {
         await context.resume();
       } catch (e) {
         console.error("Failed to resume audio context:", e);
+      }
+    }
+    // Re-apply audio output device after context resumes
+    // (resuming an AudioContext may reset its output device to default)
+    const deviceId = audioOutputDeviceIdRef.current;
+    const ctxWithSink = context as AudioContext & { setSinkId?: (id: string) => Promise<void> };
+    if (deviceId && deviceId !== "default" && typeof ctxWithSink.setSinkId === "function") {
+      try {
+        await ctxWithSink.setSinkId(deviceId);
+      } catch (e) {
+        console.warn("[audio] setSinkId after resume failed:", e);
       }
     }
   }, []);
@@ -1879,11 +1895,12 @@ function App() {
                           <select
                             value={audioOutputDeviceId}
                             onChange={(e) => setAudioOutputDeviceId(e.target.value)}
-                            className="w-full max-w-[420px] rounded-[12px] border border-white/[0.10] bg-white/[0.05] px-4 py-2.5 text-[14px] text-[#f5f5f5] outline-none transition-colors focus:border-[#6366f1]/60"
+                            style={{ backgroundColor: 'rgba(255,255,255,0.05)', color: '#f5f5f5' }}
+                            className="w-full max-w-[420px] rounded-[12px] border border-white/[0.10] px-4 py-2.5 text-[14px] outline-none transition-colors focus:border-[#6366f1]/60"
                           >
-                            <option value="default">系统默认</option>
+                            <option value="default" style={{ backgroundColor: '#1a1a2e', color: '#f5f5f5' }}>系统默认</option>
                             {audioOutputDevices.map((d) => (
-                              <option key={d.deviceId} value={d.deviceId}>
+                              <option key={d.deviceId} value={d.deviceId} style={{ backgroundColor: '#1a1a2e', color: '#f5f5f5' }}>
                                 {d.label}
                               </option>
                             ))}
