@@ -584,10 +584,7 @@ function App() {
   }, [getRequestedAudioSinkId]);
 
   const ensurePlaybackGraphs = useCallback(async (mode: PlaybackMode, vol: number) => {
-    const canUseAudioGraph = isWindowsRuntime
-      ? await ensureAudioContextRunning(true)
-      : true;
-    if (isWindowsRuntime && !canUseAudioGraph) {
+    if (isWindowsRuntime) {
       destroyTrackGraphs();
       applyModeRouting(vol, mode);
       return false;
@@ -605,9 +602,7 @@ function App() {
       }
     }
     applyModeRouting(vol, mode);
-    if (!isWindowsRuntime) {
-      await ensureAudioContextRunning(false);
-    }
+    await ensureAudioContextRunning(false);
     return true;
   }, [applyModeRouting, createTrackGraph, destroyTrackGraphs, ensureAudioContextRunning, isWindowsRuntime]);
 
