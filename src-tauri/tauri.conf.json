@@ -38,6 +38,7 @@
     "targets": "all",
     "resources": [
       "python/python-standalone.tar.gz",
+      "python_workers/demucs_worker.py",
       "../runtime-manifest.json"
     ],
     "macOS": {

@@ -2287,7 +2287,7 @@ fn format_log_block(title: &str, lines: &[(&str, String)]) -> String {
     out
 }
 
-fn resolve_demucs_worker_path() -> Result<PathBuf, String> {
+fn resolve_demucs_worker_path(app: &AppHandle) -> Result<PathBuf, String> {
     let mut candidates = Vec::new();
 
     if let Ok(path) = std::env::var("MACARON_DEMUCS_WORKER") {
@@ -2305,11 +2305,17 @@ fn resolve_demucs_worker_path() -> Result<PathBuf, String> {
         candidates.push(cwd.join("python_workers/demucs_worker.py"));
     }
 
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        candidates.push(resource_dir.join("python_workers/demucs_worker.py"));
+        candidates.push(resource_dir.join("demucs_worker.py"));
+    }
+
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
             candidates.push(exe_dir.join("python_workers/demucs_worker.py"));
             candidates.push(exe_dir.join("../Resources/python_workers/demucs_worker.py"));
             candidates.push(exe_dir.join("../resources/python_workers/demucs_worker.py"));
+            candidates.push(exe_dir.join("resources/python_workers/demucs_worker.py"));
         }
     }
 
@@ -2322,10 +2328,12 @@ fn resolve_demucs_worker_path() -> Result<PathBuf, String> {
     let attempted = candidates
         .iter()
         .map(|p| p.to_string_lossy().to_string())
+        .enumerate()
+        .map(|(idx, path)| format!("{}. {}", idx + 1, path))
         .collect::<Vec<_>>()
-        .join(" | ");
+        .join("\n");
     Err(format!(
-        "Demucs fixed worker not found. Attempted paths: {}",
+        "无法找到 Demucs fixed worker。Attempted paths:\n{}\n可通过 MACARON_DEMUCS_WORKER 指定 demucs_worker.py 路径。",
         attempted
     ))
 }
@@ -5994,7 +6002,7 @@ print(json.dumps(payload))
             .map(|value| value != "0")
             .unwrap_or(true);
         let separator_path = if use_fixed_demucs_worker {
-            match resolve_demucs_worker_path() {
+            match resolve_demucs_worker_path(&app) {
                 Ok(path) => path,
                 Err(e) => {
                     emit_error_for_job(&app, &song_id, &job_token, "separating", &e);
