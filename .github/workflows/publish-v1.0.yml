@@ -1,0 +1,31 @@
+name: Publish v1.0 Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/publish-v1.0.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish v1.0
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0
+          name: v1.0
+          body: |
+            v1.0 release published from the current macOS-aligned baseline.
+
+            Commit: `${{ github.sha }}`
+          draft: false
+          prerelease: false
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
