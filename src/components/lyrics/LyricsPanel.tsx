@@ -122,7 +122,7 @@ export default function LyricsPanel({ document, currentTime, isPlaying, onSeek, 
 
   if (!document || document.lines.length === 0) {
     return (
-      <div className="text-[#3f3f46] text-base text-center py-8">
+      <div className="px-6 py-8 text-center text-base leading-7 text-[var(--text-muted)]">
         暂无歌词
       </div>
     );
@@ -182,7 +182,7 @@ export default function LyricsPanel({ document, currentTime, isPlaying, onSeek, 
   return (
     <div
       ref={scrollContainerRef}
-      className="flex h-full w-full flex-col items-stretch gap-2 overflow-y-auto overflow-x-hidden px-4 py-4"
+      className="flex h-full w-full flex-col items-stretch gap-2 overflow-y-auto overflow-x-hidden px-6 py-5"
       style={{ maxHeight: "100%" }}
       onWheel={() => {
         if (!isPlaying) return;
@@ -227,12 +227,12 @@ export default function LyricsPanel({ document, currentTime, isPlaying, onSeek, 
           <div
             key={line.id}
             ref={isActive ? activeRef : null}
-            className={`group grid w-full grid-cols-[56px_minmax(0,1fr)_96px] items-center gap-0 rounded-xl px-4 py-2 transition-all duration-300 ${
+            className={`group grid w-full grid-cols-[64px_minmax(0,1fr)_112px] items-center gap-3 rounded-xl px-5 py-3 transition-all duration-300 ${
               isActive
-                ? "bg-white/8 text-white"
+                ? "bg-[var(--selected-bg)] text-[var(--text-primary)] ring-1 ring-[var(--selected-border)]"
                 : isNear
-                ? "text-[#a1a1aa]"
-                : "text-[#52525b]"
+                ? "text-[var(--text-secondary)]"
+                : "text-[var(--text-muted)]"
             }`}
             style={{ opacity: isNear || isActive ? 1 : 0.45 }}
             onClick={() => onSeek(Math.max(0, line.startMs + document.globalOffsetMs))}
@@ -241,19 +241,19 @@ export default function LyricsPanel({ document, currentTime, isPlaying, onSeek, 
               setDraftText(line.text);
             }}
           >
-            <span className="justify-self-start w-14 text-right text-[11px] font-mono text-[#71717a]">
+            <span className="w-16 justify-self-start text-right font-mono text-[11px] text-[var(--text-muted)]">
               {formatTime(line.startMs + document.globalOffsetMs)}
             </span>
-            <div className="relative min-h-[38px] w-full min-w-0 flex justify-center">
+            <div className="relative flex min-h-[42px] w-full min-w-0 justify-center">
               <div
-                className="w-full max-w-[860px] text-center"
+                className="w-full max-w-[860px] min-w-0 text-center"
                 style={{ width: "min(860px, 100%)" }}
               >
                 {isEditing ? (
                   <input
                     autoFocus
                     value={draftText}
-                    className="block w-full rounded-lg border border-[#3f3f46] bg-[#0f0f23] px-3 py-2 text-center text-base text-white outline-none"
+                    className="ui-field block h-11 w-full text-center text-base outline-none"
                     onChange={(event) => setDraftText(event.target.value)}
                     onKeyDown={(event) => {
                       if (event.key === "Enter") saveLine(line, draftText);
@@ -267,18 +267,18 @@ export default function LyricsPanel({ document, currentTime, isPlaying, onSeek, 
                 ) : (
                   <>
                     {upcomingDots ? (
-                      <div className="mb-1 text-[12px] tracking-[0.22em] text-[#8b86ff]">{upcomingDots}</div>
+                      <div className="mb-1 text-[12px] tracking-[0.22em] text-[var(--accent)]">{upcomingDots}</div>
                     ) : null}
-                    <div className={isActive ? "text-xl font-semibold" : "text-base"}>
+                    <div className={`${isActive ? "text-xl font-semibold" : "text-base"} min-w-0 overflow-hidden text-ellipsis leading-[1.55]`}>
                       {line.text || "· · ·"}
                     </div>
                   </>
                 )}
               </div>
             </div>
-            <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+            <div className="flex min-w-0 items-center justify-end gap-2 opacity-0 transition-opacity group-hover:opacity-100">
               <button
-                className="rounded-md bg-white/5 px-2 py-1 text-[11px] text-[#a1a1aa] hover:bg-white/10"
+                className="ui-button h-8 min-h-8 px-3 text-[11px] text-[var(--text-secondary)] hover:bg-[var(--button-hover-bg)]"
                 onClick={(event) => {
                   event.stopPropagation();
                   updateLineTime(line, -100);
@@ -287,7 +287,7 @@ export default function LyricsPanel({ document, currentTime, isPlaying, onSeek, 
                 -100ms
               </button>
               <button
-                className="rounded-md bg-white/5 px-2 py-1 text-[11px] text-[#a1a1aa] hover:bg-white/10"
+                className="ui-button h-8 min-h-8 px-3 text-[11px] text-[var(--text-secondary)] hover:bg-[var(--button-hover-bg)]"
                 onClick={(event) => {
                   event.stopPropagation();
                   updateLineTime(line, 100);

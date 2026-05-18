@@ -49,6 +49,10 @@ const DEFAULT_FOLDER = "未分组";
 type PlaylistViewMode = "cards" | "list";
 
 const iconStroke = "currentColor";
+const SONG_CONTEXT_MENU_WIDTH = 240;
+const FOLDER_CONTEXT_MENU_WIDTH = 240;
+const SONG_CONTEXT_MENU_HEIGHT = 300;
+const FOLDER_CONTEXT_MENU_HEIGHT = 152;
 
 function MusicNoteIcon({ className = "" }: { className?: string }) {
   return (
@@ -110,6 +114,103 @@ function MoreIcon({ className = "" }: { className?: string }) {
       <circle cx="12" cy="12" r="1.6" />
       <circle cx="18" cy="12" r="1.6" />
     </svg>
+  );
+}
+
+function SplitAudioIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M5 7.5h3.2c2.8 0 4.1 2.1 5.5 4.5 1.4 2.4 2.7 4.5 5.3 4.5" stroke={iconStroke} strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M5 16.5h3.2c1.6 0 2.7-.7 3.6-1.8M16.4 7.5H19m0 0-2-2m2 2-2 2M16.4 16.5H19m0 0-2-2m2 2-2 2" stroke={iconStroke} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function FileTextIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M6.5 3.5h7l4 4v13h-11v-17Z" stroke={iconStroke} strokeWidth="1.8" strokeLinejoin="round" />
+      <path d="M13.5 3.5v4h4M8.8 12h6.4M8.8 15.5h6.4" stroke={iconStroke} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function SparklesIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="m12 3 1.5 4.4L18 9l-4.5 1.6L12 15l-1.5-4.4L6 9l4.5-1.6L12 3Z" stroke={iconStroke} strokeWidth="1.7" strokeLinejoin="round" />
+      <path d="m18.5 14 .8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2ZM5.5 14.5l.6 1.6 1.6.6-1.6.6-.6 1.6-.6-1.6-1.6-.6 1.6-.6.6-1.6Z" stroke={iconStroke} strokeWidth="1.5" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function PencilIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="m4.5 16.8-.7 3.4 3.4-.7L18.9 7.8a2.4 2.4 0 0 0-3.4-3.4L4.5 16.8Z" stroke={iconStroke} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="m14.2 5.8 4 4" stroke={iconStroke} strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function FolderInputIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M4 7.2h5l1.7 2h8.8v8.9a2 2 0 0 1-2 2H4.8a2 2 0 0 1-2-2V9.2a2 2 0 0 1 1.2-2Z" stroke={iconStroke} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M9 14h6m0 0-2-2m2 2-2 2" stroke={iconStroke} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function TrashIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M5 7h14M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7m2 0-.7 12.2A2 2 0 0 1 14.3 21H9.7a2 2 0 0 1-2-1.8L7 7" stroke={iconStroke} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M10 11v5M14 11v5" stroke={iconStroke} strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function XIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="m6.5 6.5 11 11M17.5 6.5l-11 11" stroke={iconStroke} strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ChevronToggleIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="m9 6 6 6-6 6" stroke={iconStroke} strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ContextMenuItem({
+  icon,
+  children,
+  destructive = false,
+  onClick,
+  ariaLabel,
+}: {
+  icon: React.ReactNode;
+  children: React.ReactNode;
+  destructive?: boolean;
+  onClick: () => void;
+  ariaLabel?: string;
+}) {
+  return (
+    <button
+      type="button"
+      className={`context-menu-item ${destructive ? "context-menu-item-danger" : ""}`}
+      data-danger={destructive || undefined}
+      aria-label={ariaLabel}
+      onClick={onClick}
+    >
+      <span className="context-menu-icon">{icon}</span>
+      <span className="context-menu-label">{children}</span>
+    </button>
   );
 }
 
@@ -279,17 +380,21 @@ export default function Playlist({
 
   const closeContextMenu = () => setContextMenu(null);
 
-  const clampMenuPosition = (x: number, y: number) => {
-    const menuWidth = 240;
-    const menuHeight = contextMenu?.kind === "folder" ? 180 : 348;
-    const clampedX = Math.min(Math.max(12, x), window.innerWidth - menuWidth - 12);
-    const clampedY = Math.min(Math.max(12, y), window.innerHeight - menuHeight - 12);
+  const clampMenuPosition = (x: number, y: number, kind: ContextMenuState["kind"]) => {
+    const menuWidth = kind === "folder" ? FOLDER_CONTEXT_MENU_WIDTH : SONG_CONTEXT_MENU_WIDTH;
+    const menuHeight = kind === "folder" ? FOLDER_CONTEXT_MENU_HEIGHT : SONG_CONTEXT_MENU_HEIGHT;
+    const viewportPadding = 12;
+    const pointerOffset = 6;
+    const preferredX = x + pointerOffset;
+    const preferredY = y + pointerOffset;
+    const clampedX = Math.min(Math.max(viewportPadding, preferredX), window.innerWidth - menuWidth - viewportPadding);
+    const clampedY = Math.min(Math.max(viewportPadding, preferredY), window.innerHeight - menuHeight - viewportPadding);
     return { x: clampedX, y: clampedY };
   };
 
   const openSongMenu = (e: React.MouseEvent, song: Song) => {
     e.preventDefault();
-    const pos = clampMenuPosition(e.clientX, e.clientY);
+    const pos = clampMenuPosition(e.clientX, e.clientY, "song");
     setContextMenu({ kind: "song", x: pos.x, y: pos.y, song });
   };
 
@@ -297,13 +402,13 @@ export default function Playlist({
     e.preventDefault();
     e.stopPropagation();
     const rect = e.currentTarget.getBoundingClientRect();
-    const pos = clampMenuPosition(rect.right - 8, rect.bottom + 6);
+    const pos = clampMenuPosition(rect.right - 8, rect.bottom + 6, "song");
     setContextMenu({ kind: "song", x: pos.x, y: pos.y, song });
   };
 
   const openFolderMenu = (e: React.MouseEvent, folderName: string) => {
     e.preventDefault();
-    const pos = clampMenuPosition(e.clientX, e.clientY);
+    const pos = clampMenuPosition(e.clientX, e.clientY, "folder");
     setContextMenu({ kind: "folder", x: pos.x, y: pos.y, folderName });
   };
 
@@ -460,7 +565,7 @@ export default function Playlist({
           </span>
         )}
         <div className={viewMode === "list" ? "grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] items-center gap-3" : "min-w-0 flex-1 self-center"}>
-          <div className={`${viewMode === "list" ? "text-[13px]" : "text-[15px]"} min-w-0 truncate font-semibold text-[var(--text-primary)]`}>
+          <div className={`${viewMode === "list" ? "text-[13px]" : "text-[15px]"} ui-text-ellipsis min-w-0 font-semibold text-[var(--text-primary)]`} title={song.name}>
             {song.name}
           </div>
           {viewMode === "list" ? (
@@ -507,17 +612,17 @@ export default function Playlist({
     <div
       className="flex h-full flex-1 flex-col overflow-hidden border bg-[var(--bg-secondary)]"
       style={{
-        borderColor: "color-mix(in srgb, var(--accent) 42%, var(--border))",
+        borderColor: "var(--panel-accent-border)",
         borderRadius: 14,
         background:
           "linear-gradient(180deg, color-mix(in srgb, var(--bg-secondary) 94%, var(--accent)) 0%, var(--bg-secondary) 34%, var(--bg-primary) 100%)",
-        boxShadow: "0 18px 42px rgba(0,0,0,0.18)",
+        boxShadow: "0 0 0 1px var(--panel-inner-border), 0 12px 32px var(--panel-glow)",
       }}
     >
       <div className="border-b border-[var(--border)]" style={{ padding: "16px 16px 10px" }}>
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
-            <span className="shrink-0 text-[22px] font-bold leading-none text-[var(--text-primary)]">播放列表</span>
+            <span className="ui-text-ellipsis shrink text-[22px] font-bold leading-none text-[var(--text-primary)]">播放列表</span>
           </div>
           <div className="flex shrink-0 items-center gap-2 text-sm font-medium text-[var(--text-muted)]">
             <span>{songs.length} 首</span>
@@ -532,7 +637,7 @@ export default function Playlist({
         <div className="flex items-center justify-between" style={{ height: 40, gap: 12, marginTop: 20 }}>
           <button
             type="button"
-            className="inline-flex max-w-[48%] flex-1 items-center justify-center gap-2 border border-[rgba(148,163,184,0.18)] bg-[var(--bg-card)] text-[13px] font-semibold text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-tertiary)]"
+            className="ui-button max-w-[48%] flex-1 border border-[rgba(148,163,184,0.18)] bg-[var(--bg-card)] text-[13px] font-semibold text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-tertiary)]"
             style={{ height: 40, borderRadius: 10, padding: "0 12px" }}
             onClick={openCreateFolderDialog}
           >
@@ -542,7 +647,7 @@ export default function Playlist({
           <button
             type="button"
             onClick={() => setViewMode((mode) => mode === "cards" ? "list" : "cards")}
-            className="inline-flex max-w-[48%] flex-1 items-center justify-center gap-2 border border-[color-mix(in_srgb,var(--accent)_35%,transparent)] bg-[var(--bg-card)] text-[13px] font-semibold text-[var(--accent)] transition-colors hover:bg-[var(--bg-tertiary)]"
+            className="ui-button max-w-[48%] flex-1 border border-[color-mix(in_srgb,var(--accent)_35%,transparent)] bg-[var(--bg-card)] text-[13px] font-semibold text-[var(--accent)] transition-colors hover:bg-[var(--bg-tertiary)]"
             style={{ height: 40, borderRadius: 10, padding: "0 12px" }}
           >
             <GridIcon className="h-4.5 w-4.5 shrink-0" />
@@ -551,14 +656,16 @@ export default function Playlist({
         </div>
       </div>
       <div className="border-b border-[var(--border)]" style={{ padding: "10px 16px 12px" }}>
-        <div className="relative">
-          <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4.5 w-4.5 -translate-y-1/2 text-[#64748b]" />
+        <div className="ui-search">
+          <span className="ui-search-icon">
+            <SearchIcon className="h-4.5 w-4.5" />
+          </span>
           <input
             type="text"
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
             placeholder="搜索歌曲 / 文件夹"
-            className="w-full border border-[rgba(148,163,184,0.18)] bg-[var(--bg-card)] pl-9 pr-3 text-[13px] text-[var(--text-primary)] placeholder:text-[#64748b] outline-none transition-colors focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]"
+            className="ui-field ui-search-input border-[rgba(148,163,184,0.18)] bg-[var(--bg-card)] text-[13px] placeholder:text-[var(--text-muted)] focus:border-[var(--accent)]"
             style={{ height: 40, borderRadius: 10 }}
           />
         </div>
@@ -598,8 +705,8 @@ export default function Playlist({
                   >
                     <div className="flex min-w-0 items-center gap-2.5">
                       <span className="text-[var(--text-muted)]">{isCollapsed ? "▸" : "▾"}</span>
-                      <span className="truncate text-[18px] font-semibold leading-none text-[var(--text-primary)]">{folderName}</span>
-                      <span className="rounded-full bg-[var(--bg-tertiary)] px-2.5 py-0.5 text-xs font-semibold text-[var(--text-secondary)]">{folderSongs.length}</span>
+                      <span className="ui-text-ellipsis truncate text-[18px] font-semibold leading-none text-[var(--text-primary)]" title={folderName}>{folderName}</span>
+                      <span className="ui-chip min-h-7 px-2.5 py-0 text-xs font-semibold text-[var(--text-secondary)]"><span>{folderSongs.length}</span></span>
                     </div>
                     <button
                       className="flex h-7 w-7 items-center justify-center rounded-full text-[18px] text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
@@ -631,123 +738,135 @@ export default function Playlist({
 
       {contextMenu && (
         <>
-          <div className="fixed inset-0 z-40" onClick={closeContextMenu} />
+          <div className="fixed inset-0 z-[80]" onClick={closeContextMenu} />
           <div
-            className="fixed bg-[var(--bg-secondary)] border border-[var(--border)] rounded-lg shadow-xl py-1 z-50 min-w-56"
+            className="context-menu"
             style={{ left: contextMenu.x, top: contextMenu.y }}
           >
             {contextMenu.kind === "song" ? (
               <>
                 {contextMenu.song.status !== "processing" && contextMenu.song.status !== "cancelling" && contextMenu.song.status !== "queued" && (
-                  <button
-                    className="w-full px-4 py-2.5 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center gap-3"
+                  <ContextMenuItem
+                    icon={<SplitAudioIcon className="h-5 w-5" />}
                     onClick={() => {
                       onStartProcess(contextMenu.song);
                       closeContextMenu();
                     }}
                   >
-                    <span className="text-[#f472b6]">◒</span> 剥离伴奏
-                  </button>
+                    剥离伴奏
+                  </ContextMenuItem>
                 )}
                 {contextMenu.song.status !== "processing" && contextMenu.song.status !== "cancelling" && (
-                  <button
-                    className="w-full px-4 py-2.5 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center gap-3"
+                  <ContextMenuItem
+                    icon={<SearchIcon className="h-5 w-5" />}
                     onClick={() => {
                       void onSearchLyrics(contextMenu.song);
                       closeContextMenu();
                     }}
                   >
-                    <span className="text-[#22c55e]">🔎</span> 搜索匹配歌词
-                  </button>
+                    搜索匹配歌词
+                  </ContextMenuItem>
                 )}
-                <button
-                  className="w-full px-4 py-2.5 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center gap-3"
+                <ContextMenuItem
+                  icon={<FileTextIcon className="h-5 w-5" />}
                   onClick={() => {
                     void onImportLyricsLrc(contextMenu.song);
                     closeContextMenu();
                   }}
                 >
-                  <span className="text-[#60a5fa]">♫</span> 导入 LRC 歌词
-                </button>
+                  导入 LRC 歌词
+                </ContextMenuItem>
                 {contextMenu.song.status !== "processing" && contextMenu.song.status !== "cancelling" && (
-                  <button
-                    className="w-full px-4 py-2.5 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center gap-3"
+                  <ContextMenuItem
+                    icon={<SparklesIcon className="h-5 w-5" />}
                     onClick={() => {
                       void onGenerateLyricsDraft(contextMenu.song);
                       closeContextMenu();
                     }}
                   >
-                    <span className="text-[#a855f7]">♪</span> AI 听写（草稿）
-                  </button>
+                    AI 听写（草稿）
+                  </ContextMenuItem>
                 )}
                 {(contextMenu.song.status === "processing" || contextMenu.song.status === "queued" || contextMenu.song.status === "cancelling") && (
-                  <button
-                    className="w-full px-4 py-2.5 text-left text-sm text-[#ef4444] hover:bg-[var(--bg-tertiary)] flex items-center gap-3"
+                  <ContextMenuItem
+                    destructive
+                    ariaLabel="取消处理"
+                    icon={<XIcon className="h-5 w-5" />}
                     onClick={() => {
                       onCancelProcess(contextMenu.song);
                       closeContextMenu();
                     }}
                   >
-                    <span className="text-[#ef4444]">✕</span> 取消处理
-                  </button>
+                    取消处理
+                  </ContextMenuItem>
                 )}
-                <button
-                  className="w-full px-4 py-2.5 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center gap-3"
+                <ContextMenuItem
+                  icon={<PencilIcon className="h-5 w-5" />}
                   onClick={() => handleSongRename(contextMenu.song)}
                 >
-                  <span className="text-[#60a5fa]">✎</span> 重命名
-                </button>
-                <button
-                  className="w-full px-4 py-2.5 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center gap-3"
+                  重命名
+                </ContextMenuItem>
+                <ContextMenuItem
+                  icon={<FolderInputIcon className="h-5 w-5" />}
                   onClick={() => {
                     openMoveSongDialog(contextMenu.song);
                     closeContextMenu();
                   }}
                 >
-                  <span className="text-[#22c55e]">📂</span> 移动到...
-                </button>
+                  移动到...
+                </ContextMenuItem>
                 {contextMenu.song.status !== "processing" && contextMenu.song.status !== "queued" && contextMenu.song.status !== "cancelling" && (
-                  <button
-                    className="w-full px-4 py-2.5 text-left text-sm text-[#ef4444] hover:bg-[var(--bg-tertiary)] flex items-center gap-3"
-                    onClick={() => {
-                      openDeleteSongDialog(contextMenu.song);
-                      closeContextMenu();
-                    }}
-                  >
-                    <span>✕</span> 删除
-                  </button>
+                  <>
+                    <div className="context-menu-separator" />
+                    <ContextMenuItem
+                      destructive
+                      ariaLabel="删除歌曲"
+                      icon={<TrashIcon className="h-5 w-5" />}
+                      onClick={() => {
+                        openDeleteSongDialog(contextMenu.song);
+                        closeContextMenu();
+                      }}
+                    >
+                      删除
+                    </ContextMenuItem>
+                  </>
                 )}
               </>
             ) : (
               <>
-                <button
-                  className="w-full px-4 py-2.5 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center gap-3"
+                <ContextMenuItem
+                  icon={<PencilIcon className="h-5 w-5" />}
                   onClick={() => {
                     openRenameFolderDialog(contextMenu.folderName);
                     closeContextMenu();
                   }}
                 >
-                  <span className="text-[#60a5fa]">✎</span> 重命名文件夹
-                </button>
-                <button
-                  className="w-full px-4 py-2.5 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center gap-3"
+                  重命名文件夹
+                </ContextMenuItem>
+                <ContextMenuItem
+                  icon={<ChevronToggleIcon className="h-5 w-5" />}
                   onClick={() => {
                     setCollapsedFolders((prev) => ({ ...prev, [contextMenu.folderName]: !(prev[contextMenu.folderName] ?? false) }));
                     closeContextMenu();
                   }}
                 >
-                  <span className="text-[#f59e0b]">▸</span> 切换折叠
-                </button>
+                  切换折叠
+                </ContextMenuItem>
                 {contextMenu.folderName !== DEFAULT_FOLDER && (
-                  <button
-                    className="w-full px-4 py-2.5 text-left text-sm text-[#ef4444] hover:bg-[var(--bg-tertiary)] flex items-center gap-3"
-                    onClick={() => {
-                      openDeleteFolderDialog(contextMenu.folderName);
-                      closeContextMenu();
-                    }}
-                  >
-                    <span>✕</span> 删除文件夹
-                  </button>
+                  <>
+                    <div className="context-menu-separator" />
+                    <ContextMenuItem
+                      destructive
+                      ariaLabel="删除文件夹"
+                      icon={<TrashIcon className="h-5 w-5" />}
+                      onClick={() => {
+                        openDeleteFolderDialog(contextMenu.folderName);
+                        closeContextMenu();
+                      }}
+                    >
+                      删除文件夹
+                    </ContextMenuItem>
+                  </>
                 )}
               </>
             )}

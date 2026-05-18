@@ -140,38 +140,38 @@ export default function VocalWaveformPreview({
     : "0:00 / 0:00";
 
   return (
-    <div className="rounded-none border border-white/[0.08] bg-white/[0.035] px-[18px] py-[14px] shadow-[0_1px_0_rgba(255,255,255,0.03)_inset] backdrop-blur-[2px]">
+    <div className="vocal-waveform-panel">
       <div className="mb-[10px] flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-[14px] font-semibold leading-[1.25] tracking-tight text-[#f5f5f5]">原唱波形</div>
-          <div className="mt-[3px] text-[12px] leading-[1.35] text-white/45">
+          <div className="vocal-waveform-title text-[14px] font-semibold leading-[1.25] tracking-tight">原唱波形</div>
+          <div className="vocal-waveform-subtitle mt-[3px] text-[12px] leading-[1.35]">
             波形会随播放移动，保留更高解析度以提示换句时机
           </div>
         </div>
       </div>
 
-      <div className="relative overflow-hidden rounded-none border border-white/[0.06] bg-black/[0.14]">
+      <div className="vocal-waveform-viewport-shell relative">
         <div
           ref={viewportRef}
           className="relative h-[120px] overflow-hidden"
         >
-          <div className="pointer-events-none absolute inset-x-0 top-1/2 z-10 h-px -translate-y-1/2 bg-white/[0.10]" />
-          <div className="pointer-events-none absolute left-1/2 top-2 z-10 h-[calc(100%-1rem)] w-[2px] -translate-x-1/2 bg-[#a855f7]/70 shadow-[0_0_12px_rgba(168,85,247,0.45)]" />
+          <div className="vocal-waveform-centerline pointer-events-none absolute inset-x-0 top-1/2 z-10 h-px -translate-y-1/2" />
+          <div className="vocal-waveform-playhead pointer-events-none absolute left-1/2 top-2 z-20 h-[calc(100%-1rem)] w-[2px] -translate-x-1/2" />
 
           {!visible && !loading && !error && (
-            <div className="flex h-full items-center justify-center px-4 text-[12px] text-white/40">
+            <div className="vocal-waveform-empty flex h-full items-center justify-center px-4 text-[12px]">
               暂无原唱波形
             </div>
           )}
 
           {loading && (
-            <div className="flex h-full items-center justify-center px-4 text-[12px] text-[#a5b4fc]">
+            <div className="vocal-waveform-loading flex h-full items-center justify-center px-4 text-[12px]">
               原唱波形生成中...
             </div>
           )}
 
           {error && !loading && (
-            <div className="flex h-full items-center justify-center px-4 text-[12px] text-[#fca5a5]">
+            <div className="vocal-waveform-error flex h-full items-center justify-center px-4 text-[12px]">
               {error}
             </div>
           )}
@@ -191,8 +191,8 @@ export default function VocalWaveformPreview({
             >
               <defs>
                 <linearGradient id="vocal-waveform-fill" x1="0%" y1="0%" x2="0%" y2="100%">
-                  <stop offset="0%" stopColor="#ffffff" stopOpacity="0.42" />
-                  <stop offset="100%" stopColor="#ffffff" stopOpacity="0.18" />
+                  <stop offset="0%" stopColor="var(--waveform-original)" stopOpacity="0.58" />
+                  <stop offset="100%" stopColor="var(--waveform-original)" stopOpacity="0.26" />
                 </linearGradient>
               </defs>
 
@@ -208,9 +208,9 @@ export default function VocalWaveformPreview({
                     y={y}
                     width={barWidth}
                     height={height * 2}
-                    rx={0}
-                    fill="url(#vocal-waveform-fill)"
-                    opacity={highlight ? 1 : 0.92}
+                  rx={0}
+                  fill="url(#vocal-waveform-fill)"
+                  opacity={highlight ? 1 : 0.92}
                   />
                 );
               })}
@@ -221,14 +221,14 @@ export default function VocalWaveformPreview({
                   y={Math.max(2, centerY - Math.max(1.6, peaks![currentIndex] * 46))}
                   width={barWidth}
                   height={Math.max(3.2, Math.max(1.6, peaks![currentIndex] * 46) * 2)}
-                  fill="rgba(255,255,255,0.82)"
+                  fill="var(--waveform-playhead)"
                 />
               )}
             </svg>
           )}
         </div>
 
-        <div className="flex items-center justify-between px-4 py-2 text-[11px] text-white/40">
+        <div className="vocal-waveform-footer flex items-center justify-between gap-4 px-4 py-2 text-[11px]">
           <span>原唱提示 · 跟随播放定位</span>
           <span>{playbackLabel}</span>
         </div>

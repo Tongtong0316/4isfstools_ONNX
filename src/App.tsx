@@ -41,6 +41,14 @@ const MEDIA_IMPORT_EXTENSIONS = [
   "mxf",
 ];
 
+function AppSearchIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="m17.2 17.2 3.3 3.3M10.8 18a7.2 7.2 0 1 1 0-14.4 7.2 7.2 0 0 1 0 14.4Z" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 type LyricsCandidate = {
   id: string;
   source: string;
@@ -104,9 +112,9 @@ type BootstrapStatus = {
   detail: string;
 };
 
-type SettingsPane = "paths" | "runtime" | "audioOutput" | "appearance";
+type SettingsPane = "runtime" | "audioOutput" | "paths" | "appearance" | "about";
 
-type ColorThemeId = "graphite" | "aurora" | "studio" | "midnight" | "daylight" | "paper";
+type ColorThemeId = "graphite" | "aurora" | "studio" | "midnight" | "daylight" | "paper" | "passion" | "double" | "zero";
 
 const COLOR_THEMES: Array<{
   id: ColorThemeId;
@@ -128,7 +136,7 @@ const COLOR_THEMES: Array<{
   },
   {
     id: "aurora",
-    name: "极光青绿",
+    name: "青兔魔女",
     description: "冷静、清晰，强调音频状态。",
     bg: "#090b10",
     card: "#1a2230",
@@ -171,6 +179,82 @@ const COLOR_THEMES: Array<{
     accent: "#0f766e",
     text: "#1f2933",
   },
+  {
+    id: "passion",
+    name: "慵倦晚霞",
+    description: "粉灰与雾蓝的浅色体系，柔和但保持清晰对比。",
+    bg: "#f7eef1",
+    card: "#e8eff7",
+    accent: "#527396",
+    text: "#1f2937",
+  },
+  {
+    id: "double",
+    name: "津韵Double",
+    description: "白灰清爽，适合长时间日间使用。",
+    bg: "#f3f4f6",
+    card: "#ffffff",
+    accent: "#64748b",
+    text: "#111827",
+  },
+  {
+    id: "zero",
+    name: "零度天堂",
+    description: "深蓝夜空与星光金黄，冷冽梦幻的夜间主题。",
+    bg: "#07111f",
+    card: "#13233d",
+    accent: "#facc15",
+    text: "#f8fafc",
+  },
+];
+
+const APP_VERSION = "1.0.0";
+
+const SETTINGS_NAV_ITEMS: Array<{
+  pane: SettingsPane;
+  label: string;
+  hint: string;
+  icon: string;
+}> = [
+  { pane: "runtime", label: "运行环境", hint: "检测依赖、模型与 GPU 状态", icon: "◎" },
+  { pane: "audioOutput", label: "音频输出", hint: "选择播放设备", icon: "◍" },
+  { pane: "paths", label: "保存路径", hint: "分离文件保存位置", icon: "▣" },
+  { pane: "appearance", label: "外观色彩", hint: "主题配色与可读性", icon: "✧" },
+  { pane: "about", label: "关于", hint: "版本、声明与鸣谢", icon: "i" },
+];
+
+const SETTINGS_PAGE_COPY: Record<SettingsPane, { title: string; description: string }> = {
+  runtime: {
+    title: "运行环境",
+    description: "检测依赖、模型与 GPU 状态，确保核心功能可以正常运行。",
+  },
+  audioOutput: {
+    title: "音频输出",
+    description: "选择音频播放设备，切换后立即生效。",
+  },
+  paths: {
+    title: "保存路径",
+    description: "设置伴奏、人声和歌词文件的保存位置，保存后可选择迁移历史文件。",
+  },
+  appearance: {
+    title: "外观色彩",
+    description: "选择适合当前环境的主题配色，保证正文与控件拥有足够对比度。",
+  },
+  about: {
+    title: "关于",
+    description: "版本信息、使用声明、开源项目与鸣谢。",
+  },
+};
+
+const RUNTIME_CHECK_NAMES = [
+  "Python",
+  "FFmpeg",
+  "Torch",
+  "人声分离",
+  "SoundFile",
+  "AI 听写草稿",
+  "NVIDIA GPU",
+  "Torch CUDA",
 ];
 
 type TrackGraph = {
@@ -252,6 +336,19 @@ function App() {
     : runtimeHasNvidiaGpu
       ? "已检测到 NVIDIA GPU，但 Torch CUDA 暂不可用，当前使用 CPU"
       : "未检测到 NVIDIA GPU，当前使用 CPU";
+  const runtimeChecks = runtimeHealth?.checks ?? [];
+  const displayedRuntimeChecks: RuntimeHealthCheck[] = [
+    ...RUNTIME_CHECK_NAMES.map((name) => (
+      runtimeChecks.find((check) => check.name === name) ?? {
+        name,
+        ok: false,
+        severity: "info" as const,
+        detail: isDesktopRuntime ? "等待检测结果" : "桌面运行时未连接",
+      }
+    )),
+    ...runtimeChecks.filter((check) => !RUNTIME_CHECK_NAMES.includes(check.name)),
+  ];
+  const runtimeCheckCountLabel = `${runtimeChecks.length}/${RUNTIME_CHECK_NAMES.length}`;
 
   useEffect(() => {
     document.documentElement.dataset.theme = colorTheme;
@@ -945,6 +1042,18 @@ function App() {
     };
   }, [isDesktopRuntime]);
 
+  const handleRefreshRuntimeHealth = useCallback(async () => {
+    if (!isDesktopRuntime) return;
+    try {
+      const health = await invoke<RuntimeHealthReport>("get_runtime_health");
+      const bootstrap = await invoke<BootstrapStatus>("get_bootstrap_status");
+      setRuntimeHealth(health);
+      setBootstrapStatus(bootstrap);
+    } catch (error) {
+      console.error("Failed to refresh runtime health:", error);
+    }
+  }, [isDesktopRuntime]);
+
   const handleBootstrapInstall = useCallback(async () => {
     if (!isDesktopRuntime) return;
     setBootstrapInstalling(true);
@@ -1551,54 +1660,52 @@ function App() {
 
   return (
     <div className="relative h-full w-full bg-[var(--bg-primary)] flex flex-col">
-      <div className="p-[24px] flex flex-col gap-[18px] h-full">
+      <div className="flex h-full flex-col gap-[18px] p-[24px]">
         {/* Header */}
-        <header className="h-14 shrink-0 rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] flex items-center justify-between" style={{ paddingLeft: '24px', paddingRight: '24px' }}>
-          <div className="flex items-center gap-4">
-            <img src="/icon.png" alt="Macaron Singer" className="w-7 h-7 rounded-lg object-cover" onError={(e) => e.currentTarget.style.display = 'none'} />
-            <h1 className="text-base font-semibold tracking-tight">Macaron Singer</h1>
+        <header className="app-header">
+          <div className="app-header-left">
+            <div className="app-header-brand">
+              <img src="/icon.png" alt="Macaron Singer" className="app-logo" onError={(e) => e.currentTarget.style.display = 'none'} />
+              <h1 className="app-title">Macaron Singer</h1>
+            </div>
             <button
               type="button"
               onClick={() => {
                 setFileStorageSettingsOpen(true);
                 setSettingsPane("runtime");
               }}
-              className="ml-2 inline-flex items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-xs text-[var(--text-secondary)] transition-colors hover:bg-white/[0.05]"
+              className="status-chip transition-colors hover:bg-[var(--button-hover-bg)]"
               aria-label="查看运行环境状态"
             >
               <span
-                className={`h-2 w-2 rounded-full ${
+                className={`status-chip-dot ${
                   runtimeHealth?.level === "ready"
-                    ? "bg-emerald-400"
+                    ? "status-chip-dot-success"
                     : runtimeHealth?.level === "warning"
-                      ? "bg-amber-400"
-                      : "bg-rose-400"
+                      ? "status-chip-dot-warning"
+                      : "status-chip-dot-error"
                 }`}
               />
-              <span className="whitespace-nowrap">
+              <span className="ui-chip-text">
                 {runtimeHealth?.label ?? "检测中..."}
               </span>
             </button>
             <div
-              className={`ml-1 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs ${
-                runtimeTorchCudaAvailable
-                  ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-200"
-                  : "border-white/[0.08] bg-white/[0.03] text-[var(--text-secondary)]"
-              }`}
+              className={`status-chip ${runtimeTorchCudaAvailable ? "border-[color-mix(in_srgb,var(--status-success)_32%,transparent)]" : ""}`}
               title={runtimeDeviceTitle}
             >
               <span
-                className={`h-2 w-2 rounded-full ${
-                  runtimeTorchCudaAvailable ? "bg-emerald-400" : "bg-zinc-500"
+                className={`status-chip-dot ${
+                  runtimeTorchCudaAvailable ? "status-chip-dot-success" : ""
                 }`}
               />
-              <span className="whitespace-nowrap">{runtimeDeviceLabel}</span>
+              <span className="ui-chip-text">{runtimeDeviceLabel}</span>
             </div>
           </div>
-          <div className="flex items-center gap-5">
-            <div className="flex items-center gap-2 text-xs text-[var(--text-muted)] whitespace-nowrap">
+          <div className="app-header-right">
+            <div className="header-stats">
               <span>已收录</span>
-              <span className="text-[13px] font-semibold text-[var(--text-primary)]">
+              <span className="font-bold text-[var(--text-primary)]">
                 {readySongCount}
               </span>
               <span>首</span>
@@ -1608,7 +1715,7 @@ function App() {
                 setFileStorageSettingsOpen(true);
                 setSettingsPane("paths");
               }}
-              className="inline-flex h-9 min-w-[88px] items-center justify-center rounded-full border border-white/10 bg-white/[0.03] px-4 text-xs font-semibold leading-none text-[var(--text-secondary)] transition-colors hover:bg-white/[0.06]"
+              className="ui-button ghost-button text-[13px] font-semibold transition-colors"
             >
               偏好设置
             </button>
@@ -1623,7 +1730,7 @@ function App() {
                   if (paths.length > 0) handleFilesSelected(paths);
                 }
               }}
-              className="inline-flex h-9 min-w-[96px] items-center justify-center rounded-full bg-[var(--accent)] px-4 text-xs font-semibold leading-none text-white shadow-lg transition-colors hover:bg-[var(--accent-hover)] whitespace-nowrap"
+              className="ui-button ui-button-primary primary-action-button text-[13px] font-bold transition-colors hover:bg-[var(--accent-hover)]"
             >
               导入歌曲
             </button>
@@ -1651,26 +1758,27 @@ function App() {
           </div>
 
           {/* Right: Large Player with Lyrics */}
-          <div className="min-w-0 flex-1 rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] overflow-hidden flex flex-col">
+          <div className="player-shell min-w-0 flex-1 overflow-hidden flex flex-col">
             {currentSong ? (
               <div className="relative flex-1 flex flex-col min-h-0 h-full">
                 {/* Track meter */}
                 <div className="shrink-0 relative mt-2 h-[88px]">
                   <div className="pointer-events-none absolute left-1/2 top-3 z-20 w-[min(50vw,640px)] -translate-x-1/2">
-                    <div className="rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] px-5 py-3 shadow-[0_14px_32px_rgba(0,0,0,0.16)] backdrop-blur-sm">
+                    <div className="level-meter-panel">
                       <div className="space-y-1">
                         {([
-                          ["伴奏", trackLevels.instrumental, "#6366f1"],
-                          ["人声", trackLevels.vocals, "#22c55e"],
-                        ] as Array<[string, number, string]>).map(([label, level, color]) => (
-                          <div key={label} className="flex items-center gap-3 text-[9px] text-[var(--text-muted)]">
-                            <span className="w-7 shrink-0 text-right font-medium">{label}</span>
-                            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--bg-tertiary)]">
+                          ["伴奏", trackLevels.instrumental, "instrumental"],
+                          ["人声", trackLevels.vocals, "vocal"],
+                        ] as Array<[string, number, "instrumental" | "vocal"]>).map(([label, level, type]) => (
+                          <div key={label} className="level-meter-row">
+                            <span className="level-meter-label">{label}</span>
+                            <div className="level-meter-track">
                               <div
-                                className="h-full rounded-full transition-all duration-150"
+                                className={`level-meter-fill ${
+                                  type === "instrumental" ? "level-meter-fill-instrumental" : "level-meter-fill-vocal"
+                                }`}
                                 style={{
                                   width: `${Math.max(2, Math.min(100, level * 200))}%`,
-                                  background: color,
                                 }}
                               />
                             </div>
@@ -1681,7 +1789,7 @@ function App() {
                   </div>
                 </div>
                 {/* Lyrics Area */}
-                <div className="min-h-0 flex-1 flex flex-col px-6 pt-2 pb-[156px]">
+                  <div className="min-h-0 flex-1 flex flex-col px-6 pt-2 pb-[196px]">
                   <div className="min-h-0 flex-1 flex items-center justify-center overflow-hidden">
                     {lyricsDoc ? (
                       <LyricsPanel
@@ -1699,7 +1807,7 @@ function App() {
                   </div>
                 </div>
                 {vocalWaveformEnabled && (
-                  <div className="pointer-events-none absolute left-6 right-6 bottom-[126px] z-20">
+                  <div className="waveform-layer">
                     <VocalWaveformPreview
                       peaks={vocalWaveformPeaks}
                       currentTime={currentTime}
@@ -1711,121 +1819,121 @@ function App() {
                   </div>
                 )}
                 {/* Controls - structured layout with breathing room */}
-                <div className="shrink-0 h-[112px] px-8 pt-2 pb-2 flex flex-col justify-start border-t border-[var(--border)] bg-[var(--bg-secondary)]">
+                <div className="player-dock h-[172px] shrink-0">
                   {/* Song Info */}
-                  <div className="flex items-center gap-3 mb-2">
-                    <div className="w-10 h-10 flex items-center justify-center text-xl">🎵</div>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium text-sm truncate">{currentSong.name}</div>
-                      <div className="text-xs text-[var(--text-muted)]">
-                        {playbackMode === "original" ? "原唱模式" : playbackMode === "vocals" ? "人声模式" : "伴奏模式"}
+                  <div className="player-track-info-row">
+                    <div className="player-track-info-left">
+                      <div className="player-track-icon">🎵</div>
+                      <div className="min-w-0">
+                        <div className="ui-text-ellipsis text-sm font-semibold text-[var(--text-primary)]" title={currentSong.name}>{currentSong.name}</div>
+                        <div className="ui-text-ellipsis text-xs text-[var(--text-secondary)]">
+                          {playbackMode === "original" ? "原唱模式" : playbackMode === "vocals" ? "人声模式" : "伴奏模式"}
+                        </div>
+                        <div className="song-status ui-text-ellipsis" title={playbackError || whisperDraftError || lyricsImportError || ""}>
+                          {whisperDraftLoadingSongId === currentSong.id
+                            ? "AI 听写生成中..."
+                            : whisperDraftError && whisperDraftLoadingSongId !== currentSong.id
+                              ? whisperDraftError
+                              : lyricsImportLoadingSongId === currentSong.id
+                                ? "LRC 导入中..."
+                                : lyricsImportError && lyricsImportLoadingSongId !== currentSong.id
+                                  ? lyricsImportError
+                                  : playbackError || ""}
+                        </div>
                       </div>
-                      {whisperDraftLoadingSongId === currentSong.id && (
-                        <div className="text-xs text-[#a855f7]">AI 听写生成中...</div>
-                      )}
-                      {whisperDraftError && whisperDraftLoadingSongId !== currentSong.id && (
-                        <div className="text-xs text-[#fca5a5] truncate">{whisperDraftError}</div>
-                      )}
-                      {lyricsImportLoadingSongId === currentSong.id && (
-                        <div className="text-xs text-[#60a5fa]">LRC 导入中...</div>
-                      )}
-                      {lyricsImportError && lyricsImportLoadingSongId !== currentSong.id && (
-                        <div className="text-xs text-[#fca5a5] truncate">{lyricsImportError}</div>
-                      )}
-                      {playbackError && (
-                        <div className="text-xs text-[#ef4444]">{playbackError}</div>
-                      )}
+                    </div>
+                    <div className="waveform-controls">
+                      <button
+                        onClick={() => setVocalWaveformEnabled((value) => !value)}
+                        className={`ui-button waveform-toggle-button transition-all ${
+                          vocalWaveformEnabled ? "is-active" : "hover:bg-[var(--button-hover-bg)]"
+                        }`}
+                      >
+                        {vocalWaveformEnabled ? "显示原唱波形" : "隐藏原唱波形"}
+                      </button>
                     </div>
                   </div>
                   {/* Progress Bar */}
-                  <div className="relative mt-1">
-                    <button
-                      onClick={() => setVocalWaveformEnabled((value) => !value)}
-                      className={`absolute right-4 -top-8 z-10 h-8 w-[88px] rounded-full text-[11px] font-semibold leading-none transition-all ${
-                        vocalWaveformEnabled ? "bg-[var(--accent)] text-white" : "bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--bg-card)]"
-                      }`}
+                  <div className="player-progress-row">
+                    <span className="player-time-label text-right">
+                      {formatTime(currentTime)}
+                    </span>
+                    <div
+                      className="player-progress-track cursor-pointer"
+                      onClick={(e) => {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const pct = (e.clientX - rect.left) / rect.width;
+                        if (currentSong.duration > 0) {
+                          handleSeek(pct * currentSong.duration);
+                        }
+                      }}
                     >
-                      {vocalWaveformEnabled ? "显示原唱波形" : "隐藏原唱波形"}
-                    </button>
-                    <div className="flex items-center gap-3">
-                      <span className="text-xs text-[var(--text-muted)] w-10 text-right font-mono">
-                        {formatTime(currentTime)}
-                      </span>
                       <div
-                        className="flex-1 h-2 bg-[var(--bg-tertiary)] rounded-full cursor-pointer"
-                        onClick={(e) => {
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          const pct = (e.clientX - rect.left) / rect.width;
-                          if (currentSong.duration > 0) {
-                            handleSeek(pct * currentSong.duration);
-                          }
-                        }}
-                      >
-                        <div
-                          className="h-full rounded-full transition-all"
-                          style={{ width: `${currentSong.duration > 0 ? (currentTime / currentSong.duration) * 100 : 0}%`, background: "var(--accent)" }}
-                        />
-                      </div>
-                      <span className="text-xs text-[var(--text-muted)] w-10 font-mono">
-                        {formatTime(currentSong.duration)}
-                      </span>
+                        className="player-progress-fill h-full rounded-full transition-all"
+                        style={{ width: `${currentSong.duration > 0 ? (currentTime / currentSong.duration) * 100 : 0}%` }}
+                      />
                     </div>
+                    <span className="player-time-label">
+                      {formatTime(currentSong.duration)}
+                    </span>
                   </div>
 
-                  <div className="h-1" />
-
                   {/* Controls Row - centered with enforced separation */}
-                  <div className="flex flex-wrap items-center justify-center gap-3">
-                    <button onClick={handlePrev} className="p-2 hover:bg-[var(--bg-card)] rounded-full transition-colors text-[var(--text-secondary)] hover:text-[var(--text-primary)]">
+                  <div className="player-controls-row">
+                    <div className="transport-controls">
+                      <button onClick={handlePrev} className="player-secondary-button ui-icon-button text-[var(--text-secondary)] transition-colors hover:bg-[var(--button-hover-bg)] hover:text-[var(--text-primary)]">
                       <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
                         <path d="M6 6h2v12H6V6zm3.5 6l8.5 6V6l-8.5 6z"/>
                       </svg>
                     </button>
                     <button
                       onClick={handlePlayPause}
-                      className="w-10 h-10 bg-white rounded-full flex items-center justify-center hover:scale-105 transition-transform shadow-lg"
+                      className="player-play-button ui-icon-button bg-[var(--primary-button-bg)] text-[var(--primary-button-text)] shadow-lg transition-transform hover:scale-105"
                     >
                       {playerState === "playing" ? (
-                        <svg className="w-4 h-4 text-[#0f0f23]" fill="currentColor" viewBox="0 0 24 24">
+                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                           <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z"/>
                         </svg>
                       ) : (
-                        <svg className="w-4 h-4 text-[#0f0f23] ml-0.5" fill="currentColor" viewBox="0 0 24 24">
+                        <svg className="w-4 h-4 ml-0.5" fill="currentColor" viewBox="0 0 24 24">
                           <path d="M8 5v14l11-7z"/>
                         </svg>
                       )}
                     </button>
-                    <button onClick={handleNext} className="p-2 hover:bg-[var(--bg-card)] rounded-full transition-colors text-[var(--text-secondary)] hover:text-[var(--text-primary)]">
+                    <button onClick={handleNext} className="player-secondary-button ui-icon-button text-[var(--text-secondary)] transition-colors hover:bg-[var(--button-hover-bg)] hover:text-[var(--text-primary)]">
                       <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
                         <path d="M6 18l8.5-6L6 6v12zm2-8.14L11.03 12 8 14.14V9.86zM16 6h2v12h-2V6z"/>
                       </svg>
                     </button>
+                    </div>
+                    <div className="mode-controls">
                     <button
                       onClick={() => handleModeChange("original")}
-                      className={`ml-3 h-9 w-[96px] rounded-full text-sm font-semibold leading-none transition-all ${
-                        playbackMode === "original" ? "bg-[var(--accent)] text-white" : "bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--bg-card)]"
+                      className={`ui-button player-mode-button transition-all ${
+                        playbackMode === "original" ? "is-active" : ""
                       }`}
                     >
                       原唱
                     </button>
                     <button
                       onClick={() => handleModeChange("instrumental")}
-                      className={`h-9 w-[96px] rounded-full text-sm font-semibold leading-none transition-all ${
-                        playbackMode === "instrumental" ? "bg-[var(--accent)] text-white" : "bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--bg-card)]"
+                      className={`ui-button player-mode-button transition-all ${
+                        playbackMode === "instrumental" ? "is-active" : ""
                       }`}
                     >
                       伴奏
                     </button>
                     <button
                       onClick={() => handleModeChange("vocals")}
-                      className={`h-9 w-[96px] rounded-full text-sm font-semibold leading-none transition-all ${
-                        playbackMode === "vocals" ? "bg-[#22c55e] text-white" : "bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--bg-card)]"
+                      className={`ui-button player-mode-button transition-all ${
+                        playbackMode === "vocals" ? "is-active" : ""
                       }`}
                     >
                       人声
                     </button>
-                    <div className="flex items-center gap-2 ml-3">
-                      <button onClick={() => handleVolumeChange(volume > 0 ? 0 : 80)} className="p-1.5 hover:bg-[var(--bg-card)] rounded-full transition-colors text-[var(--text-secondary)] hover:text-[var(--text-primary)]">
+                    </div>
+                    <div className="volume-controls">
+                      <button onClick={() => handleVolumeChange(volume > 0 ? 0 : 80)} className="ui-icon-button player-volume-button text-[var(--text-secondary)] transition-colors hover:bg-[var(--button-hover-bg)] hover:text-[var(--text-primary)]">
                         {volume > 0 ? (
                           <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                             <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>
@@ -1837,7 +1945,7 @@ function App() {
                         )}
                       </button>
                       <div
-                        className="w-24 h-2 bg-[var(--bg-tertiary)] rounded-full cursor-pointer"
+                        className="volume-track cursor-pointer"
                         onClick={(event) => {
                           const rect = event.currentTarget.getBoundingClientRect();
                           const pct = (event.clientX - rect.left) / rect.width;
@@ -1845,7 +1953,7 @@ function App() {
                           handleVolumeChange(next);
                         }}
                       >
-                        <div className="h-full bg-[var(--accent)] rounded-full transition-all" style={{ width: `${volume}%` }} />
+                        <div className="volume-fill h-full rounded-full transition-all" style={{ width: `${volume}%` }} />
                       </div>
                     </div>
                   </div>
@@ -1868,42 +1976,51 @@ function App() {
             className="absolute inset-0 bg-black/55 backdrop-blur-[2px]"
             onClick={() => setFileStorageSettingsOpen(false)}
           />
-          <div data-debug-id="preferences-modal" className="theme-aware-surface relative flex h-[78vh] w-full max-w-6xl overflow-hidden rounded-[24px] border border-[var(--border)] bg-[var(--bg-secondary)] shadow-[0_20px_60px_rgba(0,0,0,0.35)] backdrop-blur-xl">
+          <div
+            data-debug-id="preferences-modal"
+            className="theme-aware-surface relative flex h-[78vh] w-full max-w-[1480px] overflow-hidden rounded-[24px] border border-[var(--panel-accent-border)] bg-[var(--bg-secondary)] shadow-[0_0_0_1px_var(--panel-inner-border),0_20px_60px_rgba(0,0,0,0.35),0_14px_38px_var(--panel-glow)] backdrop-blur-xl"
+          >
             <button
               type="button"
-              className="absolute right-6 top-5 z-10 rounded-[10px] px-[10px] py-[6px] text-sm font-medium text-[var(--text-secondary)] transition-colors hover:bg-white/[0.06]"
+              className="settings-close-button"
               onClick={() => setFileStorageSettingsOpen(false)}
             >
-              关闭
+              <span>关闭</span>
+              <span className="settings-close-button-mark">×</span>
             </button>
             <aside
               data-debug-id="settings-sidebar"
-              className="settings-sidebar theme-subtle-surface flex w-[280px] min-w-[260px] shrink-0 flex-col box-border border-r border-[var(--border)] bg-white/[0.025] pl-[32px] pr-[20px] pt-[28px] pb-[24px]"
-              style={{ width: 280, flexShrink: 0, paddingTop: 28, paddingRight: 20, paddingBottom: 24, paddingLeft: 32, boxSizing: "border-box" }}
+              className="settings-sidebar theme-subtle-surface flex w-[312px] min-w-[300px] shrink-0 flex-col border-r border-[rgba(148,163,184,0.16)] bg-[var(--bg-secondary)] px-6 py-7"
             >
               <div className="settings-sidebar-header">
-                <div className="settings-sidebar-title text-[18px] font-bold leading-[1.25] tracking-tight text-[var(--text-primary)]">偏好设置</div>
+                <div className="settings-sidebar-title text-[22px] font-bold leading-[1.2] tracking-tight text-[var(--text-primary)]">偏好设置</div>
               </div>
-              <div aria-hidden="true" className="h-[12px]" />
+              <div aria-hidden="true" className="h-7" />
               <div className="settings-sidebar-nav flex flex-col gap-2">
-                {([
-                  ["依赖与模型", "runtime", "启动环境与模型状态"],
-                  ["声音输出源", "audioOutput", "音频播放设备选择"],
-                  ["自定义路径", "paths", "文件归档位置"],
-                  ["外观色彩", "appearance", "界面配色与阅读对比"],
-                ] as Array<[string, SettingsPane, string]>).map(([label, pane, hint]) => {
+                {SETTINGS_NAV_ITEMS.map(({ label, pane, hint, icon }) => {
                   const active = settingsPane === pane;
                   return (
                     <button
                       key={pane}
                       type="button"
                       onClick={() => setSettingsPane(pane)}
-                      className={`settings-nav-item flex w-full flex-col items-start box-border rounded-[16px] px-[14px] py-[12px] text-left transition-colors ${
-                        active ? "bg-[var(--bg-card)] text-[var(--text-primary)]" : "text-[var(--text-secondary)] hover:bg-[var(--bg-card)]"
+                      className={`settings-nav-item flex h-14 w-full items-center gap-3 rounded-[14px] px-3.5 text-left transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)] ${
+                        active
+                          ? "bg-[color-mix(in_srgb,var(--accent)_8%,var(--bg-tertiary)_65%)] text-[var(--text-primary)]"
+                          : "text-[var(--text-secondary)] hover:bg-[rgba(148,163,184,0.08)]"
                       }`}
                     >
-                      <span className="text-[15px] font-semibold leading-[1.25] tracking-tight">{label}</span>
-                      <span className="mt-[4px] text-[12px] leading-[1.35] text-[var(--text-muted)]">{hint}</span>
+                      <span
+                        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] text-[14px] font-bold ${
+                          active ? "bg-[color-mix(in_srgb,var(--accent)_22%,transparent)] text-[var(--accent)]" : "bg-[var(--bg-card)] text-[var(--text-muted)]"
+                        }`}
+                      >
+                        {icon}
+                      </span>
+                      <span className="min-w-0">
+                        <span className={`block truncate text-[15px] font-bold leading-[1.2] ${active ? "text-[var(--text-primary)]" : ""}`}>{label}</span>
+                        <span className="mt-1 block truncate text-[12px] leading-[1.2] text-[var(--text-muted)]">{hint}</span>
+                      </span>
                     </button>
                   );
                 })}
@@ -1913,59 +2030,52 @@ function App() {
             <main className="min-w-0 flex-1 overflow-y-auto">
               <div
                 data-debug-id="settings-main"
-                className="settings-main flex min-h-full w-full box-border overflow-auto pl-[48px] pr-[40px] pb-[40px] pt-[28px]"
-                style={{ paddingLeft: 48, paddingRight: 40, paddingTop: 28, paddingBottom: 40 }}
+                className="settings-main flex min-h-full w-full overflow-auto px-14 py-12"
               >
-                <div data-debug-id="settings-main-inner" className="settings-main-inner flex w-full max-w-[1040px] flex-col box-border">
-                  <div className="settings-page-header mb-[28px] max-w-[760px]">
-                    <div data-debug-id="settings-page-title" className="settings-page-title text-[30px] font-[750] leading-[1.15] tracking-tight text-[var(--text-primary)]">
-                      {settingsPane === "runtime"
-                        ? "依赖与模型"
-                        : settingsPane === "audioOutput"
-                          ? "声音输出源"
-                          : settingsPane === "appearance"
-                            ? "外观色彩"
-                            : "自定义路径"}
+                <div data-debug-id="settings-main-inner" className="settings-main-inner flex w-full max-w-[1120px] flex-col">
+                  <div className="settings-page-header mb-6 max-w-[820px]">
+                    <div data-debug-id="settings-page-title" className="settings-page-title text-[36px] font-extrabold leading-[1.12] tracking-tight text-[var(--text-primary)]">
+                      {SETTINGS_PAGE_COPY[settingsPane].title}
                     </div>
-                    <div className="settings-page-description mt-2 text-[14px] leading-6 text-[var(--text-secondary)]">
-                      {settingsPane === "runtime"
-                        ? "启动时会做最小环境检测，核心依赖异常时会以颜色提示。"
-                        : settingsPane === "audioOutput"
-                          ? "选择音频播放的输出设备，切换后立即生效。"
-                          : settingsPane === "appearance"
-                            ? "选择适合当前环境的配色方案，所有方案都保持正文与控件的可读对比度。"
-                            : "伴奏、人声、歌词会自动归档到指定目录，保存后可随时迁移历史文件。"}
+                    <div className="settings-page-description mt-2 text-[15px] leading-6 text-[var(--text-secondary)]">
+                      {SETTINGS_PAGE_COPY[settingsPane].description}
                     </div>
                   </div>
 
                   {settingsPane === "paths" ? (
                     !fileStorageSettings ? (
-                      <div className="path-card rounded-[18px] border border-[var(--border)] bg-[var(--bg-card)] px-[24px] py-[22px] text-sm text-[var(--text-secondary)]">
-                        正在加载文件管理设置...
+                      <div className="ui-loading-state max-w-[760px]">
+                        <div className="ui-loading-label">正在加载文件管理设置...</div>
+                        <div className="ui-progress-track" aria-hidden="true">
+                          <div className="ui-progress-fill progress-shimmer" style={{ width: "42%" }} />
+                        </div>
                       </div>
                     ) : (
-                      <div className="flex w-full flex-col gap-[20px]">
+                      <div className="flex w-full flex-col gap-4">
                         {([
-                          ["伴奏目录", "instrumentalRoot", "自动保存分离后的伴奏文件"],
-                          ["人声目录", "vocalsRoot", "自动保存分离后的人声文件"],
-                          ["歌词目录", "lyricsRoot", "自动保存歌词 JSON / LRC 文件"],
-                        ] as Array<[string, keyof FileStorageSettings, string]>).map(([label, field, hint]) => (
+                          ["伴奏目录", "instrumentalRoot", "自动保存分离后的伴奏文件", "♪"],
+                          ["人声目录", "vocalsRoot", "自动保存分离后的人声文件", "●"],
+                          ["歌词目录", "lyricsRoot", "自动保存歌词 JSON / LRC 文件", "▤"],
+                        ] as Array<[string, keyof FileStorageSettings, string, string]>).map(([label, field, hint, icon]) => (
                           <div
                             key={field}
-                            className="path-card rounded-[18px] border border-[var(--border)] bg-[var(--bg-card)] px-[24px] py-[22px] transition-colors"
+                            className="path-card rounded-[16px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] p-4 transition-colors"
                           >
-                            <div className="path-card-header mb-[18px] flex items-start justify-between gap-5">
+                            <div className="path-card-header mb-4 flex items-start justify-between gap-5">
                               <div className="flex min-w-0 items-start gap-4">
+                                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[12px] bg-[color-mix(in_srgb,var(--accent)_18%,var(--bg-tertiary))] text-[20px] font-bold text-[var(--accent)]">
+                                  {icon}
+                                </div>
                                 <div className="min-w-0">
-                                  <div className="path-card-title text-[16px] font-semibold leading-[1.3] tracking-tight text-[var(--text-primary)]">
+                                  <div className="path-card-title truncate text-[16px] font-bold leading-[1.3] tracking-tight text-[var(--text-primary)]">
                                     {label}
                                   </div>
-                                  <div className="path-card-description mt-[5px] text-[13px] leading-[1.4] text-[var(--text-secondary)]">{hint}</div>
+                                  <div className="path-card-description mt-1 text-[13px] leading-[1.4] text-[var(--text-secondary)]">{hint}</div>
                                 </div>
                               </div>
                               <button
                                 type="button"
-                                className="path-card-action inline-flex h-[30px] shrink-0 items-center justify-center rounded-full bg-[var(--bg-tertiary)] px-[14px] text-xs font-medium whitespace-nowrap text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-card)]"
+                                className="path-card-action inline-flex h-10 shrink-0 items-center justify-center whitespace-nowrap rounded-[12px] border border-[color-mix(in_srgb,var(--accent)_35%,transparent)] px-4 text-[13px] font-semibold text-[var(--accent)] transition-colors hover:bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-60"
                                 onClick={() => void handleChooseStorageFolder(field)}
                                 disabled={fileStorageSettingsSaving}
                               >
@@ -1975,43 +2085,44 @@ function App() {
                             <input
                               type="text"
                               value={fileStorageSettings[field]}
+                              title={fileStorageSettings[field]}
                               onChange={(event) =>
                                 setFileStorageSettings((prev) =>
                                   prev ? { ...prev, [field]: event.target.value } : prev
                                 )
                               }
                               placeholder="留空则恢复默认目录"
-                              className="path-input mt-0 h-[54px] w-full rounded-[16px] border border-[var(--border)] bg-[var(--bg-secondary)] px-[18px] text-sm text-[var(--text-primary)] outline-none transition-colors placeholder:text-[var(--text-muted)] focus:border-[var(--accent)]"
+                              className="path-input h-11 w-full min-w-0 truncate rounded-[12px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-primary)] px-3.5 text-sm text-[var(--text-primary)] outline-none transition-colors placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
                             />
                           </div>
                         ))}
 
                         {fileStorageSettingsMessage && (
-                          <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] px-4 py-3 text-sm text-[var(--text-secondary)]">
+                          <div className="rounded-[14px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] px-4 py-3 text-sm text-[var(--text-secondary)]">
                             {fileStorageSettingsMessage}
                           </div>
                         )}
 
-                        <div className="settings-actions mt-[28px] flex items-center justify-between gap-4">
+                        <div className="settings-actions mt-2 flex items-center justify-between gap-4 border-t border-[rgba(148,163,184,0.16)] pt-5">
                           <button
                             type="button"
-                            className="inline-flex min-w-[92px] items-center justify-center whitespace-nowrap rounded-full px-6 py-2.5 text-sm font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-card)]"
+                            className="inline-flex h-10 items-center justify-center whitespace-nowrap rounded-[12px] px-4 text-sm font-semibold text-[var(--text-secondary)] transition-colors hover:bg-[rgba(148,163,184,0.08)] focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-60"
                             onClick={handleResetStorageSettings}
                             disabled={fileStorageSettingsSaving || !fileStorageSettings}
                           >
-                            恢复默认
+                            恢复默认路径
                           </button>
-                          <div className="settings-actions-right flex items-center gap-[14px]">
+                          <div className="settings-actions-right flex items-center gap-3">
                             <button
                               type="button"
-                              className="inline-flex min-w-[92px] items-center justify-center whitespace-nowrap rounded-full px-6 py-2.5 text-sm font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-card)]"
+                              className="inline-flex h-10 items-center justify-center whitespace-nowrap rounded-[12px] px-4 text-sm font-semibold text-[var(--text-secondary)] transition-colors hover:bg-[rgba(148,163,184,0.08)] focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
                               onClick={() => setFileStorageSettingsOpen(false)}
                             >
                               取消
                             </button>
                             <button
                               type="button"
-                              className="inline-flex min-w-[112px] items-center justify-center whitespace-nowrap rounded-full bg-[var(--accent)] px-6 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[var(--accent-hover)] disabled:cursor-not-allowed disabled:opacity-60"
+                              className="inline-flex h-10 min-w-[128px] items-center justify-center whitespace-nowrap rounded-[12px] bg-[var(--accent)] px-[18px] text-sm font-bold text-white transition-colors hover:bg-[var(--accent-hover)] focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-60"
                               onClick={() => void handleSaveStorageSettings()}
                               disabled={fileStorageSettingsSaving || !fileStorageSettings}
                             >
@@ -2022,44 +2133,48 @@ function App() {
                       </div>
                     )
                   ) : settingsPane === "audioOutput" ? (
-                    <div className="flex w-full flex-col gap-[20px]">
-                      <div className="rounded-[18px] border border-[var(--border)] bg-[var(--bg-card)] px-[24px] py-[22px]">
-                        <div className="flex items-center justify-between gap-4">
-                          <div>
-                            <div className="text-[16px] font-semibold leading-[1.3] tracking-tight text-[var(--text-primary)]">声音输出源</div>
-                            <div className="mt-[5px] text-[13px] leading-[1.4] text-[var(--text-secondary)]">
-                              选择音频播放的输出设备。需要浏览器授予音频设备权限。
+                    <div className="flex w-full flex-col gap-5">
+                      <div className="settings-card max-w-[760px] rounded-[16px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] p-5">
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="min-w-0">
+                            <div className="text-[18px] font-bold leading-[1.3] tracking-tight text-[var(--text-primary)]">输出设备</div>
+                            <div className="mt-2 max-w-[560px] text-[13px] leading-5 text-[var(--text-secondary)]">
+                              选择用于播放预览音频的输出设备。若设备未显示，请先授权浏览器音频权限。
                             </div>
                           </div>
                           <button
                             type="button"
-                            className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--border)] px-3 py-1.5 text-[12px] font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-tertiary)]"
+                            className="inline-flex h-10 shrink-0 items-center justify-center rounded-[12px] border border-[color-mix(in_srgb,var(--accent)_35%,transparent)] px-4 text-[13px] font-semibold text-[var(--accent)] transition-colors hover:bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
                             onClick={() => void refreshAudioOutputDevices()}
                           >
                             刷新设备
                           </button>
                         </div>
-                        <div className="mt-3">
+                        <div className="mt-5">
                           <select
                             value={audioOutputDeviceId}
                             onChange={(e) => setAudioOutputDeviceId(e.target.value)}
-                            style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
-                            className="w-full max-w-[420px] rounded-[12px] border border-[var(--border)] px-4 py-2.5 text-[14px] outline-none transition-colors focus:border-[var(--accent)]"
+                            style={{ backgroundColor: "var(--bg-primary)", color: "var(--text-primary)" }}
+                            className="h-10 w-full max-w-[560px] rounded-[10px] border border-[rgba(148,163,184,0.16)] px-3.5 text-[14px] outline-none transition-colors focus:border-[var(--accent)] focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
                           >
-                            <option value="default" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>系统默认</option>
+                            <option value="default" style={{ backgroundColor: "var(--bg-primary)", color: "var(--text-primary)" }}>系统默认</option>
                             {audioOutputDevices.map((d) => (
-                              <option key={d.deviceId} value={d.deviceId} style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>
+                              <option key={d.deviceId} value={d.deviceId} style={{ backgroundColor: "var(--bg-primary)", color: "var(--text-primary)" }}>
                                 {d.label}
                               </option>
                             ))}
                           </select>
-                          {audioOutputDeviceId !== "default" && (
-                            <div className="mt-2 text-[12px] text-[var(--text-muted)]">
-                              当前输出：{audioOutputDevices.find((d) => d.deviceId === audioOutputDeviceId)?.label ?? audioOutputDeviceId}
-                            </div>
-                          )}
+                          <div className="ui-info-banner mt-4 max-w-[560px]">
+                            <span className="ui-info-icon">i</span>
+                            <span className="ui-info-text">
+                              {audioOutputDeviceId === "default"
+                                ? "当前：使用系统默认输出设备"
+                                : `当前：${audioOutputDevices.find((d) => d.deviceId === audioOutputDeviceId)?.label ?? audioOutputDeviceId}`}
+                              {audioOutputDevices.length <= 1 ? "。需要浏览器授权后才能列出完整设备。" : ""}
+                            </span>
+                          </div>
                           {audioOutputSupport === "unsupported" && (
-                            <div className="mt-2 rounded-lg border border-amber-400/20 bg-amber-400/[0.06] px-3 py-2 text-[12px] text-amber-200/80">
+                            <div className="mt-3 max-w-[560px] rounded-[12px] border border-amber-400/20 bg-amber-400/[0.06] px-3 py-2 text-[12px] text-amber-200/80">
                               当前环境不支持选择输出设备，声音将使用系统默认输出。
                             </div>
                           )}
@@ -2067,7 +2182,7 @@ function App() {
                       </div>
                     </div>
                   ) : settingsPane === "appearance" ? (
-                    <div className="grid w-full gap-4 md:grid-cols-2">
+                    <div className="grid w-full gap-5 md:grid-cols-2">
                       {COLOR_THEMES.map((theme) => {
                         const active = colorTheme === theme.id;
                         return (
@@ -2075,141 +2190,187 @@ function App() {
                             key={theme.id}
                             type="button"
                             onClick={() => setColorTheme(theme.id)}
-                            className={`group flex min-h-[140px] flex-col items-start rounded-[18px] border px-5 py-4 text-left transition-colors ${
+                            className={`settings-theme-card group relative flex h-[164px] min-w-0 flex-col items-start rounded-[16px] border p-4 text-left transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)] ${
                               active
-                                ? "border-[var(--accent)] bg-[var(--bg-card)]"
-                                : "border-[var(--border)] bg-[var(--bg-secondary)] hover:bg-[var(--bg-card)]"
+                                ? "border-[color-mix(in_srgb,var(--accent)_75%,transparent)] bg-[var(--bg-card)] shadow-[0_0_0_1px_color-mix(in_srgb,var(--accent)_14%,transparent)]"
+                                : "border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] hover:border-[rgba(148,163,184,0.28)] hover:bg-[var(--bg-tertiary)]"
                             }`}
                           >
-                            <div className="flex w-full items-start justify-between gap-4">
-                              <div className="flex min-w-0 items-center gap-3">
+                            {active && (
+                              <span className="absolute right-3 top-3 inline-flex h-6 items-center justify-center rounded-full bg-[var(--accent)] px-2 text-[11px] font-bold text-white">
+                                已选择
+                              </span>
+                            )}
+                            <div className="flex w-full min-w-0 items-start gap-3 pr-16">
+                              <div className="shrink-0">
                                 <span
-                                  className="theme-swatch h-11 w-11 shrink-0 rounded-[12px] border border-white/10"
+                                  className="theme-swatch settings-theme-swatch block h-10 w-10 rounded-[12px] border border-white/10"
                                   style={{
                                     "--theme-bg": theme.bg,
                                     "--theme-card": theme.card,
                                   } as CSSProperties & Record<string, string>}
                                 />
-                                <div className="min-w-0">
-                                  <div className="text-[15px] font-semibold leading-[1.3] text-[var(--text-primary)]">
-                                    {theme.name}
-                                  </div>
-                                  <div className="mt-1 text-[12px] leading-5 text-[var(--text-muted)]">
-                                    {theme.description}
-                                  </div>
+                              </div>
+                              <div className="min-w-0">
+                                <div className="truncate text-[17px] font-bold leading-[1.25] text-[var(--text-primary)]">
+                                  {theme.name}
+                                </div>
+                                <div className="mt-1 line-clamp-2 text-[13px] leading-5 text-[var(--text-secondary)]">
+                                  {theme.description}
                                 </div>
                               </div>
-                              <span
-                                className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${
-                                  active ? "bg-[var(--accent)]" : "bg-white/20"
-                                }`}
-                              />
                             </div>
                             <div className="mt-4 flex w-full items-center gap-2">
                               {[theme.bg, theme.card, theme.accent, theme.text].map((color) => (
                                 <span
                                   key={color}
-                                  className="h-7 flex-1 rounded-[8px] border border-white/10"
+                                  className="settings-theme-color h-8 min-w-0 flex-1 rounded-[8px] border border-white/10"
                                   style={{ backgroundColor: color }}
                                 />
                               ))}
                             </div>
-                            <div className="mt-3 text-[12px] leading-5 text-[var(--text-secondary)]">
+                            <div className="mt-3 line-clamp-2 text-[12px] leading-5 text-[var(--text-secondary)]">
                               示例文字：歌词编辑、依赖状态与按钮文本保持清晰可读。
                             </div>
                           </button>
                         );
                       })}
                     </div>
+                  ) : settingsPane === "about" ? (
+                    <div className="flex w-full max-w-[860px] flex-col gap-4">
+                      <div className="settings-card rounded-[16px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] px-6 py-5">
+                        <div className="grid min-h-12 gap-4 text-[14px] leading-6 text-[var(--text-secondary)] md:grid-cols-2">
+                          <div className="min-w-0">
+                            <div className="text-[13px] font-semibold text-[var(--text-muted)]">版本号</div>
+                            <div className="ui-text-ellipsis mt-1 text-[18px] font-bold text-[var(--text-primary)]" title={APP_VERSION}>{APP_VERSION}</div>
+                          </div>
+                          <div className="min-w-0">
+                            <div className="text-[13px] font-semibold text-[var(--text-muted)]">作者</div>
+                            <div className="ui-text-ellipsis mt-1 text-[18px] font-bold text-[var(--text-primary)]" title="-捅捅-（B 站 UID：1519262）">-捅捅-（B 站 UID：1519262）</div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="settings-card rounded-[16px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] px-7 py-6">
+                        <div className="text-[17px] font-bold text-[var(--text-primary)]">声明</div>
+                        <p className="ui-copy mt-3 text-[14px] leading-[1.75] text-[var(--text-secondary)]">
+                          GitHub 项目名为《4isfstools》，此软件一般用于在哪都找不到伴奏的那些歌，本软件仅提供音频处理、学习与研究用途，不提供或分发受版权保护的音频内容。用户应确保其处理的音频文件来源合法，并拥有相应版权或使用授权。因用户上传、处理、导出或传播音频内容所产生的版权及其他法律责任，由用户自行承担。
+                        </p>
+                      </div>
+                      <div className="settings-card rounded-[16px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] px-7 py-6">
+                        <div className="text-[17px] font-bold text-[var(--text-primary)]">开源声明</div>
+                        <p className="ui-copy mt-3 text-[14px] text-[var(--text-secondary)]">
+                          本软件使用了以下开源项目，相关版权归原作者或贡献者所有，并遵循其对应的开源许可证：
+                        </p>
+                        <div className="ui-chip-wrap mt-4">
+                          {[
+                            "FFmpeg — FFmpeg Developers",
+                            "PyTorch — PyTorch Contributors / Linux Foundation",
+                            "Demucs — Meta AI / Facebook Research",
+                            "Whisper — OpenAI",
+                            "SoundFile / python-soundfile — Bastibe and contributors",
+                            "NumPy — NumPy Developers",
+                            "SciPy — SciPy Developers",
+                            "Tauri — Tauri Programme within The Commons Conservancy",
+                            "React — Meta Platforms, Inc.",
+                            "Vite — Evan You and Vite Contributors",
+                            "163MusicLyrics — jitwxs",
+                          ].map((item) => (
+                            <div key={item} className="ui-chip flex-[1_1_320px]" title={item}>
+                              <span>{item}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="settings-card rounded-[16px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] px-7 py-6">
+                        <div className="text-[17px] font-bold text-[var(--text-primary)]">鸣谢</div>
+                        <div className="ui-chip-wrap mt-3">
+                          {["零度天堂（BUID：448187）", "达宝Doublemint（BUID：5854007）", "杠杠（BUID：3493291207166696）"].map((name) => (
+                            <span key={name} className="ui-chip" title={name}><span>{name}</span></span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
                   ) : (
-                    <div className="flex w-full flex-col gap-[20px]">
-                      <div data-debug-id="env-summary-card" className="env-summary-card rounded-[18px] border border-[var(--border)] bg-[var(--bg-card)] p-[22px] shadow-[0_1px_0_rgba(255,255,255,0.03)_inset]">
-                        <div className="flex items-start justify-between gap-5">
-                          <div className="min-w-0 max-w-[620px]">
-                            <div className="text-[16px] font-semibold leading-[1.3] tracking-tight text-[var(--text-primary)]">启动环境检测</div>
-                            <div className="mt-[5px] text-[13px] leading-[1.4] text-[var(--text-secondary)]">
-                              启动后自动检测最小运行条件，核心依赖异常会标红或标黄。
+                    <div className="flex w-full flex-col gap-5">
+                      <div data-debug-id="env-summary-card" className="env-summary-card rounded-[16px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] p-4 shadow-[0_1px_0_rgba(255,255,255,0.03)_inset]">
+                        <div className="flex items-center justify-between gap-5">
+                          <div className="flex min-w-0 items-start gap-3">
+                            <div
+                              className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-[13px] text-[22px] ${
+                                runtimeHealth?.level === "ready"
+                                  ? "bg-emerald-400/10 text-emerald-300"
+                                : runtimeHealth?.level === "warning"
+                                  ? "bg-amber-400/10 text-amber-300"
+                                  : "bg-rose-400/10 text-rose-300"
+                              }`}
+                            >
+                              {runtimeHealth?.level === "ready" ? "✓" : "!"}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="text-[18px] font-bold leading-[1.25] tracking-tight text-[var(--text-primary)]">
+                                {runtimeHealth?.level === "ready" ? "环境可运行" : "需要处理"}
+                              </div>
+                              <div className="mt-1 max-w-[620px] truncate text-[13px] leading-5 text-[var(--text-secondary)]" title={bootstrapStatus?.detail ?? runtimeHealth?.detail ?? "正在获取环境状态..."}>
+                                {runtimeHealth?.level === "ready" ? "核心依赖已就绪，可运行人声分离。" : bootstrapStatus?.detail ?? runtimeHealth?.detail ?? "正在获取环境状态..."}
+                              </div>
                             </div>
                           </div>
-                          <div
-                            className={`inline-flex shrink-0 items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium ${
-                              runtimeHealth?.level === "ready"
-                                ? "border border-emerald-400/20 bg-emerald-400/10 text-emerald-200"
-                                : runtimeHealth?.level === "warning"
-                                  ? "border border-amber-400/20 bg-amber-400/10 text-amber-200"
-                                  : "border border-rose-400/20 bg-rose-400/10 text-rose-200"
-                            }`}
-                          >
-                            <span
-                              className={`h-2 w-2 rounded-full ${
-                                runtimeHealth?.level === "ready"
-                                  ? "bg-emerald-300"
-                                  : runtimeHealth?.level === "warning"
-                                    ? "bg-amber-300"
-                                    : "bg-rose-300"
-                              }`}
-                            />
-                            <span>{runtimeHealth?.label ?? "检测中..."}</span>
+                          <div className="flex shrink-0 items-center gap-3">
+                            <button
+                              type="button"
+                              className="inline-flex h-10 items-center justify-center whitespace-nowrap rounded-[12px] border border-[rgba(148,163,184,0.16)] px-4 text-[13px] font-semibold text-[var(--text-secondary)] transition-colors hover:bg-[rgba(148,163,184,0.08)] focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
+                              onClick={() => void handleRefreshRuntimeHealth()}
+                            >
+                              重新检测
+                            </button>
+                            <button
+                              type="button"
+                              className="inline-flex h-10 min-w-[148px] items-center justify-center rounded-[12px] bg-[var(--accent)] px-[18px] text-[13px] font-bold text-white transition-colors hover:bg-[var(--accent-hover)] focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-60"
+                              onClick={() => void handleBootstrapInstall()}
+                              disabled={bootstrapInstalling}
+                            >
+                              {bootstrapInstalling ? "安装中..." : "安装/修复运行环境"}
+                            </button>
                           </div>
-                        </div>
-                        <div className="mt-4 text-[14px] leading-6 text-[var(--text-secondary)]">
-                          {bootstrapStatus?.detail ?? runtimeHealth?.detail ?? "正在获取环境状态..."}
-                        </div>
-                        <div className="mt-4 grid gap-2 rounded-2xl border border-[var(--border)] bg-[var(--bg-secondary)] p-3 text-[12px] leading-5 text-[var(--text-secondary)] sm:grid-cols-2 lg:grid-cols-3">
-                          <div className="flex items-center justify-between gap-3">
-                            <span className="text-[var(--text-muted)]">NVIDIA GPU</span>
-                            <span className="font-medium text-[var(--text-primary)]">{runtimeHasNvidiaGpu ? "已检测" : "未检测"}</span>
-                          </div>
-                          <div className="flex items-center justify-between gap-3">
-                            <span className="text-[var(--text-muted)]">Torch 版本</span>
-                            <span className="font-medium text-[var(--text-primary)]">{runtimeTorchVersion ?? "未安装"}</span>
-                          </div>
-                          <div className="flex items-center justify-between gap-3">
-                            <span className="text-[var(--text-muted)]">Torch CUDA</span>
-                            <span className="font-medium text-[var(--text-primary)]">{runtimeTorchCudaAvailable ? "可用" : "不可用"}</span>
-                          </div>
-                          <div className="flex items-center justify-between gap-3">
-                            <span className="text-[var(--text-muted)]">CUDA 版本</span>
-                            <span className="font-medium text-[var(--text-primary)]">{runtimeTorchCudaVersion ?? "无"}</span>
-                          </div>
-                          <div className="flex items-center justify-between gap-3">
-                            <span className="text-[var(--text-muted)]">运行设备</span>
-                            <span className="font-medium text-[var(--text-primary)]">{runtimeSelectedDevice}</span>
-                          </div>
-                          <div className="flex items-center justify-between gap-3">
-                            <span className="text-[var(--text-muted)]">GPU 设备名</span>
-                            <span className="font-medium text-[var(--text-primary)]">{runtimeTorchCudaDeviceName ?? "无"}</span>
-                          </div>
-                        </div>
-                        <div className="mt-4 flex items-center justify-between gap-4">
-                          <div className="text-[12px] leading-5 text-[var(--text-muted)]">
-                            最小壳模式下将按需安装 Python 运行时与模型（支持后续镜像源扩展）。
-                          </div>
-                          <button
-                            type="button"
-                            className="inline-flex min-w-[128px] items-center justify-center rounded-full bg-[var(--accent)] px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-[var(--accent-hover)] disabled:cursor-not-allowed disabled:opacity-60"
-                            onClick={() => void handleBootstrapInstall()}
-                            disabled={bootstrapInstalling}
-                          >
-                            {bootstrapInstalling ? "安装中..." : "一键安装运行环境"}
-                          </button>
                         </div>
                         {bootstrapMessage && (
-                          <div className="mt-2 text-[12px] text-[var(--accent)]">{bootstrapMessage}</div>
+                          <div className="mt-3 rounded-[12px] border border-[color-mix(in_srgb,var(--accent)_22%,transparent)] bg-[color-mix(in_srgb,var(--accent)_8%,transparent)] px-3 py-2 text-[12px] text-[var(--accent)]">{bootstrapMessage}</div>
                         )}
                       </div>
 
-                      <div data-debug-id="dependency-list" className="dependency-list flex w-full flex-col gap-[10px]">
-                        {(runtimeHealth?.checks ?? []).map((check) => (
+                      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                        {[
+                          ["NVIDIA GPU", runtimeHasNvidiaGpu ? "已检测" : "未检测"],
+                          ["Torch 版本", runtimeTorchVersion ?? "未安装"],
+                          ["Torch CUDA", runtimeTorchCudaAvailable ? "可用" : "不可用"],
+                          ["CUDA 版本", runtimeTorchCudaVersion ?? "无"],
+                          ["运行设备", runtimeSelectedDevice],
+                          ["GPU 设备名", runtimeTorchCudaDeviceName ?? "无"],
+                        ].map(([label, value]) => (
+                          <div key={label} className="runtime-info-card flex h-16 min-w-0 flex-col justify-center rounded-[12px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] px-4">
+                            <div className="truncate text-[12px] font-semibold text-[var(--text-muted)]">{label}</div>
+                            <div className="mt-1 truncate text-[15px] font-bold text-[var(--text-primary)]" title={value}>{value}</div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="flex items-center justify-between gap-4">
+                        <div className="text-[16px] font-bold text-[var(--text-primary)]">检测项目</div>
+                        <div className="ui-chip text-[12px]" title="当前已返回项目数 / 预期检测项目数">
+                          <span>{runtimeCheckCountLabel}</span>
+                        </div>
+                      </div>
+
+                      <div data-debug-id="dependency-list" className="dependency-list grid w-full gap-3 lg:grid-cols-2">
+                        {displayedRuntimeChecks.map((check) => (
                           <div
                             key={check.name}
                             data-debug-id="dependency-card"
-                            className="dependency-card relative flex h-[60px] min-h-[60px] max-h-[64px] items-center gap-[14px] rounded-[16px] border border-[var(--border)] bg-[var(--bg-card)] px-[22px] transition-colors"
-                            style={{ height: 60, minHeight: 60, maxHeight: 64, paddingLeft: 22, paddingRight: 22, gap: 14 }}
+                            className="dependency-card flex h-[68px] min-w-0 items-center gap-3 rounded-[14px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] px-4 transition-colors"
                           >
                             <span
                               data-debug-id="status-dot"
-                              className={`status-dot static h-[8px] w-[8px] shrink-0 flex-[0_0_8px] rounded-full ${
+                              className={`h-2.5 w-2.5 shrink-0 rounded-full ${
                                 check.ok
                                   ? "bg-emerald-300"
                                   : check.severity === "warning"
@@ -2218,39 +2379,31 @@ function App() {
                                       ? "bg-sky-300"
                                       : "bg-rose-300"
                               }`}
-                              style={{ position: "static", width: 8, height: 8, marginLeft: 0, marginRight: 0, transform: "none", flex: "0 0 8px" }}
                             />
-                            <div className="dependency-text flex min-w-0 flex-[0_1_auto] flex-col gap-[3px]">
-                              <div className="dependency-title min-w-0 text-[15px] font-semibold leading-[1.25] tracking-tight text-[var(--text-primary)]">
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate text-[15px] font-bold leading-[1.25] tracking-tight text-[var(--text-primary)]">
                                 {check.name}
                               </div>
                               {check.detail && (
-                                <div className="dependency-description min-w-0 text-[12px] leading-[1.3] text-[var(--text-muted)]">{check.detail}</div>
+                                <div className="mt-1 truncate text-[12px] leading-[1.3] text-[var(--text-muted)]" title={check.detail}>{check.detail}</div>
                               )}
                             </div>
-                            <div className="dependency-spacer min-w-[16px] flex-[1_1_auto]" />
                             <div
                               data-debug-id="status-badge"
-                              className={`status-badge static inline-flex h-[24px] w-auto flex-[0_0_auto] items-center justify-center rounded-full px-[9px] text-[12px] font-semibold ${
+                              className={`status-badge ${
                                 check.ok
-                                  ? "border border-emerald-400/20 bg-emerald-400/10 text-emerald-200"
+                                  ? "status-badge-ok"
                                   : check.severity === "warning"
-                                    ? "border border-amber-400/20 bg-amber-400/10 text-amber-200"
+                                    ? "status-badge-warning"
                                     : check.severity === "info"
-                                      ? "border border-sky-400/20 bg-sky-400/10 text-sky-200"
-                                      : "border border-rose-400/20 bg-rose-400/10 text-rose-200"
+                                      ? "status-badge-info"
+                                      : "status-badge-error"
                               }`}
-                              style={{ position: "static", width: "auto", height: 24, paddingLeft: 9, paddingRight: 9, marginLeft: 0, marginRight: 0, transform: "none", flex: "0 0 auto", alignSelf: "auto" }}
                             >
-                              {check.ok ? "正常" : check.severity === "warning" ? "注意" : check.severity === "info" ? "信息" : "异常"}
+                              {check.ok ? "正常" : check.severity === "warning" ? "注意" : check.severity === "info" ? "未确认" : "异常"}
                             </div>
                           </div>
                         ))}
-                        {(!runtimeHealth?.checks || runtimeHealth.checks.length === 0) && (
-                          <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] px-4 py-3 text-sm text-[var(--text-secondary)]">
-                            暂无检测结果。
-                          </div>
-                        )}
                       </div>
                     </div>
                   )}
@@ -2267,37 +2420,42 @@ function App() {
             className="absolute inset-0 bg-black/55 backdrop-blur-[2px]"
             onClick={closeLyricsCandidateModal}
           />
-          <div className="theme-aware-surface relative w-full max-w-3xl rounded-3xl border border-[var(--border)] bg-[var(--bg-secondary)] p-7 shadow-2xl shadow-black/30">
-            <div className="flex items-start justify-between gap-4">
-              <div>
+          <div className="theme-aware-surface relative w-full max-w-3xl rounded-3xl border border-[var(--panel-accent-border)] bg-[var(--bg-secondary)] p-7 shadow-[0_0_0_1px_var(--panel-inner-border),0_24px_70px_rgba(0,0,0,0.42),0_14px_38px_var(--panel-glow)]">
+            <div className="flex min-w-0 items-start justify-between gap-4">
+              <div className="min-w-0">
                 <div className="text-base font-semibold text-[var(--text-primary)]">选择歌词候选</div>
-                <div className="mt-2 text-sm text-[var(--text-muted)]">{lyricsCandidateSong.name}</div>
+                <div className="ui-text-ellipsis mt-2 text-sm text-[var(--text-muted)]" title={lyricsCandidateSong.name}>{lyricsCandidateSong.name}</div>
               </div>
                 <button
                   type="button"
-                  className="inline-flex min-w-[92px] items-center justify-center whitespace-nowrap rounded-full px-6 py-2.5 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-card)]"
+                  className="ui-button shrink-0 px-5 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-card)]"
                   onClick={closeLyricsCandidateModal}
                 >
                   关闭
                 </button>
             </div>
 
-            <div className="mt-4 flex items-center gap-3">
-              <input
-                type="text"
-                value={lyricsSearchQuery}
-                onChange={(event) => setLyricsSearchQuery(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key !== "Enter" || !lyricsCandidateSong || lyricsCandidateLoading) return;
-                  event.preventDefault();
-                  void handleSearchLyrics(lyricsCandidateSong, lyricsSearchQuery);
-                }}
-                placeholder="输入关键词，例如歌手名、歌名、专辑名"
-                className="h-11 flex-1 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] px-4 text-sm text-[var(--text-primary)] outline-none transition-colors placeholder:text-[var(--text-muted)] focus:border-[var(--accent)]"
-              />
+            <div className="mt-4 flex min-w-0 items-center gap-3">
+              <div className="ui-search min-w-0 flex-1">
+                <span className="ui-search-icon">
+                  <AppSearchIcon className="h-4.5 w-4.5" />
+                </span>
+                <input
+                  type="text"
+                  value={lyricsSearchQuery}
+                  onChange={(event) => setLyricsSearchQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" || !lyricsCandidateSong || lyricsCandidateLoading) return;
+                    event.preventDefault();
+                    void handleSearchLyrics(lyricsCandidateSong, lyricsSearchQuery);
+                  }}
+                  placeholder="输入关键词，例如歌手名、歌名、专辑名"
+                  className="ui-field ui-search-input h-11 flex-1 rounded-2xl bg-[var(--bg-card)] text-sm transition-colors placeholder:text-[var(--text-muted)] focus:border-[var(--accent)]"
+                />
+              </div>
               <button
                 type="button"
-                className="inline-flex h-11 min-w-[96px] items-center justify-center whitespace-nowrap rounded-full bg-[var(--accent)] px-5 text-sm font-semibold text-white transition-colors hover:bg-[var(--accent-hover)] disabled:cursor-not-allowed disabled:opacity-60"
+                className="ui-button ui-button-primary h-11 min-w-[96px] text-sm font-semibold transition-colors hover:bg-[var(--accent-hover)] disabled:cursor-not-allowed disabled:opacity-60"
                 disabled={lyricsCandidateLoading || !lyricsCandidateSong || !lyricsSearchQuery.trim()}
                 onClick={() => {
                   if (lyricsCandidateSong) {
@@ -2310,7 +2468,7 @@ function App() {
             </div>
 
             {lyricsCandidateError && (
-              <div className="mt-4 rounded-2xl border border-rose-400/25 bg-rose-400/[0.08] px-4 py-3 text-sm text-[#ef4444]">
+              <div className="mt-4 max-h-40 overflow-auto rounded-2xl border border-rose-400/25 bg-rose-400/[0.08] px-4 py-3 text-sm leading-6 text-[#ef4444]">
                 {lyricsCandidateError}
               </div>
             )}
@@ -2328,26 +2486,26 @@ function App() {
                     key={candidate.id}
                     type="button"
                     onClick={() => void handleApplyLyricsCandidate(candidate)}
-                    className="w-full rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] px-4 py-4 text-left transition-colors hover:bg-[var(--bg-tertiary)]"
+                    className="w-full rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] px-5 py-4 text-left transition-colors hover:bg-[var(--bg-tertiary)]"
                   >
-                    <div className="flex items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center justify-between gap-3">
                       <div className="min-w-0">
-                        <div className="truncate text-sm font-semibold text-[var(--text-primary)]">{candidate.title}</div>
-                        <div className="mt-1 text-xs text-[var(--text-secondary)]">
+                        <div className="ui-text-ellipsis text-sm font-semibold text-[var(--text-primary)]" title={candidate.title}>{candidate.title}</div>
+                        <div className="ui-text-ellipsis mt-1 text-xs text-[var(--text-secondary)]" title={`${candidate.artist || "未知歌手"}${candidate.album ? ` · ${candidate.album}` : ""}`}>
                           {candidate.artist || "未知歌手"}
                           {candidate.album ? ` · ${candidate.album}` : ""}
                         </div>
                       </div>
                       <div className="flex shrink-0 items-center gap-2">
-                        <span className="rounded-full bg-[var(--bg-tertiary)] px-3 py-1 text-xs text-[var(--text-secondary)]">
-                          {candidate.sourceLabel}
+                        <span className="ui-chip min-h-7 bg-[var(--bg-tertiary)] py-0 text-xs text-[var(--text-secondary)]" title={candidate.sourceLabel}>
+                          <span>{candidate.sourceLabel}</span>
                         </span>
-                        <span className="rounded-full bg-[var(--accent)] px-3 py-1 text-xs font-semibold text-white">
-                          {candidate.score}
+                        <span className="ui-chip min-h-7 border-transparent bg-[var(--accent)] py-0 text-xs font-semibold text-white">
+                          <span>{candidate.score}</span>
                         </span>
                       </div>
                     </div>
-                    <div className="mt-3 whitespace-pre-line text-sm leading-6 text-[var(--text-secondary)]">
+                    <div className="mt-3 whitespace-pre-line text-sm leading-[1.7] text-[var(--text-secondary)]">
                       {candidate.preview || "（无预览）"}
                     </div>
                     <div className="mt-3 text-xs text-[var(--text-muted)]">
@@ -2367,7 +2525,7 @@ function App() {
             <div className="mt-6 flex items-center justify-end">
               <button
                 type="button"
-                className="inline-flex min-w-[92px] items-center justify-center whitespace-nowrap rounded-full px-6 py-2.5 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-card)]"
+                className="ui-button px-5 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-card)]"
                 onClick={closeLyricsCandidateModal}
               >
                 取消
