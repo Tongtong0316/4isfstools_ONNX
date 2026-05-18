@@ -686,7 +686,7 @@ export default function Playlist({
                 <div key={folderName} className="overflow-hidden border-b border-[var(--border)] bg-[var(--bg-secondary)]">
                   <div
                     className={`flex items-center justify-between bg-[var(--bg-card)] ${isDropActive ? "transition-colors" : ""}`}
-                    style={{ height: 44, padding: "0 16px" }}
+                    style={{ height: 36, padding: "0 16px" }}
                     onClick={() => setCollapsedFolders((prev) => ({ ...prev, [folderName]: !isCollapsed }))}
                     onContextMenu={(e) => openFolderMenu(e, folderName)}
                     onDragOver={(e) => {
@@ -703,13 +703,13 @@ export default function Playlist({
                       setDraggedSongId(null);
                     }}
                   >
-                    <div className="flex min-w-0 items-center gap-2.5">
-                      <span className="text-[var(--text-muted)]">{isCollapsed ? "▸" : "▾"}</span>
-                      <span className="ui-text-ellipsis truncate text-[18px] font-semibold leading-none text-[var(--text-primary)]" title={folderName}>{folderName}</span>
-                      <span className="ui-chip min-h-7 px-2.5 py-0 text-xs font-semibold text-[var(--text-secondary)]"><span>{folderSongs.length}</span></span>
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="text-[var(--text-muted)] text-xs leading-none">{isCollapsed ? "▸" : "▾"}</span>
+                      <span className="ui-text-ellipsis truncate text-[16px] font-bold leading-none text-[var(--text-primary)]" title={folderName}>{folderName}</span>
+                      <span className="text-[14px] font-semibold leading-none text-[var(--text-muted)]">{folderSongs.length}</span>
                     </div>
                     <button
-                      className="flex h-7 w-7 items-center justify-center rounded-full text-[18px] text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+                      className="flex h-6 w-6 items-center justify-center rounded-full text-[15px] text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
                       onClick={(e) => {
                         e.stopPropagation();
                         setCollapsedFolders((prev) => ({ ...prev, [folderName]: !isCollapsed }));
@@ -981,28 +981,50 @@ export default function Playlist({
 
       {confirmDialog && (
         <>
-          <div className="fixed inset-0 z-40 bg-black/55 backdrop-blur-[2px]" onClick={() => setConfirmDialog(null)} />
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
-            <div className="modal-shell px-8 py-7">
-              <div className="text-[18px] font-semibold leading-7 text-[var(--text-primary)]">
-                {confirmDialog.kind === "delete-song" ? "删除歌曲" : "删除文件夹"}
+          <div
+            className="fixed inset-0 z-50 bg-black/55 backdrop-blur-[2px]"
+            onClick={() => setConfirmDialog(null)}
+          />
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-6">
+            <div className="destructive-dialog">
+              <div className="destructive-dialog-header">
+                <div className="destructive-dialog-icon">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                    <line x1="12" y1="9" x2="12" y2="13"/>
+                    <line x1="12" y1="17" x2="12.01" y2="17"/>
+                  </svg>
+                </div>
+                <span className="destructive-dialog-title">
+                  {confirmDialog.kind === "delete-song" ? "删除歌曲" : "删除文件夹"}
+                </span>
               </div>
-              <div className="modal-copy mt-3 text-sm">
-                {confirmDialog.kind === "delete-song"
-                  ? `确认删除「${confirmDialog.song.name}」？此操作会同时移除本地数据。`
-                  : `确认删除文件夹「${confirmDialog.folderName}」？里面的歌曲会回到未分组。`}
+              <div className="destructive-dialog-body">
+                <p className="primary-message">
+                  {confirmDialog.kind === "delete-song"
+                    ? <>确认删除「<span className="song-name">{confirmDialog.song.name}</span>」？</>
+                    : <>确认删除文件夹「{confirmDialog.folderName}」？</>}
+                </p>
+                <p className="secondary-message">
+                  {confirmDialog.kind === "delete-song"
+                    ? "此操作会同时移除本地数据，删除后不可从本应用内恢复。"
+                    : "里面的歌曲会回到未分组。"}
+                </p>
               </div>
-              <div className="mt-7 flex flex-wrap items-center justify-end gap-3">
+              <div className="destructive-dialog-footer">
                 <button
                   type="button"
-                  className="inline-flex min-w-[92px] items-center justify-center whitespace-nowrap rounded-full px-6 py-2.5 text-sm font-medium text-[var(--text-secondary)] hover:bg-white/[0.06]"
+                  className="cancel-btn"
                   onClick={() => setConfirmDialog(null)}
+                  autoFocus
                 >
                   取消
                 </button>
                 <button
                   type="button"
-                  className="inline-flex min-w-[92px] items-center justify-center whitespace-nowrap rounded-full bg-[#ef4444] px-6 py-2.5 text-sm font-semibold text-white hover:bg-[#dc2626]"
+                  className="delete-btn"
+                  data-danger="true"
+                  aria-label={confirmDialog.kind === "delete-song" ? `确认删除歌曲 ${confirmDialog.song.name}` : `确认删除文件夹 ${confirmDialog.folderName}`}
                   onClick={() => {
                     if (confirmDialog.kind === "delete-song") {
                       onDeleteSong(confirmDialog.song.id);

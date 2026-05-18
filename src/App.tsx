@@ -2415,30 +2415,34 @@ function App() {
       )}
 
       {lyricsCandidateSong && lyricsCandidateOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-8">
           <div
             className="absolute inset-0 bg-black/55 backdrop-blur-[2px]"
             onClick={closeLyricsCandidateModal}
           />
-          <div className="theme-aware-surface relative w-full max-w-3xl rounded-3xl border border-[var(--panel-accent-border)] bg-[var(--bg-secondary)] p-7 shadow-[0_0_0_1px_var(--panel-inner-border),0_24px_70px_rgba(0,0,0,0.42),0_14px_38px_var(--panel-glow)]">
-            <div className="flex min-w-0 items-start justify-between gap-4">
+          <div className="theme-aware-surface relative flex flex-col w-full overflow-hidden rounded-[22px] border border-[var(--panel-accent-border)] bg-[var(--bg-secondary)] shadow-[0_0_0_1px_var(--panel-inner-border),0_24px_70px_rgba(0,0,0,0.42),0_14px_38px_var(--panel-glow)]"
+            style={{ width: "min(820px, calc(100vw - 64px))", maxHeight: "min(720px, calc(100vh - 64px))" }}>
+            {/* Header */}
+            <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-4 px-7 pt-6" style={{ padding: "24px 28px 14px" }}>
               <div className="min-w-0">
-                <div className="text-base font-semibold text-[var(--text-primary)]">选择歌词候选</div>
-                <div className="ui-text-ellipsis mt-2 text-sm text-[var(--text-muted)]" title={lyricsCandidateSong.name}>{lyricsCandidateSong.name}</div>
+                <div className="text-[24px] font-extrabold leading-[1.2] text-[var(--text-primary)]">选择歌词候选</div>
+                <div className="ui-text-ellipsis mt-1.5 text-[14px] font-semibold leading-[1.35] text-[var(--text-secondary)]" title={lyricsCandidateSong.name}>{lyricsCandidateSong.name}</div>
               </div>
-                <button
-                  type="button"
-                  className="ui-button shrink-0 px-5 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-card)]"
-                  onClick={closeLyricsCandidateModal}
-                >
-                  关闭
-                </button>
+              <button
+                type="button"
+                className="shrink-0 h-[32px] w-[32px] rounded-[8px] text-[18px] font-normal text-[var(--text-secondary)] bg-transparent hover:bg-[var(--ghost-button-hover-bg)] hover:text-[var(--text-primary)] focus:outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus-ring)]"
+                onClick={closeLyricsCandidateModal}
+                aria-label="关闭"
+              >
+                ×
+              </button>
             </div>
 
-            <div className="mt-4 flex min-w-0 items-center gap-3">
-              <div className="ui-search min-w-0 flex-1">
-                <span className="ui-search-icon">
-                  <AppSearchIcon className="h-4.5 w-4.5" />
+            {/* SearchBar */}
+            <div className="grid grid-cols-[minmax(0,1fr)_88px] gap-3 items-center px-[28px]" style={{ padding: "0 28px 16px" }}>
+              <div className="relative flex h-[42px] min-w-0 flex-1 items-center overflow-hidden rounded-[13px] border border-[var(--input-border)] bg-[var(--input-bg)]">
+                <span className="flex h-full w-[40px] flex-shrink-0 items-center justify-center">
+                  <AppSearchIcon className="h-[18px] w-[18px] text-[var(--text-muted)]" />
                 </span>
                 <input
                   type="text"
@@ -2450,12 +2454,12 @@ function App() {
                     void handleSearchLyrics(lyricsCandidateSong, lyricsSearchQuery);
                   }}
                   placeholder="输入关键词，例如歌手名、歌名、专辑名"
-                  className="ui-field ui-search-input h-11 flex-1 rounded-2xl bg-[var(--bg-card)] text-sm transition-colors placeholder:text-[var(--text-muted)] focus:border-[var(--accent)]"
+                  className="flex-1 min-w-0 h-full bg-transparent pr-[14px] text-[15px] text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none"
                 />
               </div>
               <button
                 type="button"
-                className="ui-button ui-button-primary h-11 min-w-[96px] text-sm font-semibold transition-colors hover:bg-[var(--accent-hover)] disabled:cursor-not-allowed disabled:opacity-60"
+                className="h-[42px] min-w-[88px] px-[16px] rounded-[13px] text-[15px] font-bold text-[var(--primary-button-text)] bg-[var(--primary-button-bg)] hover:bg-[var(--accent-hover)] disabled:cursor-not-allowed disabled:opacity-60"
                 disabled={lyricsCandidateLoading || !lyricsCandidateSong || !lyricsSearchQuery.trim()}
                 onClick={() => {
                   if (lyricsCandidateSong) {
@@ -2467,49 +2471,51 @@ function App() {
               </button>
             </div>
 
+            {/* CandidateList */}
+            <div className="flex-1 overflow-y-auto px-[28px] pb-[18px] flex flex-col gap-3" style={{ padding: "12px 28px 18px" }}>
             {lyricsCandidateError && (
-              <div className="mt-4 max-h-40 overflow-auto rounded-2xl border border-rose-400/25 bg-rose-400/[0.08] px-4 py-3 text-sm leading-6 text-[#ef4444]">
+              <div className="max-h-40 overflow-auto rounded-[13px] border border-[var(--danger-border)] bg-[var(--danger-soft)] px-4 py-3 text-[14px] leading-6 text-[var(--danger)]">
                 {lyricsCandidateError}
               </div>
             )}
 
             {lyricsCandidateLoading && !lyricsCandidates && !lyricsCandidateError && (
-              <div className="mt-4 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] px-4 py-3 text-sm text-[var(--text-secondary)]">
+              <div className="rounded-[13px] border border-[var(--border)] bg-[var(--bg-card)] px-4 py-3 text-[14px] text-[var(--text-secondary)]">
                 搜索中...
               </div>
             )}
 
             {lyricsCandidates && lyricsCandidates.length > 0 && (
-              <div className="mt-4 max-h-[60vh] overflow-y-auto pr-1 flex flex-col gap-3">
+              <div className="flex flex-col gap-3 pb-2">
                 {lyricsCandidates.map((candidate) => (
                   <button
                     key={candidate.id}
                     type="button"
                     onClick={() => void handleApplyLyricsCandidate(candidate)}
-                    className="w-full rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] px-5 py-4 text-left transition-colors hover:bg-[var(--bg-tertiary)]"
+                    className="group relative grid grid-cols-[minmax(0,1fr)_auto] gap-4 p-[16px_18px] min-h-[128px] rounded-[16px] border border-[var(--border-soft)] bg-[var(--surface-card)] text-left transition-all hover:border-[var(--selected-border)] hover:bg-[var(--bg-tertiary)]"
                   >
-                    <div className="flex min-w-0 items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="ui-text-ellipsis text-sm font-semibold text-[var(--text-primary)]" title={candidate.title}>{candidate.title}</div>
-                        <div className="ui-text-ellipsis mt-1 text-xs text-[var(--text-secondary)]" title={`${candidate.artist || "未知歌手"}${candidate.album ? ` · ${candidate.album}` : ""}`}>
-                          {candidate.artist || "未知歌手"}
-                          {candidate.album ? ` · ${candidate.album}` : ""}
-                        </div>
+                    {/* MainContent */}
+                    <div className="min-w-0 overflow-hidden">
+                      <div className="text-[16px] font-extrabold leading-[1.3] text-[var(--text-primary)] line-clamp-2" title={candidate.title}>{candidate.title}</div>
+                      <div className="ui-text-ellipsis mt-1 text-[13px] font-semibold leading-[1.35] text-[var(--text-secondary)]" title={`${candidate.artist || "未知歌手"}${candidate.album ? ` · ${candidate.album}` : ""}`}>
+                        {candidate.artist || "未知歌手"}
+                        {candidate.album ? ` · ${candidate.album}` : ""}
                       </div>
-                      <div className="flex shrink-0 items-center gap-2">
-                        <span className="ui-chip min-h-7 bg-[var(--bg-tertiary)] py-0 text-xs text-[var(--text-secondary)]" title={candidate.sourceLabel}>
-                          <span>{candidate.sourceLabel}</span>
-                        </span>
-                        <span className="ui-chip min-h-7 border-transparent bg-[var(--accent)] py-0 text-xs font-semibold text-white">
-                          <span>{candidate.score}</span>
-                        </span>
+                      <div className="mt-2 text-[14px] leading-[1.55] text-[var(--text-secondary)] line-clamp-4 overflow-wrap-anywhere" style={{ overflowWrap: "anywhere", wordBreak: "break-word" }}>
+                        {candidate.preview || "（无预览）"}
+                      </div>
+                      <div className="mt-3 text-[12px] text-[var(--text-muted)]">
+                        点击采用此候选
                       </div>
                     </div>
-                    <div className="mt-3 whitespace-pre-line text-sm leading-[1.7] text-[var(--text-secondary)]">
-                      {candidate.preview || "（无预览）"}
-                    </div>
-                    <div className="mt-3 text-xs text-[var(--text-muted)]">
-                      点击即可采用此候选
+                    {/* MetaColumn */}
+                    <div className="flex flex-col items-end gap-2 pt-1" style={{ minWidth: "84px", maxWidth: "128px" }}>
+                      <span className="h-[28px] max-w-[112px] overflow-hidden text-ellipsis whitespace-nowrap rounded-[999px] border border-[var(--chip-border)] bg-[var(--chip-bg)] px-[10px] text-[12px] font-bold leading-[28px] text-[var(--text-secondary)]" title={candidate.sourceLabel}>
+                        {candidate.sourceLabel}
+                      </span>
+                      <span className="h-[28px] rounded-[999px] border border-[var(--border-soft)] bg-[var(--surface-muted)] px-[10px] text-[12px] font-bold leading-[28px] text-[var(--accent)]">
+                        {candidate.score}
+                      </span>
                     </div>
                   </button>
                 ))}
@@ -2517,15 +2523,17 @@ function App() {
             )}
 
             {lyricsCandidates && lyricsCandidates.length === 0 && !lyricsCandidateLoading && !lyricsCandidateError && (
-              <div className="mt-4 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] px-4 py-3 text-sm text-[var(--text-secondary)]">
+              <div className="rounded-[13px] border border-[var(--border)] bg-[var(--bg-card)] px-4 py-3 text-[14px] text-[var(--text-secondary)]">
                 没有找到可用的歌词候选，可以换个关键词继续搜索。
               </div>
             )}
+            </div>
 
-            <div className="mt-6 flex items-center justify-end">
+            {/* Footer */}
+            <div className="flex items-center justify-end gap-3 px-[28px] py-5" style={{ padding: "16px 28px 24px" }}>
               <button
                 type="button"
-                className="ui-button px-5 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-card)]"
+                className="h-[40px] min-w-[88px] rounded-[12px] px-[18px] text-[14px] font-bold text-[var(--text-secondary)] bg-transparent hover:bg-[var(--button-hover-bg)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                 onClick={closeLyricsCandidateModal}
               >
                 取消

@@ -108,6 +108,18 @@
   --panelAccentBorder: var(--panel-accent-border);
   --panelGlow: var(--panel-glow);
   --panelInnerBorder: var(--panel-inner-border);
+  --danger: #ef4444;
+  --dangerHover: #dc2626;
+  --dangerActive: #b91c1c;
+  --dangerSoft: rgba(239, 68, 68, 0.12);
+  --dangerBorder: rgba(239, 68, 68, 0.28);
+  --dangerText: #ffffff;
+  --dialogBg: color-mix(in srgb, var(--bg-secondary) 96%, black);
+  --dialogBorder: var(--panel-accent-border);
+  --dialogShadow: 0 0 0 1px var(--panel-inner-border), 0 24px 70px rgba(0, 0, 0, 0.42), 0 14px 38px var(--panel-glow);
+  --dialogFooterBorder: var(--border-soft);
+  --buttonSecondaryBg: var(--button-bg);
+  --buttonSecondaryHoverBg: var(--button-hover-bg);
 }
 
 :root[data-theme="aurora"] {
@@ -123,6 +135,11 @@
   --text-muted: #7b8794;
   --text-dim: #64748b;
   --border: #263241;
+  --danger: #f87171;
+  --dangerHover: #ef4444;
+  --dangerActive: #dc2626;
+  --dangerSoft: rgba(248, 113, 113, 0.15);
+  --dangerBorder: rgba(248, 113, 113, 0.3);
 }
 
 :root[data-theme="graphite"] {
@@ -138,6 +155,11 @@
   --text-muted: #7d7d89;
   --text-dim: #64748b;
   --border: #303039;
+  --danger: #f87171;
+  --dangerHover: #ef4444;
+  --dangerActive: #dc2626;
+  --dangerSoft: rgba(248, 113, 113, 0.15);
+  --dangerBorder: rgba(248, 113, 113, 0.3);
 }
 
 :root[data-theme="studio"] {
@@ -153,6 +175,11 @@
   --text-muted: #988b82;
   --text-dim: #78685f;
   --border: #37302b;
+  --danger: #f87171;
+  --dangerHover: #ef4444;
+  --dangerActive: #dc2626;
+  --dangerSoft: rgba(248, 113, 113, 0.15);
+  --dangerBorder: rgba(248, 113, 113, 0.3);
 }
 
 :root[data-theme="midnight"] {
@@ -168,6 +195,11 @@
   --text-muted: #8493a7;
   --text-dim: #64748b;
   --border: #26364d;
+  --danger: #f87171;
+  --dangerHover: #ef4444;
+  --dangerActive: #dc2626;
+  --dangerSoft: rgba(248, 113, 113, 0.15);
+  --dangerBorder: rgba(248, 113, 113, 0.3);
 }
 
 :root[data-theme="daylight"] {
@@ -183,6 +215,11 @@
   --text-muted: #64748b;
   --text-dim: #94a3b8;
   --border: #d7dee9;
+  --danger: #dc2626;
+  --dangerHover: #b91c1c;
+  --dangerActive: #991b1b;
+  --dangerSoft: rgba(220, 38, 38, 0.1);
+  --dangerBorder: rgba(220, 38, 38, 0.25);
 }
 
 :root[data-theme="paper"] {
@@ -198,6 +235,11 @@
   --text-muted: #7a7066;
   --text-dim: #9a8f83;
   --border: #ded4c4;
+  --danger: #dc2626;
+  --dangerHover: #b91c1c;
+  --dangerActive: #991b1b;
+  --dangerSoft: rgba(220, 38, 38, 0.1);
+  --dangerBorder: rgba(220, 38, 38, 0.25);
 }
 
 :root[data-theme="passion"] {
@@ -240,6 +282,11 @@
   --waveform-original: #527396;
   --waveform-playhead: #527396;
   --waveform-playhead-glow: rgba(82, 115, 150, 0.36);
+  --danger: #dc2626;
+  --dangerHover: #b91c1c;
+  --dangerActive: #991b1b;
+  --dangerSoft: rgba(220, 38, 38, 0.1);
+  --dangerBorder: rgba(220, 38, 38, 0.25);
 }
 
 :root[data-theme="double"] {
@@ -282,6 +329,11 @@
   --waveform-original: #475569;
   --waveform-playhead: #475569;
   --waveform-playhead-glow: rgba(71, 85, 105, 0.32);
+  --danger: #dc2626;
+  --dangerHover: #b91c1c;
+  --dangerActive: #991b1b;
+  --dangerSoft: rgba(220, 38, 38, 0.1);
+  --dangerBorder: rgba(220, 38, 38, 0.25);
 }
 
 :root[data-theme="zero"] {
@@ -350,6 +402,11 @@
   --waveform-playhead: #fde047;
   --waveform-playhead-glow: rgba(250, 204, 21, 0.42);
   --waveform-playhead-shadow: 0 0 16px rgba(250, 204, 21, 0.28);
+  --danger: #f87171;
+  --dangerHover: #ef4444;
+  --dangerActive: #dc2626;
+  --dangerSoft: rgba(248, 113, 113, 0.15);
+  --dangerBorder: rgba(248, 113, 113, 0.3);
 }
 
 :root[data-theme="daylight"] .theme-aware-surface,
@@ -448,16 +505,17 @@ html, body {
 
 .modal-shell {
   width: min(calc(100vw - 48px), 520px);
-  border-radius: 24px;
-  border: 1px solid var(--panel-accent-border);
-  background: color-mix(in srgb, var(--bg-secondary) 94%, black);
-  box-shadow: 0 0 0 1px var(--panel-inner-border), 0 24px 70px rgba(0, 0, 0, 0.42), 0 14px 38px var(--panel-glow);
+  max-width: 560px;
+  border-radius: 22px;
+  border: 1px solid var(--dialogBorder);
+  background: var(--dialogBg);
+  box-shadow: var(--dialogShadow);
   overflow: hidden;
 }
 
 .modal-copy {
   color: var(--text-secondary);
-  line-height: 1.75;
+  line-height: 1.6;
   overflow-wrap: anywhere;
 }
 
@@ -466,8 +524,131 @@ html, body {
   min-height: 40px;
   padding-left: 18px !important;
   padding-right: 18px !important;
-  border-radius: var(--radius-pill);
+  border-radius: 12px;
   white-space: nowrap;
+}
+
+/* Destructive Confirm Dialog */
+.destructive-dialog {
+  width: min(calc(100vw - 48px), 520px);
+  max-width: 560px;
+  border-radius: 22px;
+  border: 1px solid var(--dialogBorder);
+  background: var(--dialogBg);
+  box-shadow: var(--dialogShadow);
+  overflow: hidden;
+  z-index: 100;
+}
+
+.destructive-dialog-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 24px 28px 12px;
+}
+
+.destructive-dialog-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  background: var(--dangerSoft);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.destructive-dialog-icon svg {
+  width: 20px;
+  height: 20px;
+  color: var(--danger);
+}
+
+.destructive-dialog-title {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.destructive-dialog-body {
+  padding: 0 28px 20px;
+}
+
+.destructive-dialog-body .primary-message {
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.destructive-dialog-body .secondary-message {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.destructive-dialog-body .song-name {
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.destructive-dialog-footer {
+  padding: 18px 28px 24px;
+  border-top: 1px solid var(--dialogFooterBorder);
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+}
+
+.destructive-dialog-footer .cancel-btn {
+  height: 40px;
+  min-width: 88px;
+  padding: 0 18px;
+  border-radius: 12px;
+  background: var(--buttonSecondaryBg);
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  border: none;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.destructive-dialog-footer .cancel-btn:hover {
+  background: var(--buttonSecondaryHoverBg);
+}
+
+.destructive-dialog-footer .cancel-btn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.destructive-dialog-footer .delete-btn {
+  height: 40px;
+  min-width: 96px;
+  padding: 0 20px;
+  border-radius: 12px;
+  background: var(--danger);
+  color: var(--dangerText);
+  font-size: 14px;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.destructive-dialog-footer .delete-btn:hover {
+  background: var(--dangerHover);
+}
+
+.destructive-dialog-footer .delete-btn:active {
+  background: var(--dangerActive);
+}
+
+.destructive-dialog-footer .delete-btn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .modal-shell input {
