@@ -2255,6 +2255,38 @@ fn summarize_separator_failure_output(
     summary
 }
 
+fn timestamp_millis() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
+
+fn append_text_log(path: &Path, text: &str) {
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let mut content = String::new();
+    if let Ok(existing) = fs::read_to_string(path) {
+        content.push_str(&existing);
+        if !existing.ends_with('\n') {
+            content.push('\n');
+        }
+    }
+    content.push_str(text);
+    let _ = fs::write(path, content);
+}
+
+fn format_log_block(title: &str, lines: &[(&str, String)]) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("[{}] {}\n", timestamp_millis(), title));
+    for (key, value) in lines {
+        out.push_str(&format!("{}={}\n", key, value));
+    }
+    out.push('\n');
+    out
+}
+
 fn ensure_core_runtime_modules(
     app: &AppHandle,
     try_demucs_cuda: bool,
@@ -5317,8 +5349,34 @@ import sys
 import subprocess
 import os
 import json
+import importlib.util
 import signal
 import time
+import traceback
+from datetime import datetime
+
+LOG_DEBUG_PATH = os.path.join(output_dir, "separator_debug.log")
+LOG_DEMUCS_PATH = os.path.join(output_dir, "demucs_child.log")
+
+def _ts():
+    return datetime.utcnow().isoformat(timespec="milliseconds") + "Z"
+
+def _append_log(path, message):
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"[{_ts()}] {message}\n")
+    except Exception:
+        pass
+
+def log_block(title, pairs):
+    _append_log(LOG_DEBUG_PATH, title)
+    for key, value in pairs:
+        _append_log(LOG_DEBUG_PATH, f"{key}={value}")
+    _append_log(LOG_DEBUG_PATH, "")
+
+def capture_exc(prefix):
+    _append_log(LOG_DEBUG_PATH, f"{prefix} traceback follows")
+    _append_log(LOG_DEBUG_PATH, traceback.format_exc())
 
 # Monkey-patch torchaudio.load to use soundfile backend
 # torchaudio 2.11+ requires torchcodec which needs FFmpeg shared libs (DLLs) not present in our runtime
@@ -5351,6 +5409,199 @@ prefer_demucs_cuda = bool(job_data.get("prefer_demucs_cuda", False))
 has_nvidia_gpu = bool(job_data.get("has_nvidia_gpu", False))
 
 os.makedirs(output_dir, exist_ok=True)
+wrapper_path = os.path.join(output_dir, "demucs_wrapper.py")
+
+wrapper_script = r'''
+import os
+import sys
+import traceback
+from datetime import datetime
+
+output_dir = os.path.dirname(__file__)
+LOG_DEBUG_PATH = os.path.join(output_dir, "separator_debug.log")
+LOG_DEMUCS_PATH = os.path.join(output_dir, "demucs_child.log")
+
+def _ts():
+    return datetime.utcnow().isoformat(timespec="milliseconds") + "Z"
+
+def _append_log(path, message):
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"[{_ts()}] {message}\n")
+    except Exception:
+        pass
+
+def _patched_load(uri, *args, **kwargs):
+    import soundfile as sf
+    import torch
+    data, samplerate = sf.read(str(uri), dtype='float32')
+    data = torch.from_numpy(data)
+    if data.ndim == 1:
+        data = data.unsqueeze(0)
+    else:
+        data = data.T
+    return data, samplerate
+
+_append_log(LOG_DEBUG_PATH, "wrapper starting; torchaudio.load patch will be applied in the same interpreter as demucs")
+_append_log(LOG_DEBUG_PATH, f"wrapper sys.executable={sys.executable}")
+_append_log(LOG_DEBUG_PATH, f"wrapper cwd={os.getcwd()}")
+_append_log(LOG_DEMUCS_PATH, f"[{_ts()}] wrapper argv={repr(sys.argv)}")
+try:
+    import torchaudio
+    torchaudio.load = _patched_load
+    _append_log(LOG_DEBUG_PATH, "NOTE: torchaudio.load patched inside demucs wrapper process.")
+except Exception:
+    _append_log(LOG_DEBUG_PATH, "torchaudio import / patch failed traceback follows")
+    _append_log(LOG_DEBUG_PATH, traceback.format_exc())
+    raise
+
+try:
+    from demucs.separate import main as demucs_main
+except Exception:
+    _append_log(LOG_DEBUG_PATH, "demucs import failed traceback follows")
+    _append_log(LOG_DEBUG_PATH, traceback.format_exc())
+    raise
+
+if __name__ == "__main__":
+    original_argv = list(sys.argv)
+    sys.argv = ["demucs"] + original_argv[1:]
+    _append_log(LOG_DEBUG_PATH, "wrapper original argv: " + repr(original_argv))
+    _append_log(LOG_DEBUG_PATH, "demucs argv: " + repr(sys.argv))
+
+    try:
+        result = demucs_main()
+        if isinstance(result, int) and result != 0:
+            _append_log(LOG_DEBUG_PATH, f"demucs_main returned non-zero: {result}")
+            raise SystemExit(result)
+        _append_log(LOG_DEBUG_PATH, f"demucs_main completed: {result!r}")
+    except SystemExit as exc:
+        code = exc.code
+        if code is None:
+            code = 0
+        _append_log(LOG_DEBUG_PATH, f"demucs_main SystemExit: {code!r}")
+        raise
+    except Exception:
+        _append_log(LOG_DEBUG_PATH, "demucs_main exception:")
+        _append_log(LOG_DEBUG_PATH, traceback.format_exc())
+        raise
+''';
+
+if let Err(e) = fs::write(&wrapper_path, wrapper_script) {
+    emit_error_for_job(
+        &app,
+        &song_id,
+        &job_token,
+        "separating",
+        &format!("Failed to write demucs wrapper: {}", e),
+    );
+    update_song_status_for_job(
+        &song_id,
+        &job_token,
+        "error",
+        0,
+        Some("separating"),
+        Some(&format!("Failed to write demucs wrapper: {}", e)),
+    );
+    return;
+}
+
+log_block("separator.py bootstrap context", [
+    ("song_id", str(job_data.get("song_id", ""))),
+    ("job_token", str(job_data.get("job_token", ""))),
+    ("selected_device_hint", str(job_data.get("selected_device", ""))),
+    ("prefer_demucs_cuda", str(bool(job_data.get("prefer_demucs_cuda", False)))),
+    ("has_nvidia_gpu", str(bool(job_data.get("has_nvidia_gpu", False)))),
+    ("input_path", str(input_path)),
+    ("output_dir", str(output_dir)),
+    ("separator_py_path", str(__file__) if "__file__" in globals() else "unknown"),
+    ("job_file", str(job_file)),
+    ("sys.executable", str(sys.executable)),
+    ("sys.version", str(sys.version)),
+    ("cwd", str(os.getcwd())),
+    ("PATH", str(os.environ.get("PATH", ""))),
+    ("CUDA_PATH", str(os.environ.get("CUDA_PATH", ""))),
+    ("VIRTUAL_ENV", str(os.environ.get("VIRTUAL_ENV", ""))),
+    ("CONDA_PREFIX", str(os.environ.get("CONDA_PREFIX", ""))),
+    ("PYTHONPATH", str(os.environ.get("PYTHONPATH", ""))),
+    ("TORCH_FORCE_WEIGHTS_ONLY_LOAD", str(os.environ.get("TORCH_FORCE_WEIGHTS_ONLY_LOAD", ""))),
+    ("PYTHONUTF8", str(os.environ.get("PYTHONUTF8", ""))),
+    ("PYTHONIOENCODING", str(os.environ.get("PYTHONIOENCODING", ""))),
+    ("demucs_wrapper_path", str(wrapper_path)),
+])
+
+log_block("monkey patch note", [
+    ("note", "torchaudio.load monkey patch is applied in demucs_wrapper.py inside the same Python interpreter that imports demucs.separate."),
+])
+
+runtime_probe = {
+    "torch": None,
+    "torchaudio": None,
+    "demucs": None,
+    "soundfile": None,
+    "numpy": None,
+}
+probe_errors = []
+for mod_name in ["torch", "torchaudio", "demucs", "soundfile", "numpy"]:
+    try:
+        spec = importlib.util.find_spec(mod_name)
+        runtime_probe[mod_name] = getattr(spec, "origin", None) if spec else None
+    except Exception:
+        runtime_probe[mod_name] = f"find_spec_failed: {traceback.format_exc()}"
+
+try:
+    import numpy as np
+    runtime_probe["numpy_version"] = np.__version__
+    runtime_probe["numpy_file"] = getattr(np, "__file__", None)
+except Exception:
+    probe_errors.append(traceback.format_exc())
+
+try:
+    import soundfile as sf
+    runtime_probe["soundfile_version"] = getattr(sf, "__version__", None)
+    runtime_probe["soundfile_file"] = getattr(sf, "__file__", None)
+except Exception:
+    probe_errors.append(traceback.format_exc())
+
+try:
+    import torch
+    runtime_probe["torch_version"] = getattr(torch, "__version__", None)
+    runtime_probe["torch_file"] = getattr(torch, "__file__", None)
+    runtime_probe["torch_cuda_version"] = getattr(torch.version, "cuda", None)
+    runtime_probe["torch_cuda_available"] = bool(torch.cuda.is_available())
+    runtime_probe["torch_cuda_device_name"] = None
+    if runtime_probe["torch_cuda_available"]:
+        try:
+            runtime_probe["torch_cuda_device_name"] = torch.cuda.get_device_name(0)
+        except Exception:
+            probe_errors.append(traceback.format_exc())
+except Exception:
+    probe_errors.append(traceback.format_exc())
+
+try:
+    import torchaudio
+    runtime_probe["torchaudio_version"] = getattr(torchaudio, "__version__", None)
+    runtime_probe["torchaudio_file"] = getattr(torchaudio, "__file__", None)
+except Exception:
+    probe_errors.append(traceback.format_exc())
+
+try:
+    import demucs
+    runtime_probe["demucs_file"] = getattr(demucs, "__file__", None)
+except Exception:
+    probe_errors.append(traceback.format_exc())
+
+try:
+    import demucs.separate  # noqa: F401
+    runtime_probe["demucs_separate_import"] = "ok"
+except Exception:
+    probe_errors.append(traceback.format_exc())
+
+log_block("runtime probe", [(key, repr(value)) for key, value in runtime_probe.items()])
+if probe_errors:
+    for block in probe_errors:
+        _append_log(LOG_DEBUG_PATH, "runtime probe traceback follows")
+        _append_log(LOG_DEBUG_PATH, block)
+        _append_log(LOG_DEBUG_PATH, "")
 
 gpu_available = False
 torch_version = None
@@ -5379,6 +5630,8 @@ out_subdir = os.path.join(output_dir, "htdemucs_ft", filename)
 demucs_child = None
 interrupted = False
 terminated_by_signal = False
+demucs_cmd_repr = None
+demucs_returncode = None
 
 def emit_error(message):
     payload = {
@@ -5392,6 +5645,15 @@ def emit_error(message):
         "torch_cuda_version": torch_cuda_version,
         "torch_cuda_device_name": torch_cuda_device_name,
         "demucs_device_arg": device,
+        "debug_log_path": LOG_DEBUG_PATH,
+        "demucs_log_path": LOG_DEMUCS_PATH,
+        "demucs_returncode": demucs_returncode,
+        "demucs_cmd": demucs_cmd_repr,
+        "demucs_wrapper_path": wrapper_path,
+        "python_executable": sys.executable,
+        "demucs_file": runtime_probe.get("demucs_file"),
+        "torchaudio_file": runtime_probe.get("torchaudio_file"),
+        "torch_file": runtime_probe.get("torch_file"),
     }
     with open(result_file, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False)
@@ -5426,13 +5688,94 @@ signal.signal(signal.SIGINT, on_signal)
 
 import re as _re
 
-cmd = [sys.executable, "-m", "demucs", "--two-stems=vocals", "-n", "htdemucs_ft", "-o", output_dir, "--device", device, input_path]
+cmd = [sys.executable, wrapper_path, "--two-stems=vocals", "-n", "htdemucs_ft", "-o", output_dir, "--device", device, input_path]
+demucs_cmd_repr = repr(cmd)
 env = os.environ.copy()
 env["TORCH_FORCE_WEIGHTS_ONLY_LOAD"] = "0"
 env["PYTHONUTF8"] = "1"
 env["PYTHONIOENCODING"] = "utf-8"
+env["PYTHONUNBUFFERED"] = "1"
 # Hide console window on Windows (CREATE_NO_WINDOW = 0x08000000)
 creation_flags = 0x08000000 if sys.platform == "win32" else 0
+
+log_block("demucs command context", [
+    ("demucs_cmd", demucs_cmd_repr),
+    ("shell", "False"),
+    ("cwd", os.getcwd()),
+    ("creationflags", str(creation_flags)),
+    ("sys.executable", sys.executable),
+    ("PATH", os.environ.get("PATH", "")),
+    ("CUDA_PATH", os.environ.get("CUDA_PATH", "")),
+    ("TORCH_FORCE_WEIGHTS_ONLY_LOAD", env.get("TORCH_FORCE_WEIGHTS_ONLY_LOAD", "")),
+    ("PYTHONUTF8", env.get("PYTHONUTF8", "")),
+    ("PYTHONIOENCODING", env.get("PYTHONIOENCODING", "")),
+    ("demucs_wrapper_path", wrapper_path),
+])
+
+smoke_cmd = [sys.executable, wrapper_path, "--help"]
+_append_log(LOG_DEMUCS_PATH, f"[{_ts()}] smoke_test_cmd={repr(smoke_cmd)}")
+smoke_proc = subprocess.run(
+    smoke_cmd,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+    encoding="utf-8",
+    errors="replace",
+    env=env,
+    creationflags=creation_flags,
+)
+_append_log(LOG_DEMUCS_PATH, f"[{_ts()}] smoke_test_returncode={smoke_proc.returncode}")
+_append_log(LOG_DEMUCS_PATH, f"[{_ts()}] smoke_test_stdout_begin")
+_append_log(LOG_DEMUCS_PATH, smoke_proc.stdout or "")
+_append_log(LOG_DEMUCS_PATH, f"[{_ts()}] smoke_test_stdout_end")
+_append_log(LOG_DEMUCS_PATH, f"[{_ts()}] smoke_test_stderr_begin")
+_append_log(LOG_DEMUCS_PATH, smoke_proc.stderr or "")
+_append_log(LOG_DEMUCS_PATH, f"[{_ts()}] smoke_test_stderr_end")
+smoke_valid = False
+if smoke_proc.returncode == 0:
+    combined = (smoke_proc.stdout or "") + (smoke_proc.stderr or "")
+    if any(kw in combined.lower() for kw in ["usage", "demucs", "--two-stems", "--model", "-n", "--device"]):
+        smoke_valid = True
+        _append_log(LOG_DEMUCS_PATH, f"[{_ts()}] smoke help output looks valid")
+    elif not combined.strip():
+        _append_log(LOG_DEMUCS_PATH, f"[{_ts()}] smoke stdout/stderr empty, warning")
+    else:
+        _append_log(LOG_DEMUCS_PATH, f"[{_ts()}] smoke stdout/stderr non-empty but no known keywords")
+elif smoke_proc.returncode == 1 and ((smoke_proc.stdout or "") + (smoke_proc.stderr or "")).startswith("usage:"):
+    smoke_valid = True
+    _append_log(LOG_DEMUCS_PATH, f"[{_ts()}] smoke --help returned 1 with usage (argparse behavior), treating as valid")
+
+if smoke_proc.returncode != 0 and not smoke_valid:
+    payload = {
+        "error": f"Demucs CLI 启动失败: returncode={smoke_proc.returncode}",
+        "success": False,
+        "selected_device": device,
+        "gpu_requested": bool(prefer_demucs_cuda),
+        "has_nvidia_gpu": has_nvidia_gpu,
+        "torch_cuda_available": gpu_available,
+        "torch_version": torch_version,
+        "torch_cuda_version": torch_cuda_version,
+        "torch_cuda_device_name": torch_cuda_device_name,
+        "demucs_device_arg": device,
+        "debug_log_path": LOG_DEBUG_PATH,
+        "demucs_log_path": LOG_DEMUCS_PATH,
+        "demucs_returncode": smoke_proc.returncode,
+        "demucs_cmd": repr(smoke_cmd),
+        "demucs_wrapper_path": wrapper_path,
+        "python_executable": sys.executable,
+        "demucs_file": runtime_probe.get("demucs_file"),
+        "torchaudio_file": runtime_probe.get("torchaudio_file"),
+        "torch_file": runtime_probe.get("torch_file"),
+        "smoke_stdout": smoke_proc.stdout,
+        "smoke_stderr": smoke_proc.stderr,
+    }
+    with open(result_file, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False)
+    _append_log(LOG_DEBUG_PATH, f"Demucs CLI smoke test failed: returncode={smoke_proc.returncode}")
+    _append_log(LOG_DEMUCS_PATH, f"[{_ts()}] smoke test failed; aborting real demucs run")
+    print(json.dumps(payload))
+    sys.exit(1)
+
 try:
     demucs_child = subprocess.Popen(
         cmd,
@@ -5448,6 +5791,9 @@ try:
 except Exception as exc:
     emit_error(f"Demucs 启动失败: {type(exc).__name__}: {exc}")
     sys.exit(1)
+
+_append_log(LOG_DEMUCS_PATH, f"[{_ts()}] demucs_child_pid={getattr(demucs_child, 'pid', None)}")
+_append_log(LOG_DEMUCS_PATH, f"[{_ts()}] demucs_child_started")
 
 # Write progress file so Rust can emit intermediate updates while demucs runs
 progress_file = os.path.join(output_dir, "separator_progress.json")
@@ -5503,6 +5849,7 @@ while True:
 
     if line:
         stdout_lines.append(line)
+        _append_log(LOG_DEMUCS_PATH, line.rstrip("\r\n"))
         m = _demucs_pct_re.match(line)
         if m:
             pct = int(m.group(1))
@@ -5516,6 +5863,11 @@ if interrupted:
 
 stdout = "".join(stdout_lines)
 stderr = "".join(stderr_lines)
+demucs_returncode = demucs_child.returncode
+_append_log(LOG_DEMUCS_PATH, f"[{_ts()}] demucs_child_stdout_full_begin")
+_append_log(LOG_DEMUCS_PATH, stdout)
+_append_log(LOG_DEMUCS_PATH, f"[{_ts()}] demucs_child_stdout_full_end")
+_append_log(LOG_DEMUCS_PATH, f"[{_ts()}] demucs_child_returncode={demucs_returncode}")
 
 def summarize_demucs_error(text):
     lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
@@ -5580,6 +5932,14 @@ payload = {
     "torch_cuda_version": torch_cuda_version,
     "torch_cuda_device_name": torch_cuda_device_name,
     "demucs_device_arg": device,
+    "debug_log_path": LOG_DEBUG_PATH,
+    "demucs_log_path": LOG_DEMUCS_PATH,
+    "demucs_returncode": demucs_child.returncode,
+    "demucs_cmd": repr(cmd),
+    "python_executable": sys.executable,
+    "demucs_file": runtime_probe.get("demucs_file"),
+    "torchaudio_file": runtime_probe.get("torchaudio_file"),
+    "torch_file": runtime_probe.get("torch_file"),
 }
 with open(result_file, "w", encoding="utf-8") as f:
     json.dump(payload, f, ensure_ascii=False)
@@ -5609,10 +5969,13 @@ print(json.dumps(payload))
         // Write job file with paths (avoids Windows encoding issues with Chinese characters in sys.argv)
         let job_file = output_dir.join("separator_job.json");
         let job_data = serde_json::json!({
+            "song_id": song_id,
+            "job_token": job_token,
             "input_path": input_path,
             "output_dir": output_dir.to_str().unwrap(),
             "prefer_demucs_cuda": prefer_demucs_cuda,
             "has_nvidia_gpu": has_nvidia_gpu,
+            "selected_device": selected_demucs_device,
         });
         if let Err(e) = fs::write(&job_file, job_data.to_string()) {
             emit_error_for_job(
@@ -5742,6 +6105,60 @@ print(json.dumps(payload))
                 }
                 let stdout = String::from_utf8_lossy(&stdout_bytes);
                 let stderr = String::from_utf8_lossy(&stderr_bytes);
+                let separator_debug_log = output_dir.join("separator_debug.log");
+                let demucs_log = output_dir.join("demucs_child.log");
+                append_text_log(
+                    &separator_debug_log,
+                    &format_log_block(
+                        "rust separator postmortem",
+                        &[
+                            ("song_id", song_id.clone()),
+                            ("job_token", job_token.clone()),
+                            ("selected_device", selected_demucs_device.to_string()),
+                            ("prefer_demucs_cuda", prefer_demucs_cuda.to_string()),
+                            ("has_nvidia_gpu", has_nvidia_gpu.to_string()),
+                            ("input_path", input_path.clone()),
+                            ("output_dir", output_dir.to_string_lossy().to_string()),
+                            (
+                                "separator_path",
+                                separator_path.to_string_lossy().to_string(),
+                            ),
+                            ("job_file", job_file.to_string_lossy().to_string()),
+                            ("sys.executable", python_path.to_string_lossy().to_string()),
+                            (
+                                "cwd",
+                                std::env::current_dir()
+                                    .map(|p| p.to_string_lossy().to_string())
+                                    .unwrap_or_default(),
+                            ),
+                            ("PATH", std::env::var("PATH").unwrap_or_default()),
+                            ("CUDA_PATH", std::env::var("CUDA_PATH").unwrap_or_default()),
+                            (
+                                "TORCH_FORCE_WEIGHTS_ONLY_LOAD",
+                                std::env::var("TORCH_FORCE_WEIGHTS_ONLY_LOAD").unwrap_or_default(),
+                            ),
+                            (
+                                "PYTHONUTF8",
+                                std::env::var("PYTHONUTF8").unwrap_or_default(),
+                            ),
+                            (
+                                "PYTHONIOENCODING",
+                                std::env::var("PYTHONIOENCODING").unwrap_or_default(),
+                            ),
+                        ],
+                    ),
+                );
+                append_text_log(
+                    &demucs_log,
+                    &format_log_block(
+                        "rust demucs child capture",
+                        &[
+                            ("returncode", status.to_string()),
+                            ("stdout_len", stdout.len().to_string()),
+                            ("stderr_len", stderr.len().to_string()),
+                        ],
+                    ),
+                );
                 let separator_result_file = output_dir.join("separator_result.json");
                 let separator_result = if separator_result_file.exists() {
                     fs::read_to_string(&separator_result_file).ok()
@@ -5756,6 +6173,20 @@ print(json.dumps(payload))
                 // Check for empty result payload (script crashed or produced no output)
                 if separator_json.is_none() {
                     let err_msg = summarize_separator_failure_output(&stdout, &stderr, &status);
+                    let err_msg = format!(
+                        "{}（完整日志见: {}, {}）",
+                        err_msg,
+                        separator_debug_log.to_string_lossy(),
+                        demucs_log.to_string_lossy()
+                    );
+                    eprintln!(
+                        "[forisfstools] separator debug log: {}",
+                        separator_debug_log.to_string_lossy()
+                    );
+                    eprintln!(
+                        "[forisfstools] demucs child log: {}",
+                        demucs_log.to_string_lossy()
+                    );
                     emit_error_for_job(&app, &song_id, &job_token, "separating", &err_msg);
                     update_song_status_for_job(
                         &song_id,
@@ -5776,14 +6207,30 @@ print(json.dumps(payload))
                                 .unwrap()
                                 .as_str()
                                 .unwrap_or("Unknown error");
-                            emit_error_for_job(&app, &song_id, &job_token, "separating", err);
+                            if let Some(debug_path) =
+                                json.get("debug_log_path").and_then(|v| v.as_str())
+                            {
+                                eprintln!("[forisfstools] separator debug log: {}", debug_path);
+                            }
+                            if let Some(log_path) =
+                                json.get("demucs_log_path").and_then(|v| v.as_str())
+                            {
+                                eprintln!("[forisfstools] demucs child log: {}", log_path);
+                            }
+                            let err = format!(
+                                "{}（完整日志见: {}, {}）",
+                                err,
+                                separator_debug_log.to_string_lossy(),
+                                demucs_log.to_string_lossy()
+                            );
+                            emit_error_for_job(&app, &song_id, &job_token, "separating", &err);
                             update_song_status_for_job(
                                 &song_id,
                                 &job_token,
                                 "error",
                                 0,
                                 Some("separating"),
-                                Some(err),
+                                Some(&err),
                             );
                             return;
                         }
