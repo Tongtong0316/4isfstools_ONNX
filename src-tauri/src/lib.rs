@@ -5355,6 +5355,19 @@ import time
 import traceback
 from datetime import datetime
 
+# Read paths from job file first, before any log paths are defined.
+# Use utf-8-sig to handle potential BOM from PowerShell.
+job_file = sys.argv[1]
+with open(job_file, "r", encoding="utf-8-sig") as f:
+    job_data = json.load(f)
+input_path = job_data["input_path"]
+output_dir = job_data["output_dir"]
+result_file = os.path.join(output_dir, "separator_result.json")
+prefer_demucs_cuda = bool(job_data.get("prefer_demucs_cuda", False))
+has_nvidia_gpu = bool(job_data.get("has_nvidia_gpu", False))
+
+os.makedirs(output_dir, exist_ok=True)
+
 LOG_DEBUG_PATH = os.path.join(output_dir, "separator_debug.log")
 LOG_DEMUCS_PATH = os.path.join(output_dir, "demucs_child.log")
 
@@ -5397,18 +5410,6 @@ try:
 except ImportError:
     pass
 
-# Read paths from job file to avoid Windows encoding issues with Chinese characters in sys.argv
-# Use utf-8-sig to handle potential BOM from PowerShell
-job_file = sys.argv[1]
-with open(job_file, "r", encoding="utf-8-sig") as f:
-    job_data = json.load(f)
-input_path = job_data["input_path"]
-output_dir = job_data["output_dir"]
-result_file = os.path.join(output_dir, "separator_result.json")
-prefer_demucs_cuda = bool(job_data.get("prefer_demucs_cuda", False))
-has_nvidia_gpu = bool(job_data.get("has_nvidia_gpu", False))
-
-os.makedirs(output_dir, exist_ok=True)
 wrapper_path = os.path.join(output_dir, "demucs_wrapper.py")
 
 wrapper_script = r'''
@@ -6156,6 +6157,7 @@ print(json.dumps(payload))
                             ("returncode", status.to_string()),
                             ("stdout_len", stdout.len().to_string()),
                             ("stderr_len", stderr.len().to_string()),
+                            ("stderr_content", stderr.as_ref().to_string()),
                         ],
                     ),
                 );
