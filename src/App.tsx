@@ -208,7 +208,7 @@ const COLOR_THEMES: Array<{
   },
 ];
 
-const APP_VERSION = "1.0.0";
+const APP_VERSION = "1.0.1";
 
 const SETTINGS_NAV_ITEMS: Array<{
   pane: SettingsPane;
