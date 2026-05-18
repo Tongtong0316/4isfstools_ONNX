@@ -1,3 +1,52 @@
+# 固化记录 - v1.0.1 Windows 当前生产基线
+
+## 日期
+
+2026-05-18
+
+## 固化基线
+
+- 代码基线 commit: `fe6b7b2c5a358113670e3508418329d9b2d3ccd3`
+- GitHub `main`: 本固化记录提交后应继续保持最新
+- GitHub tag `v1.0.1`: 本固化记录提交后应移动到最新固化提交
+- 版本号：`1.0.1`
+
+## 本次固化范围
+
+- Windows UI 主线当前状态
+- 播放列表、偏好设置、播放器底部控制区、主题 token、全局文本安全区等前序 UI 优化
+- 新增主题：`高级纲领`
+- Windows 编译机已从 GitHub 拉取当前 `main` 并完成安装包构建
+
+## Windows 产物
+
+本地下载目录已拉取以下安装包：
+
+- `/Users/suntong/Downloads/Macaron Singer_1.0.1_x64-setup.exe`
+- `/Users/suntong/Downloads/Macaron Singer_1.0.1_x64_en-US.msi`
+
+SHA-256：
+
+- `Macaron Singer_1.0.1_x64-setup.exe`: `e28ff611001deda4b9ef6ae444db1f9a985cb68427a4691f0da5b203c96cf2bd`
+- `Macaron Singer_1.0.1_x64_en-US.msi`: `0c1af111d9d94dd4b27c9dc258ee184aeb0802cf8f181002cc1c5327e2d1d9c3`
+
+## 构建说明
+
+- 编译机：`DESKTOP-LG6H7NK`
+- 项目目录：`C:\Users\suntong\4isfstools`
+- 编译机 `HEAD` 与 `v1.0.1` 均为 `fe6b7b2c5a358113670e3508418329d9b2d3ccd3`
+- `npm run tauri build` 生成 MSI 成功，但后续 bundle 阶段一度因 `forisfstools.exe` / `msiexec.exe` 文件占用报错。
+- 已结束相关进程后执行 `npm run tauri -- build --bundles nsis`，NSIS 安装包生成成功。
+- Vite 在 Windows 编译机提示 Node `20.18.0` 低于推荐 `20.19+`，但未阻断本次构建。
+
+## 当前注意事项
+
+- macOS 仍按既定策略保持冻结参考线。
+- Windows 是当前主开发线。
+- 本次固化不包含本地未跟踪截图、临时 handoff 文件或构建产物。
+
+---
+
 # 交接文档 - 音频输出设备修复
 
 ## 修改概述
