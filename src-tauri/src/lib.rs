@@ -6,8 +6,8 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{mpsc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -2285,6 +2285,49 @@ fn format_log_block(title: &str, lines: &[(&str, String)]) -> String {
     }
     out.push('\n');
     out
+}
+
+fn resolve_demucs_worker_path() -> Result<PathBuf, String> {
+    let mut candidates = Vec::new();
+
+    if let Ok(path) = std::env::var("MACARON_DEMUCS_WORKER") {
+        if !path.trim().is_empty() {
+            candidates.push(PathBuf::from(path));
+        }
+    }
+
+    if let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR") {
+        candidates.push(PathBuf::from(manifest_dir).join("python_workers/demucs_worker.py"));
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("src-tauri/python_workers/demucs_worker.py"));
+        candidates.push(cwd.join("python_workers/demucs_worker.py"));
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            candidates.push(exe_dir.join("python_workers/demucs_worker.py"));
+            candidates.push(exe_dir.join("../Resources/python_workers/demucs_worker.py"));
+            candidates.push(exe_dir.join("../resources/python_workers/demucs_worker.py"));
+        }
+    }
+
+    for candidate in &candidates {
+        if candidate.exists() {
+            return Ok(candidate.clone());
+        }
+    }
+
+    let attempted = candidates
+        .iter()
+        .map(|p| p.to_string_lossy().to_string())
+        .collect::<Vec<_>>()
+        .join(" | ");
+    Err(format!(
+        "Demucs fixed worker not found. Attempted paths: {}",
+        attempted
+    ))
 }
 
 fn ensure_core_runtime_modules(
@@ -5947,25 +5990,47 @@ with open(result_file, "w", encoding="utf-8") as f:
 print(json.dumps(payload))
 "#;
 
-        let separator_path = output_dir.join("separator.py");
-        if let Err(e) = fs::write(&separator_path, separator_script) {
-            emit_error_for_job(
-                &app,
-                &song_id,
-                &job_token,
-                "separating",
-                &format!("Failed to write script: {}", e),
-            );
-            update_song_status_for_job(
-                &song_id,
-                &job_token,
-                "error",
-                0,
-                Some("separating"),
-                Some(&format!("Failed to write script: {}", e)),
-            );
-            return;
-        }
+        let use_fixed_demucs_worker = std::env::var("MACARON_USE_FIXED_DEMUCS_WORKER")
+            .map(|value| value != "0")
+            .unwrap_or(true);
+        let separator_path = if use_fixed_demucs_worker {
+            match resolve_demucs_worker_path() {
+                Ok(path) => path,
+                Err(e) => {
+                    emit_error_for_job(&app, &song_id, &job_token, "separating", &e);
+                    update_song_status_for_job(
+                        &song_id,
+                        &job_token,
+                        "error",
+                        0,
+                        Some("separating"),
+                        Some(&e),
+                    );
+                    return;
+                }
+            }
+        } else {
+            let separator_path = output_dir.join("separator.py");
+            if let Err(e) = fs::write(&separator_path, separator_script) {
+                emit_error_for_job(
+                    &app,
+                    &song_id,
+                    &job_token,
+                    "separating",
+                    &format!("Failed to write script: {}", e),
+                );
+                update_song_status_for_job(
+                    &song_id,
+                    &job_token,
+                    "error",
+                    0,
+                    Some("separating"),
+                    Some(&format!("Failed to write script: {}", e)),
+                );
+                return;
+            }
+            separator_path
+        };
 
         // Write job file with paths (avoids Windows encoding issues with Chinese characters in sys.argv)
         let job_file = output_dir.join("separator_job.json");
@@ -5974,6 +6039,7 @@ print(json.dumps(payload))
             "job_token": job_token,
             "input_path": input_path,
             "output_dir": output_dir.to_str().unwrap(),
+            "device": selected_demucs_device,
             "prefer_demucs_cuda": prefer_demucs_cuda,
             "has_nvidia_gpu": has_nvidia_gpu,
             "selected_device": selected_demucs_device,
@@ -6037,6 +6103,8 @@ print(json.dumps(payload))
         let song_id_clone = song_id.clone();
         let job_token_clone = job_token.clone();
         let estimated_clone = estimated.clone();
+        let progress_done = Arc::new(AtomicBool::new(false));
+        let progress_done_clone = progress_done.clone();
         let progress_handle = std::thread::spawn(move || {
             let mut last_pct = 20;
             loop {
@@ -6065,6 +6133,9 @@ print(json.dumps(payload))
                 } else {
                     break; // Progress file deleted = process done
                 }
+                if progress_done_clone.load(Ordering::SeqCst) {
+                    break;
+                }
             }
         });
 
@@ -6088,8 +6159,7 @@ print(json.dumps(payload))
 
         let result = child.wait();
 
-        // Remove progress file first so the monitor thread exits its loop
-        let _ = fs::remove_file(&progress_file);
+        progress_done.store(true, Ordering::SeqCst);
 
         let stdout_bytes = stdout_handle.join().unwrap_or_default();
         let stderr_bytes = stderr_handle.join().unwrap_or_default();
@@ -6106,61 +6176,76 @@ print(json.dumps(payload))
                 }
                 let stdout = String::from_utf8_lossy(&stdout_bytes);
                 let stderr = String::from_utf8_lossy(&stderr_bytes);
-                let separator_debug_log = output_dir.join("separator_debug.log");
-                let demucs_log = output_dir.join("demucs_child.log");
-                append_text_log(
-                    &separator_debug_log,
-                    &format_log_block(
-                        "rust separator postmortem",
-                        &[
-                            ("song_id", song_id.clone()),
-                            ("job_token", job_token.clone()),
-                            ("selected_device", selected_demucs_device.to_string()),
-                            ("prefer_demucs_cuda", prefer_demucs_cuda.to_string()),
-                            ("has_nvidia_gpu", has_nvidia_gpu.to_string()),
-                            ("input_path", input_path.clone()),
-                            ("output_dir", output_dir.to_string_lossy().to_string()),
-                            (
-                                "separator_path",
-                                separator_path.to_string_lossy().to_string(),
-                            ),
-                            ("job_file", job_file.to_string_lossy().to_string()),
-                            ("sys.executable", python_path.to_string_lossy().to_string()),
-                            (
-                                "cwd",
-                                std::env::current_dir()
-                                    .map(|p| p.to_string_lossy().to_string())
-                                    .unwrap_or_default(),
-                            ),
-                            ("PATH", std::env::var("PATH").unwrap_or_default()),
-                            ("CUDA_PATH", std::env::var("CUDA_PATH").unwrap_or_default()),
-                            (
-                                "TORCH_FORCE_WEIGHTS_ONLY_LOAD",
-                                std::env::var("TORCH_FORCE_WEIGHTS_ONLY_LOAD").unwrap_or_default(),
-                            ),
-                            (
-                                "PYTHONUTF8",
-                                std::env::var("PYTHONUTF8").unwrap_or_default(),
-                            ),
-                            (
-                                "PYTHONIOENCODING",
-                                std::env::var("PYTHONIOENCODING").unwrap_or_default(),
-                            ),
-                        ],
-                    ),
-                );
-                append_text_log(
-                    &demucs_log,
-                    &format_log_block(
-                        "rust demucs child capture",
-                        &[
-                            ("returncode", status.to_string()),
-                            ("stdout_len", stdout.len().to_string()),
-                            ("stderr_len", stderr.len().to_string()),
-                            ("stderr_content", stderr.as_ref().to_string()),
-                        ],
-                    ),
-                );
+                let separator_debug_log = if use_fixed_demucs_worker {
+                    output_dir.join("debug").join("separator_debug.log")
+                } else {
+                    output_dir.join("separator_debug.log")
+                };
+                let demucs_log = if use_fixed_demucs_worker {
+                    output_dir.join("debug").join("demucs_child.log")
+                } else {
+                    output_dir.join("demucs_child.log")
+                };
+                if !use_fixed_demucs_worker || !status.success() {
+                    append_text_log(
+                        &separator_debug_log,
+                        &format_log_block(
+                            "rust separator postmortem",
+                            &[
+                                ("song_id", song_id.clone()),
+                                ("job_token", job_token.clone()),
+                                ("selected_device", selected_demucs_device.to_string()),
+                                ("prefer_demucs_cuda", prefer_demucs_cuda.to_string()),
+                                ("has_nvidia_gpu", has_nvidia_gpu.to_string()),
+                                ("input_path", input_path.clone()),
+                                ("output_dir", output_dir.to_string_lossy().to_string()),
+                                (
+                                    "separator_path",
+                                    separator_path.to_string_lossy().to_string(),
+                                ),
+                                (
+                                    "use_fixed_demucs_worker",
+                                    use_fixed_demucs_worker.to_string(),
+                                ),
+                                ("job_file", job_file.to_string_lossy().to_string()),
+                                ("sys.executable", python_path.to_string_lossy().to_string()),
+                                (
+                                    "cwd",
+                                    std::env::current_dir()
+                                        .map(|p| p.to_string_lossy().to_string())
+                                        .unwrap_or_default(),
+                                ),
+                                ("PATH", std::env::var("PATH").unwrap_or_default()),
+                                ("CUDA_PATH", std::env::var("CUDA_PATH").unwrap_or_default()),
+                                (
+                                    "TORCH_FORCE_WEIGHTS_ONLY_LOAD",
+                                    std::env::var("TORCH_FORCE_WEIGHTS_ONLY_LOAD")
+                                        .unwrap_or_default(),
+                                ),
+                                (
+                                    "PYTHONUTF8",
+                                    std::env::var("PYTHONUTF8").unwrap_or_default(),
+                                ),
+                                (
+                                    "PYTHONIOENCODING",
+                                    std::env::var("PYTHONIOENCODING").unwrap_or_default(),
+                                ),
+                            ],
+                        ),
+                    );
+                    append_text_log(
+                        &demucs_log,
+                        &format_log_block(
+                            "rust demucs child capture",
+                            &[
+                                ("returncode", status.to_string()),
+                                ("stdout_len", stdout.len().to_string()),
+                                ("stderr_len", stderr.len().to_string()),
+                                ("stderr_content", stderr.as_ref().to_string()),
+                            ],
+                        ),
+                    );
+                }
                 let separator_result_file = output_dir.join("separator_result.json");
                 let separator_result = if separator_result_file.exists() {
                     fs::read_to_string(&separator_result_file).ok()
