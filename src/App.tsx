@@ -114,7 +114,7 @@ type BootstrapStatus = {
 
 type SettingsPane = "runtime" | "audioOutput" | "paths" | "appearance" | "about";
 
-type ColorThemeId = "graphite" | "aurora" | "studio" | "midnight" | "daylight" | "paper" | "passion" | "double" | "zero";
+type ColorThemeId = "graphite" | "aurora" | "studio" | "midnight" | "daylight" | "paper" | "passion" | "double" | "zero" | "manifesto";
 
 const COLOR_THEMES: Array<{
   id: ColorThemeId;
@@ -204,6 +204,15 @@ const COLOR_THEMES: Array<{
     bg: "#07111f",
     card: "#13233d",
     accent: "#facc15",
+    text: "#f8fafc",
+  },
+  {
+    id: "manifesto",
+    name: "高级纲领",
+    description: "青绿主调与紫色强调，黑色基底配合浅紫辅助。",
+    bg: "#000000",
+    card: "#17101d",
+    accent: "#A2DA5A",
     text: "#f8fafc",
   },
 ];

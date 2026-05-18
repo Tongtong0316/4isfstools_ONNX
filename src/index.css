@@ -409,6 +409,79 @@
   --dangerBorder: rgba(248, 113, 113, 0.3);
 }
 
+:root[data-theme="manifesto"] {
+  --bg-primary: #000000;
+  --bg-secondary: #0b0710;
+  --bg-tertiary: #17101d;
+  --bg-card: #21142c;
+  --accent: #A2DA5A;
+  --accent-hover: #b7ee70;
+  --accent2: #75409A;
+  --text-primary: #f8fafc;
+  --text-secondary: #d8cfe3;
+  --text-muted: #a997b8;
+  --text-dim: #766582;
+  --border: rgba(168, 119, 200, 0.26);
+  --surface-base: #000000;
+  --surface-panel: #0b0710;
+  --surface-card: #17101d;
+  --surface-elevated: #21142c;
+  --surface-muted: #2b173a;
+  --input-bg: #050307;
+  --input-border: rgba(168, 119, 200, 0.30);
+  --border-soft: rgba(168, 119, 200, 0.18);
+  --border-medium: rgba(168, 119, 200, 0.32);
+  --accent-soft: rgba(162, 218, 90, 0.16);
+  --selected-bg: rgba(162, 218, 90, 0.16);
+  --selected-border: rgba(117, 64, 154, 0.52);
+  --button-bg: rgba(117, 64, 154, 0.22);
+  --button-hover-bg: rgba(168, 119, 200, 0.22);
+  --chip-bg: rgba(0, 0, 0, 0.56);
+  --chip-border: rgba(168, 119, 200, 0.24);
+  --alert-info-bg: rgba(117, 64, 154, 0.18);
+  --alert-info-border: rgba(162, 218, 90, 0.24);
+  --progress-track: rgba(168, 119, 200, 0.20);
+  --progress-fill: #75409A;
+  --focus-ring: rgba(162, 218, 90, 0.42);
+  --header-bg: rgba(11, 7, 16, 0.92);
+  --header-border: rgba(162, 218, 90, 0.28);
+  --status-success: #A2DA5A;
+  --status-neutral: #a997b8;
+  --stats-text: #d8cfe3;
+  --primary-button-bg: #A2DA5A;
+  --primary-button-text: #000000;
+  --ghost-button-bg: rgba(168, 119, 200, 0.10);
+  --ghost-button-hover-bg: rgba(168, 119, 200, 0.18);
+  --panel-border: rgba(168, 119, 200, 0.24);
+  --panel-accent-border: rgba(162, 218, 90, 0.34);
+  --panel-glow: rgba(162, 218, 90, 0.16);
+  --panel-inner-border: rgba(255, 255, 255, 0.04);
+  --level-track: rgba(168, 119, 200, 0.22);
+  --level-instrumental: #75409A;
+  --level-vocal: #A2DA5A;
+  --level-peak: #b7ee70;
+  --level-label: #d8cfe3;
+  --level-border: rgba(168, 119, 200, 0.24);
+  --waveform-panel-bg: rgba(11, 7, 16, 0.84);
+  --waveform-overlay-bg: rgba(33, 20, 44, 0.72);
+  --waveform-overlay-border: rgba(162, 218, 90, 0.24);
+  --waveform-base: rgba(168, 119, 200, 0.34);
+  --waveform-original: rgba(117, 64, 154, 0.66);
+  --waveform-instrumental: rgba(168, 119, 200, 0.58);
+  --waveform-vocal: rgba(162, 218, 90, 0.66);
+  --waveform-muted: rgba(169, 151, 184, 0.24);
+  --waveform-text: #d8cfe3;
+  --waveform-shadow: 0 18px 44px rgba(0, 0, 0, 0.46);
+  --waveform-playhead: #A2DA5A;
+  --waveform-playhead-glow: rgba(162, 218, 90, 0.42);
+  --waveform-playhead-shadow: 0 0 16px rgba(162, 218, 90, 0.30);
+  --danger: #f87171;
+  --dangerHover: #ef4444;
+  --dangerActive: #dc2626;
+  --dangerSoft: rgba(248, 113, 113, 0.15);
+  --dangerBorder: rgba(248, 113, 113, 0.3);
+}
+
 :root[data-theme="daylight"] .theme-aware-surface,
 :root[data-theme="paper"] .theme-aware-surface,
 :root[data-theme="passion"] .theme-aware-surface,
