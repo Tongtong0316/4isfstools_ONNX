@@ -112,6 +112,12 @@ type BootstrapStatus = {
   detail: string;
 };
 
+type BootstrapProgress = {
+  stage: string;
+  progress: number;
+  message: string;
+};
+
 type SettingsPane = "runtime" | "audioOutput" | "paths" | "appearance" | "about";
 
 type ColorThemeId = "graphite" | "aurora" | "studio" | "midnight" | "daylight" | "paper" | "passion" | "double" | "zero" | "manifesto";
@@ -316,6 +322,8 @@ function App() {
   const [bootstrapStatus, setBootstrapStatus] = useState<BootstrapStatus | null>(null);
   const [bootstrapInstalling, setBootstrapInstalling] = useState(false);
   const [bootstrapMessage, setBootstrapMessage] = useState<string | null>(null);
+  const [bootstrapProgress, setBootstrapProgress] = useState<BootstrapProgress | null>(null);
+  const [bootstrapStartedAt, setBootstrapStartedAt] = useState<number | null>(null);
   const themeStorageKey = "4isfstools.color_theme";
   const [colorTheme, setColorTheme] = useState<ColorThemeId>(() => {
     if (typeof window === "undefined") return "graphite";
@@ -358,6 +366,8 @@ function App() {
     ...runtimeChecks.filter((check) => !RUNTIME_CHECK_NAMES.includes(check.name)),
   ];
   const runtimeCheckCountLabel = `${runtimeChecks.length}/${RUNTIME_CHECK_NAMES.length}`;
+  const bootstrapElapsedSeconds = bootstrapStartedAt ? Math.floor((Date.now() - bootstrapStartedAt) / 1000) : 0;
+  const bootstrapProgressValue = bootstrapProgress?.progress ?? (bootstrapInstalling ? 8 : 0);
 
   useEffect(() => {
     document.documentElement.dataset.theme = colorTheme;
@@ -1066,6 +1076,8 @@ function App() {
   const handleBootstrapInstall = useCallback(async () => {
     if (!isDesktopRuntime) return;
     setBootstrapInstalling(true);
+    setBootstrapStartedAt(Date.now());
+    setBootstrapProgress({ stage: "starting", progress: 3, message: "正在启动一键部署..." });
     setBootstrapMessage("正在安装运行时与模型...");
     try {
       const status = await invoke<BootstrapStatus>("bootstrap_install_minimal", {
@@ -1074,6 +1086,7 @@ function App() {
       const health = await invoke<RuntimeHealthReport>("get_runtime_health");
       setBootstrapStatus(status);
       setRuntimeHealth(health);
+      setBootstrapProgress({ stage: "complete", progress: 100, message: "安装完成，可运行。" });
       if (status.canRunCore) {
         setBootstrapMessage("安装完成，可运行。");
       } else {
@@ -1085,10 +1098,35 @@ function App() {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      setBootstrapProgress({ stage: "failed", progress: bootstrapProgressValue, message: `安装失败：${message}` });
       setBootstrapMessage(`安装失败：${message}`);
     } finally {
       setBootstrapInstalling(false);
+      setBootstrapStartedAt(null);
     }
+  }, [bootstrapProgressValue, isDesktopRuntime]);
+
+  useEffect(() => {
+    if (!isDesktopRuntime) {
+      return;
+    }
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    listen<BootstrapProgress>("bootstrap-progress", (event) => {
+      if (disposed) return;
+      setBootstrapProgress(event.payload);
+      setBootstrapMessage(event.payload.message);
+    }).then((dispose) => {
+      if (disposed) {
+        dispose();
+      } else {
+        unlisten = dispose;
+      }
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, [isDesktopRuntime]);
 
   // Listen for processing events
@@ -2343,7 +2381,24 @@ function App() {
                           </div>
                         </div>
                         {bootstrapMessage && (
-                          <div className="mt-3 rounded-[12px] border border-[color-mix(in_srgb,var(--accent)_22%,transparent)] bg-[color-mix(in_srgb,var(--accent)_8%,transparent)] px-3 py-2 text-[12px] text-[var(--accent)]">{bootstrapMessage}</div>
+                          <div className="mt-3 rounded-[12px] border border-[color-mix(in_srgb,var(--accent)_22%,transparent)] bg-[color-mix(in_srgb,var(--accent)_8%,transparent)] px-3 py-2 text-[12px] text-[var(--accent)]">
+                            <div className="flex min-w-0 items-center justify-between gap-3">
+                              <span className="min-w-0 truncate" title={bootstrapMessage}>{bootstrapMessage}</span>
+                              {bootstrapInstalling && (
+                                <span className="shrink-0 font-mono text-[11px] text-[var(--text-secondary)]">
+                                  {bootstrapElapsedSeconds}s
+                                </span>
+                              )}
+                            </div>
+                            {(bootstrapInstalling || bootstrapProgress) && (
+                              <div className="mt-2 h-2 overflow-hidden rounded-full bg-[var(--progress-track)]">
+                                <div
+                                  className="h-full rounded-full bg-[var(--progress-fill)] transition-all"
+                                  style={{ width: `${Math.max(3, Math.min(100, bootstrapProgressValue))}%` }}
+                                />
+                              </div>
+                            )}
+                          </div>
                         )}
                       </div>
 

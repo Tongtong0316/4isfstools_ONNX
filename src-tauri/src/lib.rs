@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
@@ -36,6 +36,13 @@ static LYRICS_SEARCH_CACHE: Mutex<Option<HashMap<String, CachedLyricsCandidateBu
 static FILE_STORAGE_SETTINGS: Mutex<Option<FileStorageSettings>> = Mutex::new(None);
 static JOB_TOKEN_COUNTER: AtomicU64 = AtomicU64::new(1);
 const LYRICS_SEARCH_CACHE_VERSION: &str = "lyrics-search-v3";
+const PIP_NETWORK_TIMEOUT_SECONDS: &str = "120";
+const PIP_RETRIES: &str = "3";
+const BOOTSTRAP_TOTAL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const TORCH_INSTALL_TIMEOUT: Duration = Duration::from_secs(8 * 60);
+const TORCH_FALLBACK_TIMEOUT: Duration = Duration::from_secs(2 * 60);
+const PYTHON_PACKAGES_TIMEOUT: Duration = Duration::from_secs(6 * 60);
+const TORCH_UNINSTALL_TIMEOUT: Duration = Duration::from_secs(2 * 60);
 
 #[derive(Clone)]
 struct JobHandle {
@@ -1920,8 +1927,10 @@ fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
 }
 
 fn install_python_packages_with_fallbacks(
+    app: &AppHandle,
     python_path: &Path,
     packages: &[&str],
+    deadline: Instant,
 ) -> Result<(), String> {
     if packages.is_empty() {
         return Ok(());
@@ -1945,6 +1954,12 @@ fn install_python_packages_with_fallbacks(
             "pip",
             "install",
             "-U",
+            "--disable-pip-version-check",
+            "--no-input",
+            "--timeout",
+            PIP_NETWORK_TIMEOUT_SECONDS,
+            "--retries",
+            PIP_RETRIES,
             "-i",
             mirror,
             "--trusted-host",
@@ -1954,10 +1969,23 @@ fn install_python_packages_with_fallbacks(
             args.push(pkg);
         }
 
-        let output = Command::new(python_path)
-            .args(&args)
-            .output()
-            .map_err(|e| format!("调用 pip 安装失败: {}", e))?;
+        emit_bootstrap_progress(
+            app,
+            "install_python_packages",
+            48,
+            &format!("正在从 {} 安装 Python 依赖：{}", host, packages.join("、")),
+        );
+        let mut command = Command::new(python_path);
+        command.args(&args);
+        let output = run_hidden_command_with_timeout(
+            &mut command,
+            remaining_bootstrap_timeout(deadline, PYTHON_PACKAGES_TIMEOUT)?,
+            "Python 依赖安装",
+            Some(app),
+            "install_python_packages",
+            52,
+            &format!("正在安装 Python 依赖：{}", packages.join("、")),
+        )?;
 
         if output.status.success() {
             return Ok(());
@@ -2088,10 +2116,150 @@ fn find_return_block_end(content: &str, start: usize) -> Option<usize> {
     None
 }
 
+fn emit_bootstrap_progress(app: &AppHandle, stage: &str, progress: u32, message: &str) {
+    let _ = app.emit(
+        "bootstrap-progress",
+        serde_json::json!({
+            "stage": stage,
+            "progress": progress.min(100),
+            "message": message,
+        }),
+    );
+}
+
+fn run_hidden_command_with_timeout(
+    command: &mut Command,
+    timeout: Duration,
+    label: &str,
+    app: Option<&AppHandle>,
+    stage: &str,
+    progress: u32,
+    heartbeat_message: &str,
+) -> Result<Output, String> {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    process_control::configure_console_visibility(command);
+    let start = Instant::now();
+    let mut last_emit = Instant::now()
+        .checked_sub(Duration::from_secs(30))
+        .unwrap_or_else(Instant::now);
+    let mut child =
+        spawn_in_own_process_group(command).map_err(|e| format!("启动 {} 失败: {}", label, e))?;
+
+    loop {
+        if child
+            .try_wait()
+            .map_err(|e| format!("等待 {} 失败: {}", label, e))?
+            .is_some()
+        {
+            return child
+                .wait_with_output()
+                .map_err(|e| format!("读取 {} 输出失败: {}", label, e));
+        }
+
+        let elapsed = start.elapsed();
+        if elapsed >= timeout {
+            force_terminate_process_group(child.id());
+            let _ = child.wait();
+            return Err(format!(
+                "{} 超时：已运行 {} 分钟仍未结束，已自动终止。请检查网络、代理、杀毒软件或 Python/pip 源。",
+                label,
+                (elapsed.as_secs() + 59) / 60
+            ));
+        }
+
+        if let Some(app) = app {
+            if last_emit.elapsed() >= Duration::from_secs(5) {
+                emit_bootstrap_progress(
+                    app,
+                    stage,
+                    progress,
+                    &format!("{}（已运行 {} 秒）", heartbeat_message, elapsed.as_secs()),
+                );
+                last_emit = Instant::now();
+            }
+        }
+
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
+fn remaining_bootstrap_timeout(deadline: Instant, preferred: Duration) -> Result<Duration, String> {
+    let remaining = deadline
+        .checked_duration_since(Instant::now())
+        .ok_or_else(|| "一键部署超过 10 分钟上限，已停止继续安装。".to_string())?;
+    if remaining < Duration::from_secs(5) {
+        return Err("一键部署剩余时间不足，已停止继续安装。".to_string());
+    }
+    Ok(preferred.min(remaining))
+}
+
+fn summarize_separator_failure_output(
+    stdout: &str,
+    stderr: &str,
+    status: &std::process::ExitStatus,
+) -> String {
+    let mut lines = Vec::new();
+    for text in [stdout, stderr] {
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            lines.push(trimmed.to_string());
+        }
+    }
+    if lines.is_empty() {
+        return format!("分离脚本输出为空，退出码: {}", status);
+    }
+
+    let noisy_markers = [
+        "Traceback (most recent call last)",
+        "File \"<frozen runpy>\"",
+        "exec(code, run_globals)",
+        "runpy.py",
+    ];
+    let mut candidate = None;
+    for line in &lines {
+        if noisy_markers.iter().any(|marker| line.contains(marker)) || line.starts_with("File ") {
+            continue;
+        }
+        if [
+            "ImportError",
+            "ModuleNotFoundError",
+            "RuntimeError",
+            "OSError",
+            "ValueError",
+            "AssertionError",
+            "FileNotFoundError",
+            "PermissionError",
+        ]
+        .iter()
+        .any(|prefix| line.starts_with(prefix))
+            || line.contains(": ")
+        {
+            candidate = Some(line.clone());
+        }
+    }
+
+    let mut summary = candidate.unwrap_or_else(|| lines.last().cloned().unwrap_or_default());
+    let tail = lines.iter().rev().take(4).cloned().collect::<Vec<_>>();
+    if !tail.is_empty() {
+        let tail_text = tail.into_iter().rev().collect::<Vec<_>>().join(" | ");
+        if !tail_text.contains(&summary) {
+            summary = format!("{} | {}", summary, tail_text);
+        }
+    }
+    if summary.len() > 900 {
+        summary.truncate(900);
+    }
+    summary
+}
+
 fn ensure_core_runtime_modules(
     app: &AppHandle,
     try_demucs_cuda: bool,
     require_demucs_cuda: bool,
+    deadline: Instant,
 ) -> Result<(), String> {
     let python_path = runtime::python::get_python_path(app);
     if !python_path.exists() {
@@ -2143,7 +2311,7 @@ fn ensure_core_runtime_modules(
 
     // Install torch with CUDA detection (China-accessible Tsinghua mirror)
     if still_missing.iter().any(|m| m == "torch") || needs_cuda_torch_refresh {
-        match install_torch_with_cuda_detection(&python_path, try_demucs_cuda) {
+        match install_torch_with_cuda_detection(app, &python_path, try_demucs_cuda, deadline) {
             Ok(()) => {}
             Err(e) => errors.push(format!("torch: {}", e)),
         }
@@ -2166,7 +2334,7 @@ fn ensure_core_runtime_modules(
         other_pkgs.push("soundfile");
     }
     if !other_pkgs.is_empty() {
-        match install_python_packages_with_fallbacks(&python_path, &other_pkgs) {
+        match install_python_packages_with_fallbacks(app, &python_path, &other_pkgs, deadline) {
             Ok(()) => {}
             Err(e) => errors.push(e),
         }
@@ -2200,10 +2368,29 @@ fn ensure_core_runtime_modules(
     }
 }
 
-fn uninstall_existing_torch_packages(python_path: &Path) {
-    let output = Command::new(python_path)
-        .args(["-m", "pip", "uninstall", "-y", "torch", "torchaudio"])
-        .output();
+fn uninstall_existing_torch_packages(app: &AppHandle, python_path: &Path, deadline: Instant) {
+    emit_bootstrap_progress(app, "uninstall_torch", 36, "正在清理既有 Torch 组件...");
+    let mut command = Command::new(python_path);
+    command.args([
+        "-m",
+        "pip",
+        "uninstall",
+        "--disable-pip-version-check",
+        "--no-input",
+        "-y",
+        "torch",
+        "torchaudio",
+    ]);
+    let output = run_hidden_command_with_timeout(
+        &mut command,
+        remaining_bootstrap_timeout(deadline, TORCH_UNINSTALL_TIMEOUT)
+            .unwrap_or(Duration::from_secs(5)),
+        "Torch 清理",
+        Some(app),
+        "uninstall_torch",
+        38,
+        "正在清理既有 Torch 组件...",
+    );
     if let Err(err) = output {
         eprintln!(
             "[forisfstools] 卸载既有 torch/torchaudio 时出现错误，继续安装: {}",
@@ -2214,7 +2401,12 @@ fn uninstall_existing_torch_packages(python_path: &Path) {
 
 /// Install PyTorch with automatic CUDA detection.
 /// Source priority: Aliyun CUDA wheel mirror -> PyTorch official CUDA index -> Tsinghua PyPI/official CPU.
-fn install_torch_with_cuda_detection(python_path: &Path, prefer_cuda: bool) -> Result<(), String> {
+fn install_torch_with_cuda_detection(
+    app: &AppHandle,
+    python_path: &Path,
+    prefer_cuda: bool,
+    deadline: Instant,
+) -> Result<(), String> {
     let detected_cuda = if prefer_cuda {
         runtime::capability::detect_nvidia_cuda_version()
     } else {
@@ -2227,6 +2419,12 @@ fn install_torch_with_cuda_detection(python_path: &Path, prefer_cuda: bool) -> R
             "pip".to_string(),
             "install".to_string(),
             "-U".to_string(),
+            "--disable-pip-version-check".to_string(),
+            "--no-input".to_string(),
+            "--timeout".to_string(),
+            PIP_NETWORK_TIMEOUT_SECONDS.to_string(),
+            "--retries".to_string(),
+            PIP_RETRIES.to_string(),
         ];
         if expect_cuda {
             first_label = "阿里云 PyTorch CUDA 镜像";
@@ -2253,10 +2451,35 @@ fn install_torch_with_cuda_detection(python_path: &Path, prefer_cuda: bool) -> R
                 "mirrors.tuna.tsinghua.edu.cn".to_string(),
             ]);
         }
-        let output = Command::new(python_path)
-            .args(&args)
-            .output()
-            .map_err(|e| format!("调用 pip 安装 torch 失败: {}", e))?;
+        emit_bootstrap_progress(
+            app,
+            "install_torch",
+            if expect_cuda { 42 } else { 44 },
+            if expect_cuda {
+                "正在安装 CUDA 版 Torch，文件较大，请保持网络连接..."
+            } else {
+                "正在安装 CPU 版 Torch..."
+            },
+        );
+        let mut command = Command::new(python_path);
+        command.args(&args);
+        let output = run_hidden_command_with_timeout(
+            &mut command,
+            remaining_bootstrap_timeout(deadline, TORCH_INSTALL_TIMEOUT)?,
+            if expect_cuda {
+                "CUDA Torch 安装"
+            } else {
+                "CPU Torch 安装"
+            },
+            Some(app),
+            "install_torch",
+            if expect_cuda { 46 } else { 48 },
+            if expect_cuda {
+                "正在安装 CUDA 版 Torch，文件较大，请稍候..."
+            } else {
+                "正在安装 CPU 版 Torch..."
+            },
+        )?;
 
         if output.status.success() {
             if !expect_cuda {
@@ -2277,6 +2500,12 @@ fn install_torch_with_cuda_detection(python_path: &Path, prefer_cuda: bool) -> R
             "pip".to_string(),
             "install".to_string(),
             "-U".to_string(),
+            "--disable-pip-version-check".to_string(),
+            "--no-input".to_string(),
+            "--timeout".to_string(),
+            PIP_NETWORK_TIMEOUT_SECONDS.to_string(),
+            "--retries".to_string(),
+            PIP_RETRIES.to_string(),
         ];
         if expect_cuda {
             fallback_args.extend([
@@ -2290,10 +2519,23 @@ fn install_torch_with_cuda_detection(python_path: &Path, prefer_cuda: bool) -> R
             "--index-url".to_string(),
             official_index,
         ]);
-        let fallback_output = Command::new(python_path)
-            .args(&fallback_args)
-            .output()
-            .map_err(|e| format!("调用 pip 安装 torch (official fallback) 失败: {}", e))?;
+        emit_bootstrap_progress(
+            app,
+            "install_torch_fallback",
+            50,
+            "镜像源未完成，正在尝试 PyTorch 官方源...",
+        );
+        let mut fallback_command = Command::new(python_path);
+        fallback_command.args(&fallback_args);
+        let fallback_output = run_hidden_command_with_timeout(
+            &mut fallback_command,
+            remaining_bootstrap_timeout(deadline, TORCH_FALLBACK_TIMEOUT)?,
+            "Torch 官方源安装",
+            Some(app),
+            "install_torch_fallback",
+            54,
+            "正在尝试 PyTorch 官方源...",
+        )?;
 
         if fallback_output.status.success() {
             if !expect_cuda {
@@ -2334,7 +2576,7 @@ fn install_torch_with_cuda_detection(python_path: &Path, prefer_cuda: bool) -> R
             None => "cpu",
         };
 
-        uninstall_existing_torch_packages(python_path);
+        uninstall_existing_torch_packages(app, python_path, deadline);
         match install_from_index(preferred_cuda_index, true) {
             Ok(()) => return Ok(()),
             Err(cuda_err) => {
@@ -4322,7 +4564,12 @@ fn ensure_whisper_runtime_ready(app: &AppHandle) -> Result<PathBuf, String> {
     if !runtime::capability::python_module_is_available(&python_path, "faster_whisper", 6)
         .unwrap_or(false)
     {
-        install_python_packages_with_fallbacks(&python_path, &["faster-whisper"])?;
+        install_python_packages_with_fallbacks(
+            app,
+            &python_path,
+            &["faster-whisper"],
+            Instant::now() + PYTHON_PACKAGES_TIMEOUT,
+        )?;
     }
 
     bootstrap_install_whisper_model(app)?;
@@ -5182,9 +5429,25 @@ import re as _re
 cmd = [sys.executable, "-m", "demucs", "--two-stems=vocals", "-n", "htdemucs_ft", "-o", output_dir, "--device", device, input_path]
 env = os.environ.copy()
 env["TORCH_FORCE_WEIGHTS_ONLY_LOAD"] = "0"
+env["PYTHONUTF8"] = "1"
+env["PYTHONIOENCODING"] = "utf-8"
 # Hide console window on Windows (CREATE_NO_WINDOW = 0x08000000)
 creation_flags = 0x08000000 if sys.platform == "win32" else 0
-demucs_child = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, creationflags=creation_flags, bufsize=1)
+try:
+    demucs_child = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+        creationflags=creation_flags,
+        bufsize=1,
+    )
+except Exception as exc:
+    emit_error(f"Demucs 启动失败: {type(exc).__name__}: {exc}")
+    sys.exit(1)
 
 # Write progress file so Rust can emit intermediate updates while demucs runs
 progress_file = os.path.join(output_dir, "separator_progress.json")
@@ -5254,6 +5517,33 @@ if interrupted:
 stdout = "".join(stdout_lines)
 stderr = "".join(stderr_lines)
 
+def summarize_demucs_error(text):
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    if not lines:
+        return "Demucs 未返回错误详情"
+    noisy = (
+        "Traceback (most recent call last)",
+        "File \"<frozen runpy>\"",
+        "exec(code, run_globals)",
+        "runpy.py",
+    )
+    candidates = []
+    for line in lines:
+        if any(marker in line for marker in noisy):
+            continue
+        if line.startswith(("Error", "RuntimeError", "ImportError", "ModuleNotFoundError", "OSError", "ValueError", "AssertionError", "FileNotFoundError", "PermissionError")):
+            candidates.append(line)
+        elif ": " in line and not line.startswith("File "):
+            candidates.append(line)
+    if candidates:
+        summary = candidates[-1]
+    else:
+        summary = lines[-1]
+    tail = " | ".join(lines[-4:])
+    if tail and summary not in tail:
+        summary = f"{summary} | {tail}"
+    return summary[:900]
+
 # Remove progress file so Rust-side progress monitor thread exits its loop
 try:
     os.remove(progress_file)
@@ -5262,7 +5552,7 @@ except Exception:
 
 if demucs_child.returncode != 0:
     error_msg_source = stderr if stderr else stdout
-    error_msg = error_msg_source[:200] if len(error_msg_source) > 200 else error_msg_source
+    error_msg = summarize_demucs_error(error_msg_source)
     emit_error(f"Demucs 分离失败: {error_msg}")
     sys.exit(1)
 
@@ -5465,11 +5755,7 @@ print(json.dumps(payload))
 
                 // Check for empty result payload (script crashed or produced no output)
                 if separator_json.is_none() {
-                    let err_msg = if stderr.trim().is_empty() {
-                        format!("分离脚本输出为空，退出码: {}", status)
-                    } else {
-                        format!("分离脚本输出为空: {}", stderr.trim())
-                    };
+                    let err_msg = summarize_separator_failure_output(&stdout, &stderr, &status);
                     emit_error_for_job(&app, &song_id, &job_token, "separating", &err_msg);
                     update_song_status_for_job(
                         &song_id,
@@ -6032,16 +6318,32 @@ async fn bootstrap_install_minimal(
     app: AppHandle,
     prefer_demucs_cuda: bool,
 ) -> Result<BootstrapStatus, String> {
+    let deadline = Instant::now() + BOOTSTRAP_TOTAL_TIMEOUT;
+    emit_bootstrap_progress(&app, "python_runtime", 8, "正在检查 Python 运行时...");
     bootstrap_install_python_runtime(&app).map_err(|e| format!("Python 运行时安装失败：{}", e))?;
+    emit_bootstrap_progress(&app, "ffmpeg_runtime", 24, "正在检查 FFmpeg...");
     ensure_ffmpeg_runtime().map_err(|e| format!("FFmpeg 安装失败：{}", e))?;
     let has_nvidia_gpu = runtime::capability::detect_nvidia_gpu_name().is_some();
     let try_demucs_cuda = prefer_demucs_cuda || has_nvidia_gpu;
-    ensure_core_runtime_modules(&app, try_demucs_cuda, prefer_demucs_cuda)
+    emit_bootstrap_progress(
+        &app,
+        "python_modules",
+        32,
+        if try_demucs_cuda {
+            "检测到 NVIDIA GPU，正在确认/安装 CUDA 版 Torch 与核心模块..."
+        } else {
+            "正在确认/安装核心 Python 模块..."
+        },
+    );
+    ensure_core_runtime_modules(&app, try_demucs_cuda, prefer_demucs_cuda, deadline)
         .map_err(|e| format!("核心模块安装失败（torch/demucs/faster-whisper）：{}", e))?;
+    emit_bootstrap_progress(&app, "models", 74, "正在检查 Demucs / Whisper 模型...");
     bootstrap_install_models(&app)
         .map_err(|e| format!("模型安装失败（demucs/whisper base）：{}", e))?;
+    emit_bootstrap_progress(&app, "verify", 92, "正在做最终环境验证...");
     let status = detect_bootstrap_status(&app);
     if status.can_run_core {
+        emit_bootstrap_progress(&app, "complete", 100, "安装完成，可运行。");
         Ok(status)
     } else {
         let health = detect_runtime_health(&app);
