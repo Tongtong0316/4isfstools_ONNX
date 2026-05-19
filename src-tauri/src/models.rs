@@ -380,22 +380,6 @@ pub struct RuntimeManifestArtifact {
     pub inline_text: Option<String>,
 }
 
-// ── GPU / CUDA capability type ──────────────────────────────────────
-
-#[derive(Default)]
-pub struct TorchCudaCapability {
-    pub has_nvidia_gpu: bool,
-    pub nvidia_driver_visible: bool,
-    pub nvidia_gpu_name: Option<String>,
-    pub nvidia_driver_cuda_version: Option<String>,
-    pub torch_installed: bool,
-    pub torch_version: Option<String>,
-    pub torch_cuda_available: bool,
-    pub torch_cuda_version: Option<String>,
-    pub torch_cuda_device_name: Option<String>,
-    pub selected_device: String,
-}
-
 // ── External lyrics API response types ──────────────────────────────
 
 #[derive(Debug, Clone, Deserialize)]
