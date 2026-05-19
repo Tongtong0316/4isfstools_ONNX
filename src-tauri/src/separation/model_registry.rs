@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) const DEFAULT_ONNX_MODEL_ID: &str = "uvr_mdxnet_9482";
 pub(crate) const DEFAULT_ONNX_MODEL_FILENAME: &str = "UVR_MDXNET_9482.onnx";
-pub(crate) const HIGH_QUALITY_ONNX_MODEL_ID: &str = "bs_polarformer_fp16";
-pub(crate) const HIGH_QUALITY_ONNX_MODEL_FILENAME: &str = "BS_PolarFormer_FP16.onnx";
+pub(crate) const HIGH_QUALITY_ONNX_MODEL_ID: &str = "uvr_mdx_net_inst_hq_4";
+pub(crate) const HIGH_QUALITY_ONNX_MODEL_FILENAME: &str = "UVR-MDX-NET-Inst_HQ_4.onnx";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -47,7 +47,7 @@ impl ModelRegistry {
                 },
                 SeparationModel {
                     id: HIGH_QUALITY_ONNX_MODEL_ID,
-                    display_name: "BS PolarFormer FP16",
+                    display_name: "UVR MDX-NET Inst_HQ_4",
                     filename: HIGH_QUALITY_ONNX_MODEL_FILENAME,
                     install_mode: ModelInstallMode::OptionalHighQuality,
                 },

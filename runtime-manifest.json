@@ -31,6 +31,20 @@
             "note": "htdemucs_ft weight 4/4"
           }
         ],
+        "onnx": [
+          {
+            "url": "https://hf-mirror.com/Blane187/all_public_uvr_models/resolve/main/UVR-MDX-NET-Inst_HQ_4.onnx",
+            "sha256": "3c4b5b9b05090fdf238f38ba5046813982d50e2a652e9cb3324ea79720c3c9c8",
+            "targetRelpath": "onnx/UVR-MDX-NET-Inst_HQ_4.onnx",
+            "note": "UVR-MDX-NET-Inst_HQ_4 (可选高级模型，国内镜像)"
+          },
+          {
+            "url": "https://huggingface.co/Blane187/all_public_uvr_models/resolve/main/UVR-MDX-NET-Inst_HQ_4.onnx",
+            "sha256": "3c4b5b9b05090fdf238f38ba5046813982d50e2a652e9cb3324ea79720c3c9c8",
+            "targetRelpath": "onnx/UVR-MDX-NET-Inst_HQ_4.onnx",
+            "note": "UVR-MDX-NET-Inst_HQ_4 (可选高级模型，官方兜底)"
+          }
+        ],
         "whisperBase": [
           {
             "url": "https://hf-mirror.com/Systran/faster-whisper-base/resolve/main/config.json",
@@ -222,6 +236,20 @@
             "targetRelpath": "whisper/models--Systran--faster-whisper-base/refs/main",
             "note": "snapshot pointer"
           }
+        ],
+        "onnx": [
+          {
+            "url": "https://hf-mirror.com/Blane187/all_public_uvr_models/resolve/main/UVR-MDX-NET-Inst_HQ_4.onnx",
+            "sha256": "3c4b5b9b05090fdf238f38ba5046813982d50e2a652e9cb3324ea79720c3c9c8",
+            "targetRelpath": "onnx/UVR-MDX-NET-Inst_HQ_4.onnx",
+            "note": "UVR-MDX-NET-Inst_HQ_4 (可选高级模型，国内镜像)"
+          },
+          {
+            "url": "https://huggingface.co/Blane187/all_public_uvr_models/resolve/main/UVR-MDX-NET-Inst_HQ_4.onnx",
+            "sha256": "3c4b5b9b05090fdf238f38ba5046813982d50e2a652e9cb3324ea79720c3c9c8",
+            "targetRelpath": "onnx/UVR-MDX-NET-Inst_HQ_4.onnx",
+            "note": "UVR-MDX-NET-Inst_HQ_4 (可选高级模型，官方兜底)"
+          }
         ]
       }
     }
@@ -301,6 +329,7 @@
         "note": "htdemucs_ft weight 4/4"
       }
     ],
+    "onnx": [],
     "whisperBase": [
       {
         "url": "https://hf-mirror.com/Systran/faster-whisper-base/resolve/main/config.json",

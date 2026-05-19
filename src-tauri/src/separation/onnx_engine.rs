@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -6,6 +7,7 @@ use tauri::AppHandle;
 use crate::models::SeparationEngineHealth;
 use crate::runtime::python::get_python_path;
 
+use super::audio_io::normalize_source_audio;
 use super::engine::{ProviderStrategy, SeparationEngine, SeparationEngineKind};
 use super::model_registry::{ModelRegistry, HIGH_QUALITY_ONNX_MODEL_ID};
 
@@ -294,6 +296,219 @@ fn probe_model_metadata(
                 }
             }),
     }
+}
+
+fn provider_to_sherpa_name(provider: &str) -> &str {
+    match provider {
+        "CoreMLExecutionProvider" => "coreml",
+        "DmlExecutionProvider" => "dml",
+        "CPUExecutionProvider" => "cpu",
+        _ => "cpu",
+    }
+}
+
+pub(crate) fn run_onnx_separation(
+    app: &AppHandle,
+    song_id: &str,
+    input_path: &Path,
+    output_dir: &Path,
+    model_path: &Path,
+    requested: &[String],
+    selected_provider: &str,
+) -> Result<serde_json::Value, String> {
+    let python_path = get_python_path(app);
+    if !python_path.exists() {
+        return Err("Python runtime not found".to_string());
+    }
+
+    fs::create_dir_all(output_dir)
+        .map_err(|e| format!("Failed to create output directory {:?}: {}", output_dir, e))?;
+
+    let debug_dir = output_dir.join("debug");
+    fs::create_dir_all(&debug_dir)
+        .map_err(|e| format!("Failed to create debug directory {:?}: {}", debug_dir, e))?;
+
+    let normalized_input_path = debug_dir.join("normalized_input.wav");
+    normalize_source_audio(input_path, &normalized_input_path)?;
+
+    let vocals_output_path = output_dir.join("vocals.wav");
+    let instrumental_output_path = output_dir.join("instrumental.wav");
+    let provider = if matches!(
+        selected_provider,
+        "CoreMLExecutionProvider" | "DmlExecutionProvider" | "CPUExecutionProvider"
+    ) {
+        provider_to_sherpa_name(selected_provider)
+    } else {
+        requested
+            .iter()
+            .find(|provider| {
+                matches!(
+                    provider.as_str(),
+                    "CoreMLExecutionProvider" | "DmlExecutionProvider" | "CPUExecutionProvider"
+                )
+            })
+            .map(|provider| provider_to_sherpa_name(provider))
+            .unwrap_or("cpu")
+    };
+
+    let script = r#"
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+import sherpa_onnx
+import soundfile as sf
+
+payload = {
+    "success": False,
+    "error": None,
+    "error_code": None,
+    "onnxruntimeAvailable": False,
+    "availableProviders": ["unavailable"],
+    "requestedProviders": [],
+    "selectedProvider": "CPUExecutionProvider",
+    "providerFallbackReason": None,
+    "modelPath": None,
+    "inputPath": None,
+    "vocalsPath": None,
+    "instrumentalPath": None,
+    "sampleRate": None,
+    "segmentCount": 0,
+    "outputSampleCount": None,
+}
+
+def write_payload():
+    print(json.dumps(payload, ensure_ascii=False))
+
+try:
+    requested = json.loads(sys.argv[1])
+    model_path = Path(sys.argv[2])
+    input_path = Path(sys.argv[3])
+    vocals_path = Path(sys.argv[4])
+    instrumental_path = Path(sys.argv[5])
+    provider = sys.argv[6]
+
+    payload["requestedProviders"] = requested
+    payload["modelPath"] = str(model_path)
+    payload["inputPath"] = str(input_path)
+    payload["vocalsPath"] = str(vocals_path)
+    payload["instrumentalPath"] = str(instrumental_path)
+    payload["selectedProvider"] = provider
+
+    if not model_path.is_file():
+        payload["error_code"] = "ONNX_ENGINE_NOT_READY"
+        payload["error"] = f"model_missing:{model_path}"
+        write_payload()
+        raise SystemExit(0)
+
+    if requested and provider == "cpu" and requested[0] != "CPUExecutionProvider":
+        payload["providerFallbackReason"] = f"provider_fallback_to_cpu:{requested[0]}"
+
+    available = ["CPUExecutionProvider", "CoreMLExecutionProvider", "DmlExecutionProvider"]
+    payload["onnxruntimeAvailable"] = True
+    payload["availableProviders"] = available
+
+    config = sherpa_onnx.OfflineSourceSeparationConfig(
+        model=sherpa_onnx.OfflineSourceSeparationModelConfig(
+            uvr=sherpa_onnx.OfflineSourceSeparationUvrModelConfig(model=str(model_path)),
+            num_threads=1,
+            debug=False,
+            provider=provider,
+        )
+    )
+    if not config.validate():
+        payload["error_code"] = "ONNX_MODEL_METADATA_FAILED"
+        payload["error"] = "invalid_offline_source_separation_config"
+        write_payload()
+        raise SystemExit(0)
+
+    sp = sherpa_onnx.OfflineSourceSeparation(config)
+    samples, sample_rate = sf.read(str(input_path), dtype="float32", always_2d=True)
+    samples = np.transpose(samples)
+    if samples.shape[0] == 1:
+        samples = np.repeat(samples, 2, axis=0)
+    if samples.shape[0] != 2:
+        payload["error_code"] = "ONNX_AUDIO_PREP_FAILED"
+        payload["error"] = f"expected_stereo_input:{samples.shape}"
+        write_payload()
+        raise SystemExit(0)
+
+    output = sp.process(sample_rate=sample_rate, samples=np.ascontiguousarray(samples))
+    payload["sampleRate"] = int(output.sample_rate)
+    if len(output.stems) != 2:
+        payload["error_code"] = "ONNX_SEPARATION_FAILED"
+        payload["error"] = f"unexpected_stem_count:{len(output.stems)}"
+        write_payload()
+        raise SystemExit(0)
+
+    vocals = np.transpose(output.stems[0].data)
+    non_vocals = np.transpose(output.stems[1].data)
+    sf.write(str(vocals_path), vocals, samplerate=output.sample_rate)
+    sf.write(str(instrumental_path), non_vocals, samplerate=output.sample_rate)
+
+    payload["success"] = True
+    payload["error_code"] = None
+    payload["error"] = None
+    payload["segmentCount"] = 1
+    payload["outputSampleCount"] = int(vocals.shape[0])
+    write_payload()
+except Exception as exc:
+    if payload["error_code"] is None:
+        payload["error_code"] = "ONNX_SEPARATION_FAILED"
+        payload["error"] = str(exc)
+    write_payload()
+"#;
+
+    let mut command = Command::new(python_path);
+    command
+        .args([
+            "-X",
+            "utf8",
+            "-c",
+            script,
+            &serde_json::to_string(requested).unwrap_or_else(|_| "[]".to_string()),
+            &model_path.to_string_lossy(),
+            &normalized_input_path.to_string_lossy(),
+            &vocals_output_path.to_string_lossy(),
+            &instrumental_output_path.to_string_lossy(),
+            provider,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let child = crate::spawn_in_own_process_group(&mut command)
+        .map_err(|e| format!("onnx separation spawn failed: {}", e))?;
+    crate::register_separator_job(song_id, child.id());
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("onnx separation wait failed: {}", e))?;
+    crate::clear_separator_job(song_id);
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let mut json = serde_json::from_str::<serde_json::Value>(&stdout).unwrap_or_else(|_| {
+        serde_json::json!({
+            "success": false,
+            "error_code": "ONNX_SEPARATION_FAILED",
+            "error": format!("onnx separation parse failed: {}", stdout),
+            "selectedProvider": provider,
+        })
+    });
+    if !output.status.success()
+        && json
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    {
+        json = serde_json::json!({
+            "success": false,
+            "error_code": "ONNX_SEPARATION_FAILED",
+            "error": if stderr.is_empty() { "onnx separation failed".to_string() } else { stderr },
+            "selectedProvider": provider,
+        });
+    }
+    Ok(json)
 }
 
 #[derive(Debug, Clone)]
