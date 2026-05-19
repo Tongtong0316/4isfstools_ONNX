@@ -28,9 +28,16 @@ payload = {
     "selectedProvider": "CPUExecutionProvider",
     "providerFallbackReason": None,
     "probeError": None,
-    "modelReady": False,
+    "modelExists": model_path.exists(),
+    "modelReady": model_path.exists(),
+    "sessionLoadOk": False,
+    "sessionLoadError": None,
+    "modelMetadataOk": False,
+    "modelMetadataError": None,
     "inputShape": None,
     "outputShape": None,
+    "dummyInferenceOk": None,
+    "dummyInferenceError": None,
 }
 try:
     import onnxruntime as ort
@@ -51,15 +58,17 @@ try:
     else:
         payload["providerFallbackReason"] = None
     payload["selectedProvider"] = chosen
-    if not model_path.exists():
-        payload["probeError"] = f"model_missing:{model_path}"
-        print(json.dumps(payload, ensure_ascii=False))
-        raise SystemExit(0)
     try:
+        if not model_path.exists():
+            payload["probeError"] = f"model_missing:{model_path}"
+            print(json.dumps(payload, ensure_ascii=False))
+            raise SystemExit(0)
         session = ort.InferenceSession(str(model_path), providers=[chosen])
-        payload["modelReady"] = True
+        payload["sessionLoadOk"] = True
         inputs = session.get_inputs()
         outputs = session.get_outputs()
+        payload["modelMetadataOk"] = True
+
         def shape_of(item):
             if not item:
                 return None
@@ -72,8 +81,56 @@ try:
             return shape
         payload["inputShape"] = shape_of(inputs)
         payload["outputShape"] = shape_of(outputs)
+
+        safe_dummy = False
+        if len(inputs) == 1:
+            dtype_map = {
+                "tensor(float)": "float32",
+                "tensor(float16)": "float16",
+                "tensor(double)": "float64",
+                "tensor(int32)": "int32",
+                "tensor(int64)": "int64",
+            }
+            input_type = getattr(inputs[0], "type", None)
+            if input_type in dtype_map:
+                input_shape = getattr(inputs[0], "shape", None) or []
+                concrete_shape = []
+                for dim in input_shape:
+                    if isinstance(dim, int) and dim > 0:
+                        concrete_shape.append(dim)
+                    else:
+                        concrete_shape = []
+                        break
+                if concrete_shape:
+                    safe_dummy = True
+
+        if safe_dummy:
+            try:
+                import numpy as np
+
+                dtype_map = {
+                    "tensor(float)": np.float32,
+                    "tensor(float16)": np.float16,
+                    "tensor(double)": np.float64,
+                    "tensor(int32)": np.int32,
+                    "tensor(int64)": np.int64,
+                }
+                input_def = inputs[0]
+                array = np.zeros(tuple(int(dim) for dim in input_def.shape), dtype=dtype_map[input_def.type])
+                feed = {input_def.name: array}
+                _ = session.run(None, feed)
+                payload["dummyInferenceOk"] = True
+            except Exception as exc:
+                payload["dummyInferenceOk"] = False
+                payload["dummyInferenceError"] = str(exc)
+                payload["probeError"] = f"dummy_inference_failed:{exc}"
+        else:
+            payload["dummyInferenceOk"] = False
+            payload["dummyInferenceError"] = "dummy_inference_unsupported:dynamic_or_multi_input_or_unsupported_dtype"
     except Exception as exc:
-        payload["probeError"] = str(exc)
+        payload["sessionLoadOk"] = False
+        payload["sessionLoadError"] = str(exc)
+        payload["probeError"] = f"session_load_failed:{exc}"
     print(json.dumps(payload, ensure_ascii=False))
 except Exception as exc:
     payload["probeError"] = str(exc)
@@ -144,6 +201,22 @@ fn run_onnx_probe(
             .get("providerFallbackReason")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
+        session_load_ok: json
+            .get("sessionLoadOk")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        session_load_error: json
+            .get("sessionLoadError")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        model_metadata_ok: json
+            .get("modelMetadataOk")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        model_metadata_error: json
+            .get("modelMetadataError")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
         probe_error: json
             .get("probeError")
             .and_then(|v| v.as_str())
@@ -178,13 +251,32 @@ fn probe_model_metadata(
     crate::models::OnnxModelProbeResult {
         model_path: model_path.to_string_lossy().to_string(),
         model_ready: json
-            .get("onnxruntimeAvailable")
+            .get("modelExists")
             .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-            && json.get("probeError").and_then(|v| v.as_str()).is_none()
-            && model_path.exists(),
+            .unwrap_or_else(|| model_path.exists()),
+        session_load_ok: json
+            .get("sessionLoadOk")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        session_load_error: json
+            .get("sessionLoadError")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        model_metadata_ok: json
+            .get("modelMetadataOk")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        model_metadata_error: json
+            .get("modelMetadataError")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
         input_shape,
         output_shape,
+        dummy_inference_ok: json.get("dummyInferenceOk").and_then(|v| v.as_bool()),
+        dummy_inference_error: json
+            .get("dummyInferenceError")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
         probe_error: json
             .get("probeError")
             .and_then(|v| v.as_str())
@@ -253,13 +345,31 @@ impl OnnxSeparationEngine {
                 .unwrap_or_default(),
             default_model_path: default_model_path.to_string_lossy().to_string(),
             default_model_ready: default_model_probe.model_ready,
+            default_model_session_load_ok: default_model_probe.session_load_ok,
+            default_model_session_load_error: default_model_probe.session_load_error.clone(),
+            default_model_metadata_ok: default_model_probe.model_metadata_ok,
+            default_model_metadata_error: default_model_probe.model_metadata_error.clone(),
             default_model_input_shape: default_model_probe.input_shape.clone(),
             default_model_output_shape: default_model_probe.output_shape.clone(),
+            default_model_dummy_inference_ok: default_model_probe.dummy_inference_ok,
+            default_model_dummy_inference_error: default_model_probe.dummy_inference_error.clone(),
             high_quality_model_id: Some(HIGH_QUALITY_ONNX_MODEL_ID.to_string()),
             high_quality_model_path: high_quality_model_path.to_string_lossy().to_string(),
             high_quality_model_ready: high_quality_model_probe.model_ready,
+            high_quality_model_session_load_ok: high_quality_model_probe.session_load_ok,
+            high_quality_model_session_load_error: high_quality_model_probe
+                .session_load_error
+                .clone(),
+            high_quality_model_metadata_ok: high_quality_model_probe.model_metadata_ok,
+            high_quality_model_metadata_error: high_quality_model_probe
+                .model_metadata_error
+                .clone(),
             high_quality_model_input_shape: high_quality_model_probe.input_shape.clone(),
             high_quality_model_output_shape: high_quality_model_probe.output_shape.clone(),
+            high_quality_model_dummy_inference_ok: high_quality_model_probe.dummy_inference_ok,
+            high_quality_model_dummy_inference_error: high_quality_model_probe
+                .dummy_inference_error
+                .clone(),
             onnxruntime_available: runtime_probe.onnxruntime_available,
             legacy_demucs_available: false,
             probe_error: runtime_probe

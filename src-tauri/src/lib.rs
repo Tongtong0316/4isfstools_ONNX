@@ -506,6 +506,40 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
             detail: Some(separation_engine.default_model_id.clone()),
         },
         RuntimeHealthCheck {
+            name: "ONNX Session".to_string(),
+            ok: separation_engine.default_model_session_load_ok,
+            severity: if separation_engine.default_model_session_load_ok {
+                "info".to_string()
+            } else {
+                "error".to_string()
+            },
+            detail: Some(if separation_engine.default_model_session_load_ok {
+                "已加载".to_string()
+            } else {
+                separation_engine
+                    .default_model_session_load_error
+                    .clone()
+                    .unwrap_or_else(|| "未加载".to_string())
+            }),
+        },
+        RuntimeHealthCheck {
+            name: "ONNX Metadata".to_string(),
+            ok: separation_engine.default_model_metadata_ok,
+            severity: if separation_engine.default_model_metadata_ok {
+                "info".to_string()
+            } else {
+                "error".to_string()
+            },
+            detail: Some(if separation_engine.default_model_metadata_ok {
+                "已读取".to_string()
+            } else {
+                separation_engine
+                    .default_model_metadata_error
+                    .clone()
+                    .unwrap_or_else(|| "未读取".to_string())
+            }),
+        },
+        RuntimeHealthCheck {
             name: "Legacy Demucs fallback".to_string(),
             ok: demucs_ready && demucs_models_ready,
             severity: "info".to_string(),
@@ -596,7 +630,11 @@ fn is_onnx_capability_ready(
     separation_engine: &SeparationEngineHealth,
     ffmpeg_ready: bool,
 ) -> bool {
-    ffmpeg_ready && separation_engine.onnxruntime_available && separation_engine.default_model_ready
+    ffmpeg_ready
+        && separation_engine.onnxruntime_available
+        && separation_engine.default_model_ready
+        && separation_engine.default_model_session_load_ok
+        && separation_engine.default_model_metadata_ok
 }
 
 fn is_demucs_model_ready(app: &AppHandle) -> bool {
@@ -1801,10 +1839,17 @@ fn bootstrap_install_whisper_model(app: &AppHandle) -> Result<(), String> {
 
 fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
     let runtime_models = get_runtime_dir().join("models");
-    let runtime_demucs = runtime_models.join("demucs");
+    let runtime_onnx = runtime_models.join("onnx");
     let runtime_whisper = runtime_models.join("whisper");
     let python_path = runtime::python::get_python_path(app);
-    let demucs_ready_initial = is_demucs_model_ready(app);
+    let onnx_ready_initial = if python_path.exists() {
+        let engine = separation::detect_engine_health(app, &runtime_models);
+        engine.default_model_ready
+            && engine.default_model_session_load_ok
+            && engine.default_model_metadata_ok
+    } else {
+        false
+    };
     let whisper_ready_initial = if python_path.exists() {
         match resolve_whisper_base_model_dir(app) {
             Ok(model_dir) => whisper_model_probe(&python_path, &model_dir, 8).is_ok(),
@@ -1813,10 +1858,9 @@ fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
     } else {
         false
     };
-    if demucs_ready_initial && whisper_ready_initial {
+    if onnx_ready_initial && whisper_ready_initial {
         return Ok(());
     }
-    let has_demucs = runtime_demucs.exists();
     let has_whisper = runtime_whisper.exists();
 
     let project_models = resolve_project_root().join("python").join("models");
@@ -1824,11 +1868,11 @@ fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
         .map_err(|e| format!("Failed to create runtime models dir: {}", e))?;
     let mut install_notes: Vec<String> = Vec::new();
 
-    if !has_demucs && project_models.exists() {
-        let src = project_models.join("demucs");
+    if !onnx_ready_initial && project_models.exists() {
+        let src = project_models.join("onnx");
         if src.exists() {
-            copy_dir_recursive(&src, &runtime_demucs)?;
-            install_notes.push("demucs: 本地离线模型已复制".to_string());
+            copy_dir_recursive(&src, &runtime_onnx)?;
+            install_notes.push("onnx default: 本地离线模型已复制".to_string());
         }
     }
     if !has_whisper && project_models.exists() {
@@ -1842,26 +1886,24 @@ fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
     let manifest =
         runtime::manifest::load_runtime_manifest(app, &get_runtime_dir(), &resolve_project_root());
     let platform_manifest = runtime::manifest::current_platform_manifest(&manifest);
-    let demucs_sources = if platform_manifest.models.demucs.is_empty() {
-        runtime::manifest::legacy_model_artifacts(&manifest, "demucs")
-    } else {
-        platform_manifest.models.demucs
-    };
     let whisper_sources = if platform_manifest.models.whisper_base.is_empty() {
         runtime::manifest::legacy_model_artifacts(&manifest, "whisper")
     } else {
         platform_manifest.models.whisper_base
     };
-    if !runtime_demucs.exists() {
-        match bootstrap_model_from_manifest_sources(
-            &runtime_models,
-            "demucs",
-            &runtime_demucs,
-            &demucs_sources,
-        ) {
-            Ok(true) => install_notes.push("demucs: 已从大陆优先在线源下载".to_string()),
-            Ok(false) => install_notes.push("demucs: 未配置可用在线源".to_string()),
-            Err(err) => install_notes.push(err),
+    if !onnx_ready_initial {
+        let candidate_sources = [
+            project_models.join("onnx"),
+            app.path()
+                .resource_dir()
+                .unwrap_or_default()
+                .join("python")
+                .join("models")
+                .join("onnx"),
+        ];
+        if let Some(src) = candidate_sources.iter().find(|path| path.exists()) {
+            copy_dir_recursive(src, &runtime_onnx)?;
+            install_notes.push("onnx default: 已从本地可用源复制".to_string());
         }
     }
     if !runtime_whisper.exists() {
@@ -1903,9 +1945,19 @@ fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
     }
 
     let mut still_missing = Vec::new();
-    let demucs_ready = is_demucs_model_ready(app);
-    if !demucs_ready {
-        still_missing.push("demucs 模型");
+    let onnx_health = if python_path.exists() {
+        separation::detect_engine_health(app, &runtime_models)
+    } else {
+        separation::detect_engine_health(app, &runtime_models)
+    };
+    if !onnx_health.default_model_ready {
+        still_missing.push("onnx default model");
+    }
+    if !onnx_health.default_model_session_load_ok {
+        still_missing.push("onnx session");
+    }
+    if !onnx_health.default_model_metadata_ok {
+        still_missing.push("onnx metadata");
     }
 
     let python_path = runtime::python::get_python_path(app);
@@ -1933,12 +1985,13 @@ fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
     if still_missing.is_empty() {
         Ok(())
     } else {
-        // Demucs 模型缺失时必须报错，Whisper base 是可选功能不影响核心
-        let demucs_missing = still_missing.iter().any(|s| s.contains("demucs"));
+        let onnx_missing = still_missing.iter().any(|s| {
+            s.contains("onnx default") || s.contains("onnx session") || s.contains("onnx metadata")
+        });
         let whisper_missing = still_missing.iter().any(|s| s.contains("whisper base"));
-        if demucs_missing {
+        if onnx_missing {
             Err(format!(
-                "核心模型（人声分离）安装失败：demucs 模型缺失。请检查网络或配置离线模型。细节：{}",
+                "核心模型（人声分离）安装失败：ONNX 默认模型缺失或不可用。请检查模型文件或配置离线模型。细节：{}",
                 if install_notes.is_empty() {
                     "无安装日志".to_string()
                 } else {
@@ -5401,18 +5454,32 @@ fn process_song_with_onnx_skeleton(
     let progress_file = output_dir.join("separator_progress.json");
 
     let message = if !engine_health.onnxruntime_available {
-        "ONNX Runtime 尚未就绪，当前版本已停止 Demucs 主链路。请先完成 ONNX Runtime 依赖部署。"
+        "ONNX Runtime 不可用"
     } else if !engine_health.default_model_ready {
-        "ONNX 默认模型 UVR_MDXNET_9482.onnx 尚未就绪，当前版本已停止 Demucs 主链路。"
+        "ONNX 默认模型 UVR_MDXNET_9482.onnx 尚未就绪"
+    } else if !engine_health.default_model_session_load_ok {
+        "ONNX Session 加载失败"
+    } else if !engine_health.default_model_metadata_ok {
+        "ONNX 模型元数据读取失败"
     } else {
-        "ONNX 分离执行器仍处于 Phase ONNX-A 接入阶段，未启动 legacy Demucs 主链路。"
+        "ONNX 探针已完成，真实分离执行器尚未接入。"
     };
 
     let requested_providers = engine_health.requested_providers.clone();
     let payload = serde_json::json!({
         "success": false,
         "error": message,
-        "error_code": "ONNX_ENGINE_NOT_READY",
+        "error_code": if !engine_health.onnxruntime_available {
+            "ONNX_RUNTIME_UNAVAILABLE"
+        } else if !engine_health.default_model_ready {
+            "ONNX_ENGINE_NOT_READY"
+        } else if !engine_health.default_model_session_load_ok {
+            "ONNX_SESSION_LOAD_FAILED"
+        } else if !engine_health.default_model_metadata_ok {
+            "ONNX_MODEL_METADATA_FAILED"
+        } else {
+            "ONNX_ENGINE_PROBE_ONLY"
+        },
         "stage": "checking_onnx",
         "engine": engine_health.active_engine,
         "legacy_fallback_engine": engine_health.legacy_fallback_engine,
@@ -5422,9 +5489,27 @@ fn process_song_with_onnx_skeleton(
         "provider_fallback_reason": engine_health.provider_fallback_reason,
         "onnxruntime_available": engine_health.onnxruntime_available,
         "default_model_id": engine_health.default_model_id,
+        "default_model_path": engine_health.default_model_path,
         "default_model_ready": engine_health.default_model_ready,
+        "default_model_session_load_ok": engine_health.default_model_session_load_ok,
+        "default_model_session_load_error": engine_health.default_model_session_load_error,
+        "default_model_metadata_ok": engine_health.default_model_metadata_ok,
+        "default_model_metadata_error": engine_health.default_model_metadata_error,
+        "default_model_input_shape": engine_health.default_model_input_shape,
+        "default_model_output_shape": engine_health.default_model_output_shape,
+        "default_model_dummy_inference_ok": engine_health.default_model_dummy_inference_ok,
+        "default_model_dummy_inference_error": engine_health.default_model_dummy_inference_error,
         "high_quality_model_id": engine_health.high_quality_model_id,
+        "high_quality_model_path": engine_health.high_quality_model_path,
         "high_quality_model_ready": engine_health.high_quality_model_ready,
+        "high_quality_model_session_load_ok": engine_health.high_quality_model_session_load_ok,
+        "high_quality_model_session_load_error": engine_health.high_quality_model_session_load_error,
+        "high_quality_model_metadata_ok": engine_health.high_quality_model_metadata_ok,
+        "high_quality_model_metadata_error": engine_health.high_quality_model_metadata_error,
+        "high_quality_model_input_shape": engine_health.high_quality_model_input_shape,
+        "high_quality_model_output_shape": engine_health.high_quality_model_output_shape,
+        "high_quality_model_dummy_inference_ok": engine_health.high_quality_model_dummy_inference_ok,
+        "high_quality_model_dummy_inference_error": engine_health.high_quality_model_dummy_inference_error,
         "input_path": input_path,
         "output_dir": output_dir.to_string_lossy(),
         "debug_log_path": debug_log.to_string_lossy(),
@@ -5456,6 +5541,14 @@ fn process_song_with_onnx_skeleton(
                 (
                     "default_model_ready",
                     engine_health.default_model_ready.to_string(),
+                ),
+                (
+                    "default_model_session_load_ok",
+                    engine_health.default_model_session_load_ok.to_string(),
+                ),
+                (
+                    "default_model_metadata_ok",
+                    engine_health.default_model_metadata_ok.to_string(),
                 ),
             ],
         ),
@@ -5867,7 +5960,7 @@ async fn bootstrap_install_minimal(
         .map_err(|e| format!("运行依赖安装失败（ONNX 路线 / legacy fallback）：{}", e))?;
     emit_bootstrap_progress(&app, "models", 74, "正在检查 ONNX / legacy 模型...");
     bootstrap_install_models(&app)
-        .map_err(|e| format!("模型安装失败（demucs/whisper base）：{}", e))?;
+        .map_err(|e| format!("模型安装失败（ONNX/whisper base）：{}", e))?;
     emit_bootstrap_progress(&app, "verify", 92, "正在做最终环境验证...");
     let status = detect_bootstrap_status(&app);
     if status.can_run_core {
