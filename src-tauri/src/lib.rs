@@ -6,8 +6,8 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -15,6 +15,7 @@ mod events;
 mod models;
 mod process_control;
 mod runtime;
+mod separation;
 mod separation_queue;
 mod storage;
 pub(crate) use events::{
@@ -39,9 +40,12 @@ const LYRICS_SEARCH_CACHE_VERSION: &str = "lyrics-search-v3";
 const PIP_NETWORK_TIMEOUT_SECONDS: &str = "120";
 const PIP_RETRIES: &str = "3";
 const BOOTSTRAP_TOTAL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+#[allow(dead_code)]
 const TORCH_INSTALL_TIMEOUT: Duration = Duration::from_secs(8 * 60);
+#[allow(dead_code)]
 const TORCH_FALLBACK_TIMEOUT: Duration = Duration::from_secs(2 * 60);
 const PYTHON_PACKAGES_TIMEOUT: Duration = Duration::from_secs(6 * 60);
+#[allow(dead_code)]
 const TORCH_UNINSTALL_TIMEOUT: Duration = Duration::from_secs(2 * 60);
 
 #[derive(Clone)]
@@ -366,6 +370,17 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
     let python_path = runtime::python::get_python_path(app);
     let python_exists = python_path.exists();
     let torch_capability = runtime::capability::detect_torch_cuda_capability(&python_path);
+    let mut separation_engine = separation::detect_engine_health(&get_models_dir(app));
+    if python_exists {
+        separation_engine.onnxruntime_available =
+            runtime::capability::python_module_is_available(&python_path, "onnxruntime", 6)
+                .unwrap_or(false);
+        if separation_engine.onnxruntime_available {
+            separation_engine.provider_fallback_reason = Some(
+                "ONNX Runtime Python package detected; native API execution is pending".to_string(),
+            );
+        }
+    }
     let ffmpeg_ready = command_is_available("ffmpeg", "-version");
     let torch_ready = if python_exists {
         runtime::capability::python_module_is_available(&python_path, "torch", 6).unwrap_or(false)
@@ -401,15 +416,9 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
         (false, "AI 听写草稿：Python 未就绪".to_string())
     };
     let demucs_models_ready = is_demucs_model_ready(app);
+    separation_engine.legacy_demucs_available = demucs_ready && demucs_models_ready;
 
-    let full_ready = is_full_capability_ready(
-        python_exists,
-        ffmpeg_ready,
-        torch_ready,
-        demucs_ready,
-        demucs_models_ready,
-        soundfile_ready,
-    );
+    let full_ready = is_onnx_capability_ready(&separation_engine, ffmpeg_ready);
     let mut checks = vec![
         RuntimeHealthCheck {
             name: "Python".to_string(),
@@ -445,12 +454,8 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
         RuntimeHealthCheck {
             name: "Torch".to_string(),
             ok: torch_ready,
-            severity: if torch_ready {
-                "info".to_string()
-            } else {
-                "error".to_string()
-            },
-            detail: Some("人声分离运行时".to_string()),
+            severity: "info".to_string(),
+            detail: Some("legacy Demucs fallback 运行时".to_string()),
         },
         RuntimeHealthCheck {
             name: "Torch CUDA".to_string(),
@@ -476,7 +481,32 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
             }),
         },
         RuntimeHealthCheck {
-            name: "人声分离".to_string(),
+            name: "ONNX Runtime".to_string(),
+            ok: separation_engine.onnxruntime_available,
+            severity: if separation_engine.onnxruntime_available {
+                "info".to_string()
+            } else {
+                "error".to_string()
+            },
+            detail: Some(
+                separation_engine
+                    .provider_fallback_reason
+                    .clone()
+                    .unwrap_or_else(|| separation_engine.selected_provider.clone()),
+            ),
+        },
+        RuntimeHealthCheck {
+            name: "ONNX 默认模型".to_string(),
+            ok: separation_engine.default_model_ready,
+            severity: if separation_engine.default_model_ready {
+                "info".to_string()
+            } else {
+                "error".to_string()
+            },
+            detail: Some(separation_engine.default_model_id.clone()),
+        },
+        RuntimeHealthCheck {
+            name: "Legacy Demucs fallback".to_string(),
             ok: demucs_ready && demucs_models_ready,
             severity: "info".to_string(),
             detail: Some(if !demucs_ready {
@@ -515,13 +545,13 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
         (
             "ready".to_string(),
             "可运行".to_string(),
-            "核心环境与模型已就绪".to_string(),
+            "ONNX 分离引擎与默认模型已就绪".to_string(),
         )
     } else {
         (
             "error".to_string(),
             "环境异常".to_string(),
-            "核心依赖或模型未就绪".to_string(),
+            "ONNX Runtime 或默认分离模型未就绪".to_string(),
         )
     };
 
@@ -529,6 +559,7 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
         level,
         label,
         detail,
+        separation_engine,
         torch_cuda_available: torch_capability.torch_cuda_available,
         selected_device: torch_capability.selected_device.clone(),
         torch_version: torch_capability.torch_version.clone(),
@@ -544,6 +575,7 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
     }
 }
 
+#[allow(dead_code)]
 fn is_full_capability_ready(
     python_ready: bool,
     ffmpeg_ready: bool,
@@ -558,6 +590,13 @@ fn is_full_capability_ready(
         && demucs_ready
         && demucs_models_ready
         && soundfile_ready
+}
+
+fn is_onnx_capability_ready(
+    separation_engine: &SeparationEngineHealth,
+    ffmpeg_ready: bool,
+) -> bool {
+    ffmpeg_ready && separation_engine.onnxruntime_available && separation_engine.default_model_ready
 }
 
 fn is_demucs_model_ready(app: &AppHandle) -> bool {
@@ -2002,6 +2041,7 @@ fn install_python_packages_with_fallbacks(
 /// Patch torchaudio/__init__.py to use soundfile backend instead of torchcodec.
 /// torchaudio 2.11+ defaults to torchcodec which requires FFmpeg shared DLLs not present in our runtime.
 /// Import hooks (sitecustomize.py) don't work for child processes, so we patch the source directly.
+#[allow(dead_code)]
 fn install_torchaudio_compat_patch(python_path: &Path) -> Result<(), String> {
     let site_packages = runtime::python::python_site_packages_dir(python_path)?;
     let init_path = site_packages.join("torchaudio").join("__init__.py");
@@ -2092,6 +2132,7 @@ fn install_torchaudio_compat_patch(python_path: &Path) -> Result<(), String> {
 }
 
 /// Find the end of a `return func(...)` block by tracking parenthesis depth
+#[allow(dead_code)]
 fn find_return_block_end(content: &str, start: usize) -> Option<usize> {
     let bytes = content[start..].as_bytes();
     let mut depth = 0i32;
@@ -2193,6 +2234,7 @@ fn remaining_bootstrap_timeout(deadline: Instant, preferred: Duration) -> Result
     Ok(preferred.min(remaining))
 }
 
+#[allow(dead_code)]
 fn summarize_separator_failure_output(
     stdout: &str,
     stderr: &str,
@@ -2255,6 +2297,7 @@ fn summarize_separator_failure_output(
     summary
 }
 
+#[allow(dead_code)]
 fn read_log_tail_for_error(path: &Path, max_lines: usize) -> Option<String> {
     let content = fs::read_to_string(path).ok()?;
     let lines = content
@@ -2303,6 +2346,7 @@ fn format_log_block(title: &str, lines: &[(&str, String)]) -> String {
     out
 }
 
+#[allow(dead_code)]
 fn ensure_core_runtime_modules(
     app: &AppHandle,
     try_demucs_cuda: bool,
@@ -2416,6 +2460,73 @@ fn ensure_core_runtime_modules(
     }
 }
 
+fn required_onnx_runtime_packages() -> Vec<&'static str> {
+    if cfg!(windows) {
+        vec!["onnxruntime-directml", "numpy", "soundfile"]
+    } else {
+        vec!["onnxruntime", "numpy", "soundfile"]
+    }
+}
+
+fn ensure_onnx_runtime_modules(app: &AppHandle, deadline: Instant) -> Result<(), String> {
+    let python_path = runtime::python::get_python_path(app);
+    if !python_path.exists() {
+        return Err("未检测到 Python 运行时".to_string());
+    }
+
+    let mut required_missing = Vec::new();
+    for module in ["onnxruntime", "numpy", "soundfile"] {
+        if !runtime::capability::python_module_is_available(&python_path, module, 6)
+            .unwrap_or(false)
+        {
+            required_missing.push(module.to_string());
+        }
+    }
+
+    if !required_missing.is_empty() {
+        let packages = required_onnx_runtime_packages();
+        install_python_packages_with_fallbacks(app, &python_path, &packages, deadline)
+            .map_err(|e| format!("ONNX Runtime 依赖安装失败: {}", e))?;
+    }
+
+    let mut final_missing = Vec::new();
+    for module in ["onnxruntime", "numpy", "soundfile"] {
+        if !runtime::capability::python_module_is_available(&python_path, module, 6)
+            .unwrap_or(false)
+        {
+            final_missing.push(module.to_string());
+        }
+    }
+    if !final_missing.is_empty() {
+        return Err(format!(
+            "一键安装后仍缺少 ONNX 分离依赖: {}",
+            final_missing.join(", ")
+        ));
+    }
+
+    // AI 听写仍依赖 faster-whisper，但它不是 ONNX 分离主线的阻断项。
+    if !runtime::capability::python_module_is_available(&python_path, "faster_whisper", 6)
+        .unwrap_or(false)
+    {
+        let _ = install_python_packages_with_fallbacks(
+            app,
+            &python_path,
+            &["faster-whisper"],
+            deadline,
+        )
+        .map_err(|e| {
+            eprintln!(
+                "[forisfstools] faster-whisper optional install failed: {}",
+                e
+            );
+            e
+        });
+    }
+
+    Ok(())
+}
+
+#[allow(dead_code)]
 fn uninstall_existing_torch_packages(app: &AppHandle, python_path: &Path, deadline: Instant) {
     emit_bootstrap_progress(app, "uninstall_torch", 36, "正在清理既有 Torch 组件...");
     let mut command = Command::new(python_path);
@@ -2449,6 +2560,7 @@ fn uninstall_existing_torch_packages(app: &AppHandle, python_path: &Path, deadli
 
 /// Install PyTorch with automatic CUDA detection.
 /// Source priority: Aliyun CUDA wheel mirror -> PyTorch official CUDA index -> Tsinghua PyPI/official CPU.
+#[allow(dead_code)]
 fn install_torch_with_cuda_detection(
     app: &AppHandle,
     python_path: &Path,
@@ -2658,6 +2770,12 @@ fn detect_bootstrap_status(app: &AppHandle) -> BootstrapStatus {
     let python_path = runtime::python::get_python_path(app);
     let python_ready = python_path.exists();
     let torch_capability = runtime::capability::detect_torch_cuda_capability(&python_path);
+    let mut separation_engine = separation::detect_engine_health(&get_models_dir(app));
+    if python_ready {
+        separation_engine.onnxruntime_available =
+            runtime::capability::python_module_is_available(&python_path, "onnxruntime", 6)
+                .unwrap_or(false);
+    }
     let demucs_models_ready = is_demucs_model_ready(app);
     let whisper_base_ready = if python_ready {
         resolve_whisper_base_model_dir(app)
@@ -2668,37 +2786,14 @@ fn detect_bootstrap_status(app: &AppHandle) -> BootstrapStatus {
         false
     };
     let ffmpeg_ready = command_is_available("ffmpeg", "-version");
-    let torch_ready = if python_ready {
-        runtime::capability::python_module_is_available(&python_path, "torch", 6).unwrap_or(false)
-    } else {
-        false
-    };
     let _torch_cuda_ready =
         torch_capability.torch_cuda_available || !torch_capability.has_nvidia_gpu;
-    let demucs_ready = if python_ready {
-        runtime::capability::python_module_is_available(&python_path, "demucs", 4).unwrap_or(false)
-    } else {
-        false
-    };
-    let soundfile_ready = if python_ready {
-        runtime::capability::python_module_is_available(&python_path, "soundfile", 6)
-            .unwrap_or(false)
-    } else {
-        false
-    };
-    let can_run_core = is_full_capability_ready(
-        python_ready,
-        ffmpeg_ready,
-        torch_ready,
-        demucs_ready,
-        demucs_models_ready,
-        soundfile_ready,
-    );
+    let can_run_core = is_onnx_capability_ready(&separation_engine, ffmpeg_ready);
 
     let detail = if can_run_core {
-        "核心环境与模型已就绪，可运行人声分离。".to_string()
+        "ONNX Runtime 与默认分离模型已就绪，可运行人声分离。".to_string()
     } else {
-        "依赖或模型未就绪，请继续安装/修复直至完整能力可用。".to_string()
+        "ONNX Runtime 或默认分离模型未就绪，请继续安装/修复。".to_string()
     };
 
     BootstrapStatus {
@@ -2779,6 +2874,7 @@ fn get_job(song_id: &str) -> Option<JobHandle> {
     jobs.as_ref().and_then(|m| m.get(song_id).cloned())
 }
 
+#[allow(dead_code)]
 fn set_job(song_id: &str, job: JobHandle) {
     let mut jobs = JOBS.lock().unwrap();
     if jobs.is_none() {
@@ -2881,6 +2977,8 @@ fn terminate_song_processes(song_id: &str, force: bool) {
             if !line.contains(song_id) {
                 continue;
             }
+            // Legacy Demucs cleanup only. ONNX is the default separation mainline and does
+            // not generate separator.py or invoke demucs processes.
             if !(line.contains("separator.py") || line.contains("demucs")) {
                 continue;
             }
@@ -2936,6 +3034,8 @@ fn terminate_app_processing_processes(force: bool) {
 
         for line in text.lines().skip(1) {
             let is_app_process = line.contains(&data_dir) || line.contains("4isfstools/songs");
+            // Legacy Demucs cleanup only. Kept temporarily so interrupted legacy fallback
+            // processes can still be terminated when explicitly enabled.
             let is_processing_process = line.contains("separator.py") || line.contains("demucs");
             if !is_app_process || !is_processing_process {
                 continue;
@@ -3452,6 +3552,7 @@ mod tests {
             level: "error".to_string(),
             label: "环境异常".to_string(),
             detail: "core missing".to_string(),
+            separation_engine: SeparationEngineHealth::default(),
             torch_cuda_available: false,
             selected_device: "cpu".to_string(),
             torch_version: None,
@@ -5254,6 +5355,136 @@ async fn start_process(
     Ok(())
 }
 
+fn process_song_with_onnx_skeleton(
+    app: AppHandle,
+    song_id: String,
+    job_token: String,
+    input_path: String,
+    output_dir: PathBuf,
+) {
+    if check_cancel_flag(&song_id) {
+        return;
+    }
+
+    emit_progress_for_job(
+        &app,
+        &song_id,
+        &job_token,
+        "checking_onnx",
+        5,
+        "正在检查 ONNX 分离引擎...",
+        Some(120),
+    );
+    update_song_status_for_job(
+        &song_id,
+        &job_token,
+        "processing",
+        5,
+        Some("checking_onnx"),
+        None,
+    );
+
+    let mut engine_health = separation::detect_engine_health(&get_models_dir(&app));
+    let python_path = runtime::python::get_python_path(&app);
+    if python_path.exists() {
+        engine_health.onnxruntime_available =
+            runtime::capability::python_module_is_available(&python_path, "onnxruntime", 6)
+                .unwrap_or(false);
+    }
+
+    let debug_dir = output_dir.join("debug");
+    let _ = fs::create_dir_all(&debug_dir);
+    let result_file = output_dir.join("separator_result.json");
+    let debug_result_file = debug_dir.join("separator_result.json");
+    let command_file = debug_dir.join("command.json");
+    let debug_log = debug_dir.join("separator_debug.log");
+    let progress_file = output_dir.join("separator_progress.json");
+
+    let message = if !engine_health.onnxruntime_available {
+        "ONNX Runtime 尚未就绪，当前版本已停止 Demucs 主链路。请先完成 ONNX Runtime 依赖部署。"
+    } else if !engine_health.default_model_ready {
+        "ONNX 默认模型 UVR_MDXNET_9482.onnx 尚未就绪，当前版本已停止 Demucs 主链路。"
+    } else {
+        "ONNX 分离执行器仍处于 Phase ONNX-A 接入阶段，未启动 legacy Demucs 主链路。"
+    };
+
+    let requested_providers = engine_health.requested_providers.clone();
+    let payload = serde_json::json!({
+        "success": false,
+        "error": message,
+        "error_code": "ONNX_ENGINE_NOT_READY",
+        "stage": "checking_onnx",
+        "engine": engine_health.active_engine,
+        "legacy_fallback_engine": engine_health.legacy_fallback_engine,
+        "legacy_demucs_enabled_env": separation::legacy_demucs::LEGACY_DEMUCS_ENV,
+        "requested_providers": requested_providers,
+        "selected_provider": engine_health.selected_provider,
+        "provider_fallback_reason": engine_health.provider_fallback_reason,
+        "onnxruntime_available": engine_health.onnxruntime_available,
+        "default_model_id": engine_health.default_model_id,
+        "default_model_ready": engine_health.default_model_ready,
+        "high_quality_model_id": engine_health.high_quality_model_id,
+        "high_quality_model_ready": engine_health.high_quality_model_ready,
+        "input_path": input_path,
+        "output_dir": output_dir.to_string_lossy(),
+        "debug_log_path": debug_log.to_string_lossy(),
+        "command_file_path": command_file.to_string_lossy(),
+    });
+
+    let _ = fs::write(
+        &progress_file,
+        serde_json::json!({
+            "percent": 5,
+            "message": message,
+        })
+        .to_string(),
+    );
+    append_text_log(
+        &debug_log,
+        &format_log_block(
+            "onnx separation skeleton",
+            &[
+                ("song_id", song_id.clone()),
+                ("job_token", job_token.clone()),
+                ("input_path", input_path),
+                ("output_dir", output_dir.to_string_lossy().to_string()),
+                ("requested_providers", requested_providers.join(",")),
+                (
+                    "onnxruntime_available",
+                    engine_health.onnxruntime_available.to_string(),
+                ),
+                (
+                    "default_model_ready",
+                    engine_health.default_model_ready.to_string(),
+                ),
+            ],
+        ),
+    );
+    let _ = fs::write(
+        &command_file,
+        serde_json::json!({
+            "engine": "onnx",
+            "status": "phase_onnx_a_skeleton",
+            "demucs_mainline": false,
+            "legacy_demucs_env": separation::legacy_demucs::LEGACY_DEMUCS_ENV,
+        })
+        .to_string(),
+    );
+    let payload_text = payload.to_string();
+    let _ = fs::write(&result_file, &payload_text);
+    let _ = fs::write(&debug_result_file, payload_text);
+
+    emit_error_for_job(&app, &song_id, &job_token, "checking_onnx", message);
+    update_song_status_for_job(
+        &song_id,
+        &job_token,
+        "error",
+        0,
+        Some("checking_onnx"),
+        Some(message),
+    );
+}
+
 pub(crate) fn process_song_background(
     app: AppHandle,
     song_id: String,
@@ -5261,1094 +5492,23 @@ pub(crate) fn process_song_background(
     input_path: String,
     output_dir: PathBuf,
     _song_duration_ms: u64,
-    prefer_demucs_cuda: bool,
+    _prefer_demucs_cuda: bool,
 ) {
-    let python_path = runtime::python::get_python_path(&app);
-    let _models_dir = get_models_dir(&app);
-
-    if check_cancel_flag(&song_id) {
-        return;
-    }
-
-    // Stage 0: GPU check
-    emit_progress_for_job(
-        &app,
-        &song_id,
-        &job_token,
-        "checking_gpu",
-        5,
-        "检测 GPU 可用性...",
-        Some(5),
-    );
-    let gpu_available = runtime::capability::check_gpu_availability(&python_path);
-    let has_nvidia_gpu = runtime::capability::detect_nvidia_gpu_name().is_some();
-    let cuda_allowed = prefer_demucs_cuda;
-    let selected_demucs_device = if cuda_allowed && gpu_available {
-        "cuda"
-    } else {
-        "cpu"
-    };
-
-    if check_cancel_flag(&song_id) {
-        return;
-    }
-
-    let (stage_name, message, estimated) = if selected_demucs_device == "cuda" {
-        ("gpu_available", "GPU 可用", Some(180))
-    } else if has_nvidia_gpu && cuda_allowed {
-        (
-            "cpu_fallback",
-            "已检测到 NVIDIA GPU，但 Torch CUDA 暂不可用，CPU 处理中",
-            Some(600),
-        )
-    } else {
-        ("cpu_fallback", "CPU 处理中", Some(600))
-    };
-
-    emit_progress_for_job(
-        &app, &song_id, &job_token, stage_name, 10, message, estimated,
-    );
-    update_song_status_for_job(
-        &song_id,
-        &job_token,
-        "processing",
-        10,
-        Some(stage_name),
-        None,
-    );
-
-    if check_cancel_flag(&song_id) {
-        return;
-    }
-
-    // Check if separation already exists - if so, skip separation step
-    let vocals_opt: Option<String>;
-    let instrumental_opt: Option<String>;
-
-    // Check for existing separated files
-    let htdemucs_dir = output_dir.join("htdemucs_ft");
-    let filename = PathBuf::from(&input_path)
-        .file_stem()
-        .and_then(|n| n.to_str())
-        .unwrap_or("Unknown")
-        .to_string();
-    let existing_vocals = htdemucs_dir.join(&filename).join("vocals.wav");
-    let existing_instrumental = htdemucs_dir.join(&filename).join("no_vocals.wav");
-
-    if existing_vocals.exists() && existing_instrumental.exists() {
-        // Skip separation - files already exist
-        emit_progress_for_job(
-            &app,
+    if separation::legacy_demucs::legacy_demucs_enabled() {
+        let message = "Legacy Demucs fallback 已从主链路清退；当前构建只保留显式占位入口，不再生成旧动态分离脚本。";
+        emit_error_for_job(&app, &song_id, &job_token, "legacy_demucs", message);
+        update_song_status_for_job(
             &song_id,
             &job_token,
-            "separating",
-            45,
-            "人声分离已完成，跳过分离步骤",
-            estimated,
+            "error",
+            0,
+            Some("legacy_demucs"),
+            Some(message),
         );
-        vocals_opt = Some(existing_vocals.to_string_lossy().to_string());
-        instrumental_opt = Some(existing_instrumental.to_string_lossy().to_string());
-    } else {
-        // Stage 1: Vocal separation
-        emit_progress_for_job(
-            &app,
-            &song_id,
-            &job_token,
-            "separating",
-            15,
-            "人声分离中 (0%)",
-            estimated,
-        );
-
-        let separator_script = r#"
-import sys
-import subprocess
-import os
-import json
-import importlib.util
-import signal
-import time
-import traceback
-from datetime import datetime
-
-# Read paths from job file first, before any log paths are defined.
-# Use utf-8-sig to handle potential BOM from PowerShell.
-job_file = sys.argv[1]
-with open(job_file, "r", encoding="utf-8-sig") as f:
-    job_data = json.load(f)
-input_path = job_data["input_path"]
-output_dir = job_data["output_dir"]
-result_file = os.path.join(output_dir, "separator_result.json")
-prefer_demucs_cuda = bool(job_data.get("prefer_demucs_cuda", False))
-has_nvidia_gpu = bool(job_data.get("has_nvidia_gpu", False))
-
-os.makedirs(output_dir, exist_ok=True)
-
-DEBUG_DIR = os.path.join(output_dir, "debug")
-try:
-    import shutil
-    if os.path.isdir(DEBUG_DIR):
-        shutil.rmtree(DEBUG_DIR, ignore_errors=True)
-except Exception:
-    pass
-os.makedirs(DEBUG_DIR, exist_ok=True)
-
-LOG_DEBUG_PATH = os.path.join(DEBUG_DIR, "separator_debug.log")
-LOG_DEMUCS_PATH = os.path.join(DEBUG_DIR, "demucs_child.log")
-RUNTIME_PROBE_PATH = os.path.join(DEBUG_DIR, "runtime_probe.json")
-COMMAND_PATH = os.path.join(DEBUG_DIR, "command.json")
-TRACEBACK_PATH = os.path.join(DEBUG_DIR, "traceback.log")
-
-def _ts():
-    return datetime.utcnow().isoformat(timespec="milliseconds") + "Z"
-
-def _append_log(path, message):
-    try:
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(f"[{_ts()}] {message}\n")
-    except Exception:
-        pass
-
-def log_block(title, pairs):
-    _append_log(LOG_DEBUG_PATH, title)
-    for key, value in pairs:
-        _append_log(LOG_DEBUG_PATH, f"{key}={value}")
-    _append_log(LOG_DEBUG_PATH, "")
-
-def capture_exc(prefix):
-    _append_log(LOG_DEBUG_PATH, f"{prefix} traceback follows")
-    exc_text = traceback.format_exc()
-    _append_log(LOG_DEBUG_PATH, exc_text)
-    try:
-        with open(TRACEBACK_PATH, "a", encoding="utf-8") as f:
-            f.write(f"[{_ts()}] {prefix}\n{exc_text}\n")
-    except Exception:
-        pass
-
-# Monkey-patch torchaudio.load to use soundfile backend
-# torchaudio 2.11+ requires torchcodec which needs FFmpeg shared libs (DLLs) not present in our runtime
-def _patched_load(uri, *args, **kwargs):
-    import soundfile as sf
-    import torch
-    data, samplerate = sf.read(str(uri), dtype='float32')
-    data = torch.from_numpy(data)
-    if data.ndim == 1:
-        data = data.unsqueeze(0)
-    else:
-        data = data.T
-    return data, samplerate
-
-try:
-    import torchaudio
-    torchaudio.load = _patched_load
-except ImportError:
-    pass
-
-log_block("separator.py bootstrap context", [
-    ("song_id", str(job_data.get("song_id", ""))),
-    ("job_token", str(job_data.get("job_token", ""))),
-    ("selected_device_hint", str(job_data.get("selected_device", ""))),
-    ("prefer_demucs_cuda", str(bool(job_data.get("prefer_demucs_cuda", False)))),
-    ("has_nvidia_gpu", str(bool(job_data.get("has_nvidia_gpu", False)))),
-    ("input_path", str(input_path)),
-    ("output_dir", str(output_dir)),
-    ("separator_py_path", str(__file__) if "__file__" in globals() else "unknown"),
-    ("job_file", str(job_file)),
-    ("sys.executable", str(sys.executable)),
-    ("sys.version", str(sys.version)),
-    ("platform", str(sys.platform)),
-    ("cwd", str(os.getcwd())),
-    ("PATH", str(os.environ.get("PATH", ""))),
-    ("CUDA_PATH", str(os.environ.get("CUDA_PATH", ""))),
-    ("VIRTUAL_ENV", str(os.environ.get("VIRTUAL_ENV", ""))),
-    ("CONDA_PREFIX", str(os.environ.get("CONDA_PREFIX", ""))),
-    ("PYTHONPATH", str(os.environ.get("PYTHONPATH", ""))),
-    ("TORCH_FORCE_WEIGHTS_ONLY_LOAD", str(os.environ.get("TORCH_FORCE_WEIGHTS_ONLY_LOAD", ""))),
-    ("PYTHONUTF8", str(os.environ.get("PYTHONUTF8", ""))),
-    ("PYTHONIOENCODING", str(os.environ.get("PYTHONIOENCODING", ""))),
-])
-
-runtime_probe = {
-    "torch": None,
-    "torchaudio": None,
-    "demucs": None,
-    "soundfile": None,
-    "numpy": None,
-}
-probe_errors = []
-for mod_name in ["torch", "torchaudio", "demucs", "soundfile", "numpy"]:
-    try:
-        spec = importlib.util.find_spec(mod_name)
-        runtime_probe[mod_name] = getattr(spec, "origin", None) if spec else None
-    except Exception:
-        runtime_probe[mod_name] = f"find_spec_failed: {traceback.format_exc()}"
-
-try:
-    import numpy as np
-    runtime_probe["numpy_version"] = np.__version__
-    runtime_probe["numpy_file"] = getattr(np, "__file__", None)
-except Exception:
-    probe_errors.append(traceback.format_exc())
-
-try:
-    import soundfile as sf
-    runtime_probe["soundfile_version"] = getattr(sf, "__version__", None)
-    runtime_probe["soundfile_file"] = getattr(sf, "__file__", None)
-except Exception:
-    probe_errors.append(traceback.format_exc())
-
-try:
-    import torch
-    runtime_probe["torch_version"] = getattr(torch, "__version__", None)
-    runtime_probe["torch_file"] = getattr(torch, "__file__", None)
-    runtime_probe["torch_cuda_version"] = getattr(torch.version, "cuda", None)
-    runtime_probe["torch_cuda_available"] = bool(torch.cuda.is_available())
-    runtime_probe["torch_cuda_device_name"] = None
-    if runtime_probe["torch_cuda_available"]:
-        try:
-            runtime_probe["torch_cuda_device_name"] = torch.cuda.get_device_name(0)
-        except Exception:
-            probe_errors.append(traceback.format_exc())
-except Exception:
-    probe_errors.append(traceback.format_exc())
-
-try:
-    import torchaudio
-    runtime_probe["torchaudio_version"] = getattr(torchaudio, "__version__", None)
-    runtime_probe["torchaudio_file"] = getattr(torchaudio, "__file__", None)
-except Exception:
-    probe_errors.append(traceback.format_exc())
-
-try:
-    import demucs
-    runtime_probe["demucs_file"] = getattr(demucs, "__file__", None)
-except Exception:
-    probe_errors.append(traceback.format_exc())
-
-try:
-    import demucs.separate  # noqa: F401
-    runtime_probe["demucs_separate_import"] = "ok"
-except Exception:
-    probe_errors.append(traceback.format_exc())
-
-log_block("runtime probe", [(key, repr(value)) for key, value in runtime_probe.items()])
-try:
-    with open(RUNTIME_PROBE_PATH, "w", encoding="utf-8") as f:
-        json.dump(runtime_probe, f, ensure_ascii=False, indent=2)
-except Exception:
-    capture_exc("runtime probe write failed")
-if probe_errors:
-    for block in probe_errors:
-        _append_log(LOG_DEBUG_PATH, "runtime probe traceback follows")
-        _append_log(LOG_DEBUG_PATH, block)
-        _append_log(LOG_DEBUG_PATH, "")
-
-gpu_available = False
-torch_version = None
-torch_cuda_version = None
-torch_cuda_device_name = None
-try:
-    import torch
-    torch_version = getattr(torch, "__version__", None)
-    torch_cuda_version = getattr(torch.version, "cuda", None)
-    gpu_available = torch.cuda.is_available()
-    if gpu_available:
-        try:
-            torch_cuda_device_name = torch.cuda.get_device_name(0)
-        except Exception:
-            torch_cuda_device_name = None
-except Exception:
-    pass
-
-if prefer_demucs_cuda and gpu_available:
-    device = "cuda"
-else:
-    device = "cpu"
-
-filename = os.path.splitext(os.path.basename(input_path))[0]
-out_subdir = os.path.join(output_dir, "htdemucs_ft", filename)
-demucs_child = None
-interrupted = False
-terminated_by_signal = False
-demucs_cmd_repr = None
-demucs_returncode = None
-
-def emit_error(message):
-    payload = {
-        "error": message,
-        "success": False,
-        "selected_device": device,
-        "gpu_requested": bool(prefer_demucs_cuda),
-        "has_nvidia_gpu": has_nvidia_gpu,
-        "torch_cuda_available": gpu_available,
-        "torch_version": torch_version,
-        "torch_cuda_version": torch_cuda_version,
-        "torch_cuda_device_name": torch_cuda_device_name,
-        "demucs_device_arg": device,
-        "debug_log_path": LOG_DEBUG_PATH,
-        "demucs_log_path": LOG_DEMUCS_PATH,
-        "runtime_probe_path": RUNTIME_PROBE_PATH,
-        "command_file_path": COMMAND_PATH,
-        "traceback_log_path": TRACEBACK_PATH,
-        "job_file_path": job_file,
-        "demucs_returncode": demucs_returncode,
-        "demucs_cmd": demucs_cmd_repr,
-        "python_executable": sys.executable,
-        "demucs_file": runtime_probe.get("demucs_file"),
-        "torchaudio_file": runtime_probe.get("torchaudio_file"),
-        "torch_file": runtime_probe.get("torch_file"),
-    }
-    with open(result_file, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False)
-    print(json.dumps(payload))
-
-def terminate_demucs(force=False):
-    global demucs_child
-    if demucs_child is None:
-        return
-    try:
-        if demucs_child.poll() is None:
-            demucs_child.terminate()
-            try:
-                demucs_child.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                if force:
-                    demucs_child.kill()
-                else:
-                    demucs_child.kill()
-    except Exception:
-        pass
-
-def on_signal(signum, frame):
-    global interrupted, terminated_by_signal
-    interrupted = True
-    terminated_by_signal = True
-    terminate_demucs(force=False)
-    raise SystemExit(1)
-
-signal.signal(signal.SIGTERM, on_signal)
-signal.signal(signal.SIGINT, on_signal)
-
-import re as _re
-
-cmd = [sys.executable, "-m", "demucs", "--two-stems=vocals", "-n", "htdemucs_ft", "-o", output_dir, "--device", device, input_path]
-demucs_cmd_repr = repr(cmd)
-env = os.environ.copy()
-env["TORCH_FORCE_WEIGHTS_ONLY_LOAD"] = "0"
-env["PYTHONUTF8"] = "1"
-env["PYTHONIOENCODING"] = "utf-8"
-env["PYTHONUNBUFFERED"] = "1"
-# Hide console window on Windows (CREATE_NO_WINDOW = 0x08000000)
-creation_flags = 0x08000000 if sys.platform == "win32" else 0
-
-log_block("demucs command context", [
-    ("demucs_cmd", demucs_cmd_repr),
-    ("shell", "False"),
-    ("cwd", os.getcwd()),
-    ("creationflags", str(creation_flags)),
-    ("sys.executable", sys.executable),
-    ("PATH", os.environ.get("PATH", "")),
-    ("CUDA_PATH", os.environ.get("CUDA_PATH", "")),
-    ("TORCH_FORCE_WEIGHTS_ONLY_LOAD", env.get("TORCH_FORCE_WEIGHTS_ONLY_LOAD", "")),
-    ("PYTHONUTF8", env.get("PYTHONUTF8", "")),
-    ("PYTHONIOENCODING", env.get("PYTHONIOENCODING", "")),
-])
-try:
-    with open(COMMAND_PATH, "w", encoding="utf-8") as f:
-        json.dump({
-            "demucs_cmd": cmd,
-            "shell": False,
-            "cwd": os.getcwd(),
-            "creationflags": creation_flags,
-            "env": {
-                "PATH": os.environ.get("PATH", ""),
-                "CUDA_PATH": os.environ.get("CUDA_PATH", ""),
-                "TORCH_FORCE_WEIGHTS_ONLY_LOAD": env.get("TORCH_FORCE_WEIGHTS_ONLY_LOAD", ""),
-                "PYTHONUTF8": env.get("PYTHONUTF8", ""),
-                "PYTHONIOENCODING": env.get("PYTHONIOENCODING", ""),
-            },
-        }, f, ensure_ascii=False, indent=2)
-except Exception:
-    capture_exc("command json write failed")
-
-try:
-    demucs_child = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        env=env,
-        creationflags=creation_flags,
-        bufsize=1,
-    )
-except Exception as exc:
-    emit_error(f"Demucs 启动失败: {type(exc).__name__}: {exc}")
-    sys.exit(1)
-
-_append_log(LOG_DEMUCS_PATH, f"[{_ts()}] demucs_child_pid={getattr(demucs_child, 'pid', None)}")
-_append_log(LOG_DEMUCS_PATH, f"[{_ts()}] demucs_child_started")
-
-# Write progress file so Rust can emit intermediate updates while demucs runs
-progress_file = os.path.join(output_dir, "separator_progress.json")
-def write_progress(pct, msg):
-    try:
-        with open(progress_file, "w", encoding="utf-8") as f:
-            json.dump({"percent": pct, "message": msg}, f)
-    except Exception:
-        pass
-
-# Parse demucs progress from stdout lines like:
-#  42%|████████████████████████████████████████| 87.75/210.6 [02:10<03:07, 1.52s/seconds]
-_demucs_pct_re = _re.compile(r"^\s*(\d+)%\|")
-
-# demucs outputs progress for each of 4 sub-models. Track highest seen.
-last_model_idx = -1
-model_seen = set()
-demucs_done_models = 0
-
-# Read demucs stdout line by line for real-time progress
-stdout_lines = []
-stderr_lines = []
-while True:
-    if interrupted:
-        terminate_demucs(force=True)
-        emit_error("Demucs 分离已取消")
-        sys.exit(1)
-    # Non-blocking check if process ended
-    if demucs_child.poll() is not None:
-        # Drain remaining output
-        for line in demucs_child.stdout:
-            stdout_lines.append(line)
-        # stderr is merged into stdout on Windows-friendly runs.
-        break
-    # Read one line from stdout (blocking but with poll check above)
-    import select as _select
-    if sys.platform == "win32":
-        # Windows: use threading for non-blocking read
-        import threading as _threading
-        line_buf = [None]
-        def _read_line():
-            try:
-                line_buf[0] = demucs_child.stdout.readline()
-            except Exception:
-                line_buf[0] = ""
-        t = _threading.Thread(target=_read_line, daemon=True)
-        t.start()
-        t.join(timeout=1.0)
-        line = line_buf[0]
-    else:
-        ready, _, _ = _select.select([demucs_child.stdout], [], [], 1.0)
-        line = demucs_child.stdout.readline() if ready else None
-
-    if line:
-        stdout_lines.append(line)
-        _append_log(LOG_DEMUCS_PATH, line.rstrip("\r\n"))
-        m = _demucs_pct_re.match(line)
-        if m:
-            pct = int(m.group(1))
-            # Map demucs 0-100% to app 20-90%
-            app_pct = min(90, 20 + int(pct * 0.7))
-            write_progress(app_pct, f"人声分离中 ({app_pct}%)")
-
-if interrupted:
-    emit_error("Demucs 分离已取消")
-    sys.exit(1)
-
-stdout = "".join(stdout_lines)
-stderr = "".join(stderr_lines)
-demucs_returncode = demucs_child.returncode
-_append_log(LOG_DEMUCS_PATH, f"[{_ts()}] demucs_child_stdout_full_begin")
-_append_log(LOG_DEMUCS_PATH, stdout)
-_append_log(LOG_DEMUCS_PATH, f"[{_ts()}] demucs_child_stdout_full_end")
-_append_log(LOG_DEMUCS_PATH, f"[{_ts()}] demucs_child_returncode={demucs_returncode}")
-
-def summarize_demucs_error(text):
-    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
-    if not lines:
-        return "Demucs 未返回错误详情"
-    noisy = (
-        "Traceback (most recent call last)",
-        "File \"<frozen runpy>\"",
-        "exec(code, run_globals)",
-        "runpy.py",
-    )
-    candidates = []
-    for line in lines:
-        if any(marker in line for marker in noisy):
-            continue
-        if line.startswith(("Error", "RuntimeError", "ImportError", "ModuleNotFoundError", "OSError", "ValueError", "AssertionError", "FileNotFoundError", "PermissionError")):
-            candidates.append(line)
-        elif ": " in line and not line.startswith("File "):
-            candidates.append(line)
-    if candidates:
-        summary = candidates[-1]
-    else:
-        summary = lines[-1]
-    tail = " | ".join(lines[-4:])
-    if tail and summary not in tail:
-        summary = f"{summary} | {tail}"
-    return summary[:900]
-
-# Remove progress file so Rust-side progress monitor thread exits its loop
-try:
-    os.remove(progress_file)
-except Exception:
-    pass
-
-if demucs_child.returncode != 0:
-    error_msg_source = stderr if stderr else stdout
-    error_msg = summarize_demucs_error(error_msg_source)
-    emit_error(f"Demucs 分离失败: {error_msg}")
-    sys.exit(1)
-
-vocals_path = os.path.join(out_subdir, "vocals.wav")
-instrumental_path = os.path.join(out_subdir, "no_vocals.wav")
-
-if not os.path.exists(vocals_path):
-    emit_error(f"Vocals file not found: {vocals_path}")
-    sys.exit(1)
-
-if not os.path.exists(instrumental_path):
-    emit_error(f"Instrumental file not found: {instrumental_path}")
-    sys.exit(1)
-
-payload = {
-    "vocals": vocals_path,
-    "instrumental": instrumental_path,
-    "success": True,
-    "terminated_by_signal": terminated_by_signal,
-    "selected_device": device,
-    "gpu_requested": bool(prefer_demucs_cuda),
-    "has_nvidia_gpu": has_nvidia_gpu,
-    "torch_cuda_available": gpu_available,
-    "torch_version": torch_version,
-    "torch_cuda_version": torch_cuda_version,
-    "torch_cuda_device_name": torch_cuda_device_name,
-    "demucs_device_arg": device,
-    "debug_log_path": LOG_DEBUG_PATH,
-    "demucs_log_path": LOG_DEMUCS_PATH,
-    "demucs_returncode": demucs_child.returncode,
-    "demucs_cmd": repr(cmd),
-    "python_executable": sys.executable,
-    "demucs_file": runtime_probe.get("demucs_file"),
-    "torchaudio_file": runtime_probe.get("torchaudio_file"),
-    "torch_file": runtime_probe.get("torch_file"),
-}
-with open(result_file, "w", encoding="utf-8") as f:
-    json.dump(payload, f, ensure_ascii=False)
-if os.environ.get("MACARON_KEEP_DEBUG") != "1":
-    try:
-        import shutil
-        shutil.rmtree(DEBUG_DIR, ignore_errors=True)
-    except Exception:
-        pass
-print(json.dumps(payload))
-"#;
-
-        let separator_path = output_dir.join("separator.py");
-        if let Err(e) = fs::write(&separator_path, separator_script) {
-            emit_error_for_job(
-                &app,
-                &song_id,
-                &job_token,
-                "separating",
-                &format!("Failed to write script: {}", e),
-            );
-            update_song_status_for_job(
-                &song_id,
-                &job_token,
-                "error",
-                0,
-                Some("separating"),
-                Some(&format!("Failed to write script: {}", e)),
-            );
-            return;
-        }
-
-        // Write job file with paths (avoids Windows encoding issues with Chinese characters in sys.argv)
-        let job_file = output_dir.join("separator_job.json");
-        let job_data = serde_json::json!({
-            "song_id": song_id,
-            "job_token": job_token,
-            "input_path": input_path,
-            "output_dir": output_dir.to_str().unwrap(),
-            "device": selected_demucs_device,
-            "prefer_demucs_cuda": prefer_demucs_cuda,
-            "has_nvidia_gpu": has_nvidia_gpu,
-            "selected_device": selected_demucs_device,
-        });
-        if let Err(e) = fs::write(&job_file, job_data.to_string()) {
-            emit_error_for_job(
-                &app,
-                &song_id,
-                &job_token,
-                "separating",
-                &format!("Failed to write job file: {}", e),
-            );
-            update_song_status_for_job(
-                &song_id,
-                &job_token,
-                "error",
-                0,
-                Some("separating"),
-                Some(&format!("Failed to write job file: {}", e)),
-            );
-            return;
-        }
-
-        emit_progress_for_job(
-            &app,
-            &song_id,
-            &job_token,
-            "separating",
-            20,
-            "人声分离中 (20%)",
-            estimated,
-        );
-
-        // Create progress file for intermediate updates
-        let progress_file = output_dir.join("separator_progress.json");
-        let _ = fs::write(
-            &progress_file,
-            r#"{"percent":20,"message":"人声分离中 (20%)"}"#,
-        );
-
-        let mut child = spawn_in_own_process_group(
-            Command::new(&python_path)
-                .arg(&separator_path)
-                .arg(&job_file)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped()),
-        )
-        .expect("Failed to spawn separator process");
-
-        // Store job handle for potential cancellation
-        set_job(
-            &song_id,
-            JobHandle {
-                separator_pid: Some(child.id()),
-            },
-        );
-
-        // Spawn thread to monitor progress file and emit updates
-        let progress_file_clone = progress_file.clone();
-        let app_clone = app.clone();
-        let song_id_clone = song_id.clone();
-        let job_token_clone = job_token.clone();
-        let estimated_clone = estimated.clone();
-        let progress_done = Arc::new(AtomicBool::new(false));
-        let progress_done_clone = progress_done.clone();
-        let progress_handle = std::thread::spawn(move || {
-            let mut last_pct = 20;
-            loop {
-                std::thread::sleep(std::time::Duration::from_secs(2));
-                if let Ok(content) = fs::read_to_string(&progress_file_clone) {
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-                        if let Some(pct) = val.get("percent").and_then(|v| v.as_i64()) {
-                            if pct > last_pct {
-                                last_pct = pct;
-                                let msg = val
-                                    .get("message")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("人声分离中");
-                                emit_progress_for_job(
-                                    &app_clone,
-                                    &song_id_clone,
-                                    &job_token_clone,
-                                    "separating",
-                                    pct as u32,
-                                    msg,
-                                    estimated_clone,
-                                );
-                            }
-                        }
-                    }
-                } else {
-                    break; // Progress file deleted = process done
-                }
-                if progress_done_clone.load(Ordering::SeqCst) {
-                    break;
-                }
-            }
-        });
-
-        // Wait for child process, reading stdout/stderr in threads to avoid deadlock
-        let mut stdout_child = child.stdout.take();
-        let mut stderr_child = child.stderr.take();
-        let stdout_handle = std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            if let Some(ref mut s) = stdout_child {
-                let _ = std::io::Read::read_to_end(s, &mut buf);
-            }
-            buf
-        });
-        let stderr_handle = std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            if let Some(ref mut s) = stderr_child {
-                let _ = std::io::Read::read_to_end(s, &mut buf);
-            }
-            buf
-        });
-
-        let result = child.wait();
-
-        progress_done.store(true, Ordering::SeqCst);
-
-        let stdout_bytes = stdout_handle.join().unwrap_or_default();
-        let stderr_bytes = stderr_handle.join().unwrap_or_default();
-        let _ = progress_handle.join();
-
-        if check_cancel_flag(&song_id) {
-            return;
-        }
-
-        match result {
-            Ok(status) => {
-                if check_cancel_flag(&song_id) {
-                    return;
-                }
-                let stdout = String::from_utf8_lossy(&stdout_bytes);
-                let stderr = String::from_utf8_lossy(&stderr_bytes);
-                let separator_debug_log = output_dir.join("debug").join("separator_debug.log");
-                let demucs_log = output_dir.join("debug").join("demucs_child.log");
-                if !status.success() {
-                    append_text_log(
-                        &separator_debug_log,
-                        &format_log_block(
-                            "rust separator postmortem",
-                            &[
-                                ("song_id", song_id.clone()),
-                                ("job_token", job_token.clone()),
-                                ("selected_device", selected_demucs_device.to_string()),
-                                ("prefer_demucs_cuda", prefer_demucs_cuda.to_string()),
-                                ("has_nvidia_gpu", has_nvidia_gpu.to_string()),
-                                ("input_path", input_path.clone()),
-                                ("output_dir", output_dir.to_string_lossy().to_string()),
-                                (
-                                    "separator_path",
-                                    separator_path.to_string_lossy().to_string(),
-                                ),
-                                ("job_file", job_file.to_string_lossy().to_string()),
-                                ("sys.executable", python_path.to_string_lossy().to_string()),
-                                (
-                                    "cwd",
-                                    std::env::current_dir()
-                                        .map(|p| p.to_string_lossy().to_string())
-                                        .unwrap_or_default(),
-                                ),
-                                ("PATH", std::env::var("PATH").unwrap_or_default()),
-                                ("CUDA_PATH", std::env::var("CUDA_PATH").unwrap_or_default()),
-                                (
-                                    "TORCH_FORCE_WEIGHTS_ONLY_LOAD",
-                                    std::env::var("TORCH_FORCE_WEIGHTS_ONLY_LOAD")
-                                        .unwrap_or_default(),
-                                ),
-                                (
-                                    "PYTHONUTF8",
-                                    std::env::var("PYTHONUTF8").unwrap_or_default(),
-                                ),
-                                (
-                                    "PYTHONIOENCODING",
-                                    std::env::var("PYTHONIOENCODING").unwrap_or_default(),
-                                ),
-                            ],
-                        ),
-                    );
-                    append_text_log(
-                        &demucs_log,
-                        &format_log_block(
-                            "rust demucs child capture",
-                            &[
-                                ("returncode", status.to_string()),
-                                ("stdout_len", stdout.len().to_string()),
-                                ("stderr_len", stderr.len().to_string()),
-                                ("stderr_content", stderr.as_ref().to_string()),
-                            ],
-                        ),
-                    );
-                }
-                let separator_result_file = output_dir.join("separator_result.json");
-                let separator_result = if separator_result_file.exists() {
-                    fs::read_to_string(&separator_result_file).ok()
-                } else {
-                    None
-                };
-                let separator_json = separator_result
-                    .as_deref()
-                    .and_then(|content| serde_json::from_str::<serde_json::Value>(content).ok())
-                    .or_else(|| serde_json::from_str::<serde_json::Value>(&stdout).ok());
-
-                // Check for empty result payload (script crashed or produced no output)
-                if separator_json.is_none() {
-                    let mut err_msg = summarize_separator_failure_output(&stdout, &stderr, &status);
-                    let debug_tail = [
-                        read_log_tail_for_error(&demucs_log, 6),
-                        read_log_tail_for_error(&separator_debug_log, 6),
-                    ]
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<_>>()
-                    .join(" | ");
-                    if !debug_tail.is_empty() {
-                        err_msg = format!("{} | debug: {}", err_msg, debug_tail);
-                        if err_msg.len() > 1200 {
-                            err_msg.truncate(1200);
-                        }
-                    }
-                    let err_msg = format!(
-                        "{}（完整日志见: {}, {}）",
-                        err_msg,
-                        separator_debug_log.to_string_lossy(),
-                        demucs_log.to_string_lossy()
-                    );
-                    eprintln!(
-                        "[forisfstools] separator debug log: {}",
-                        separator_debug_log.to_string_lossy()
-                    );
-                    eprintln!(
-                        "[forisfstools] demucs child log: {}",
-                        demucs_log.to_string_lossy()
-                    );
-                    emit_error_for_job(&app, &song_id, &job_token, "separating", &err_msg);
-                    update_song_status_for_job(
-                        &song_id,
-                        &job_token,
-                        "error",
-                        0,
-                        Some("separating"),
-                        Some(&err_msg),
-                    );
-                    return;
-                }
-
-                match separator_json {
-                    Some(json) => {
-                        if json.get("error").is_some() {
-                            let err = json
-                                .get("error")
-                                .unwrap()
-                                .as_str()
-                                .unwrap_or("Unknown error");
-                            if let Some(debug_path) =
-                                json.get("debug_log_path").and_then(|v| v.as_str())
-                            {
-                                eprintln!("[forisfstools] separator debug log: {}", debug_path);
-                            }
-                            if let Some(log_path) =
-                                json.get("demucs_log_path").and_then(|v| v.as_str())
-                            {
-                                eprintln!("[forisfstools] demucs child log: {}", log_path);
-                            }
-                            let err = format!(
-                                "{}（完整日志见: {}, {}）",
-                                err,
-                                separator_debug_log.to_string_lossy(),
-                                demucs_log.to_string_lossy()
-                            );
-                            emit_error_for_job(&app, &song_id, &job_token, "separating", &err);
-                            update_song_status_for_job(
-                                &song_id,
-                                &job_token,
-                                "error",
-                                0,
-                                Some("separating"),
-                                Some(&err),
-                            );
-                            return;
-                        }
-                        emit_progress_for_job(
-                            &app,
-                            &song_id,
-                            &job_token,
-                            "separating",
-                            45,
-                            "人声分离中 (45%)",
-                            estimated,
-                        );
-                        vocals_opt = json
-                            .get("vocals")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string());
-                        instrumental_opt = json
-                            .get("instrumental")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string());
-                    }
-                    None => {
-                        emit_error_for_job(
-                            &app,
-                            &song_id,
-                            &job_token,
-                            "separating",
-                            "JSON parse error: separator result missing",
-                        );
-                        update_song_status_for_job(
-                            &song_id,
-                            &job_token,
-                            "error",
-                            0,
-                            Some("separating"),
-                            Some("JSON parse error: separator result missing"),
-                        );
-                        return;
-                    }
-                }
-            }
-            Err(e) => {
-                emit_error_for_job(
-                    &app,
-                    &song_id,
-                    &job_token,
-                    "separating",
-                    &format!("Command failed: {}", e),
-                );
-                update_song_status_for_job(
-                    &song_id,
-                    &job_token,
-                    "error",
-                    0,
-                    Some("separating"),
-                    Some(&format!("Command failed: {}", e)),
-                );
-                return;
-            }
-        }
-    }
-
-    if check_cancel_flag(&song_id) {
         return;
     }
 
-    let _vocals_path = match vocals_opt {
-        Some(ref p) => Some(p.clone()),
-        None => {
-            emit_error_for_job(
-                &app,
-                &song_id,
-                &job_token,
-                "separating",
-                "No vocals path returned",
-            );
-            update_song_status_for_job(
-                &song_id,
-                &job_token,
-                "error",
-                0,
-                Some("separating"),
-                Some("No vocals path returned"),
-            );
-            return;
-        }
-    };
-
-    if check_cancel_flag(&song_id) {
-        return;
-    }
-
-    let storage_settings = get_file_storage_settings_snapshot();
-    let target_instrumental_path = resolve_instrumental_path(&song_id, &storage_settings);
-    let target_vocals_path = resolve_vocals_path(&song_id, &storage_settings);
-    let _target_original_mix_path = resolve_original_mix_path(&song_id, &storage_settings);
-    if let Some(source) = instrumental_opt.as_ref().map(PathBuf::from) {
-        let _ = move_or_copy_file(&source, &target_instrumental_path);
-    }
-    if let Some(source) = vocals_opt.as_ref().map(PathBuf::from) {
-        let _ = move_or_copy_file(&source, &target_vocals_path);
-    }
-
-    let original_mix_path = match (&vocals_opt, &instrumental_opt) {
-        (Some(_vocals), Some(_instrumental)) => match build_original_mix(
-            &target_vocals_path.to_string_lossy(),
-            &target_instrumental_path.to_string_lossy(),
-        ) {
-            Ok(path) => Some(path),
-            Err(err) => {
-                eprintln!("Failed to build original mix for {}: {}", song_id, err);
-                None
-            }
-        },
-        _ => None,
-    };
-
-    // Default flow no longer auto-generates lyrics. Users can trigger lyric generation manually.
-    emit_progress_for_job(
-        &app,
-        &song_id,
-        &job_token,
-        "separating",
-        90,
-        "分离完成，歌词可手动生成",
-        Some(5),
-    );
-    let lyrics_path = {
-        let existing = output_dir.join("lyrics.lrc");
-        let target_lyrics = resolve_lyrics_lrc_path(&song_id, &storage_settings);
-        if existing.exists() {
-            let _ = move_or_copy_file(&existing, &target_lyrics);
-            Some(target_lyrics.to_string_lossy().to_string())
-        } else if target_lyrics.exists() {
-            Some(target_lyrics.to_string_lossy().to_string())
-        } else {
-            None
-        }
-    };
-
-    if check_cancel_flag(&song_id) {
-        return;
-    }
-
-    // Update final song state
-    if !is_active_job(&song_id, &job_token) {
-        return;
-    }
-    {
-        let mut songs = SONGS.lock().unwrap();
-        if let Some(ref mut map) = *songs {
-            if let Some(song) = map.get_mut(&song_id) {
-                if song.status == "cancelled" || check_cancel_flag(&song_id) {
-                    return;
-                }
-                song.vocals_path = Some(target_vocals_path.to_string_lossy().to_string());
-                song.instrumental_path =
-                    Some(target_instrumental_path.to_string_lossy().to_string());
-                song.lyrics_path = lyrics_path;
-                song.status = "ready".to_string();
-                song.progress = 100;
-                song.processing_stage = Some("complete".to_string());
-                song.error_message = None;
-                song.original_mix_path = original_mix_path.clone();
-            }
-        }
-    }
-
-    save_songs_to_disk();
-
-    emit_progress_for_job(
-        &app,
-        &song_id,
-        &job_token,
-        "complete",
-        100,
-        "处理完成",
-        None,
-    );
-
-    // Emit complete with full song data
-    let complete_song = {
-        let songs = SONGS.lock().unwrap();
-        songs.as_ref().and_then(|m| m.get(&song_id)).cloned()
-    };
-
-    if let Some(song) = complete_song {
-        let _ = app.emit(
-            "processing-complete",
-            serde_json::json!({
-                "song": song
-            }),
-        );
-    }
+    process_song_with_onnx_skeleton(app, song_id, job_token, input_path, output_dir);
 }
 
 #[tauri::command]
@@ -6689,26 +5849,23 @@ async fn bootstrap_install_minimal(
     app: AppHandle,
     prefer_demucs_cuda: bool,
 ) -> Result<BootstrapStatus, String> {
+    let _legacy_cuda_requested = prefer_demucs_cuda;
     let deadline = Instant::now() + BOOTSTRAP_TOTAL_TIMEOUT;
     emit_bootstrap_progress(&app, "python_runtime", 8, "正在检查 Python 运行时...");
     bootstrap_install_python_runtime(&app).map_err(|e| format!("Python 运行时安装失败：{}", e))?;
     emit_bootstrap_progress(&app, "ffmpeg_runtime", 24, "正在检查 FFmpeg...");
     ensure_ffmpeg_runtime().map_err(|e| format!("FFmpeg 安装失败：{}", e))?;
-    let has_nvidia_gpu = runtime::capability::detect_nvidia_gpu_name().is_some();
-    let try_demucs_cuda = prefer_demucs_cuda || has_nvidia_gpu;
     emit_bootstrap_progress(
         &app,
         "python_modules",
         32,
-        if try_demucs_cuda {
-            "检测到 NVIDIA GPU，正在确认/安装 CUDA 版 Torch 与核心模块..."
-        } else {
-            "正在确认/安装核心 Python 模块..."
-        },
+        "正在确认/安装 ONNX 分离路线的运行依赖与 legacy fallback 模块...",
     );
-    ensure_core_runtime_modules(&app, try_demucs_cuda, prefer_demucs_cuda, deadline)
-        .map_err(|e| format!("核心模块安装失败（torch/demucs/faster-whisper）：{}", e))?;
-    emit_bootstrap_progress(&app, "models", 74, "正在检查 Demucs / Whisper 模型...");
+    // Phase ONNX-A: ONNX Runtime is the separation mainline. Demucs/Torch CUDA are legacy
+    // fallback concerns and are not installed as the default separation path.
+    ensure_onnx_runtime_modules(&app, deadline)
+        .map_err(|e| format!("运行依赖安装失败（ONNX 路线 / legacy fallback）：{}", e))?;
+    emit_bootstrap_progress(&app, "models", 74, "正在检查 ONNX / legacy 模型...");
     bootstrap_install_models(&app)
         .map_err(|e| format!("模型安装失败（demucs/whisper base）：{}", e))?;
     emit_bootstrap_progress(&app, "verify", 92, "正在做最终环境验证...");

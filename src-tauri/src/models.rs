@@ -126,6 +126,8 @@ pub struct RuntimeHealthReport {
     pub level: String,
     pub label: String,
     pub detail: String,
+    #[serde(default)]
+    pub separation_engine: SeparationEngineHealth,
     pub torch_cuda_available: bool,
     pub selected_device: String,
     pub torch_version: Option<String>,
@@ -135,6 +137,40 @@ pub struct RuntimeHealthReport {
     pub nvidia_driver_visible: bool,
     pub nvidia_driver_cuda_version: Option<String>,
     pub checks: Vec<RuntimeHealthCheck>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeparationEngineHealth {
+    pub active_engine: String,
+    pub legacy_fallback_engine: String,
+    pub requested_providers: Vec<String>,
+    pub selected_provider: String,
+    pub provider_fallback_reason: Option<String>,
+    pub default_model_id: String,
+    pub default_model_ready: bool,
+    pub high_quality_model_id: Option<String>,
+    pub high_quality_model_ready: bool,
+    pub onnxruntime_available: bool,
+    pub legacy_demucs_available: bool,
+}
+
+impl Default for SeparationEngineHealth {
+    fn default() -> Self {
+        Self {
+            active_engine: "onnx".to_string(),
+            legacy_fallback_engine: "legacy_demucs".to_string(),
+            requested_providers: vec!["CPUExecutionProvider".to_string()],
+            selected_provider: "CPUExecutionProvider".to_string(),
+            provider_fallback_reason: Some("ONNX Runtime API not initialized".to_string()),
+            default_model_id: "uvr_mdxnet_9482".to_string(),
+            default_model_ready: false,
+            high_quality_model_id: Some("bs_polarformer_fp16".to_string()),
+            high_quality_model_ready: false,
+            onnxruntime_available: false,
+            legacy_demucs_available: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

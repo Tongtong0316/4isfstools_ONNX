@@ -93,6 +93,7 @@ pub fn get_python_path(app: &AppHandle) -> PathBuf {
     }
 }
 
+#[allow(dead_code)]
 pub fn python_site_packages_dir(python_path: &Path) -> Result<PathBuf, String> {
     let output = Command::new(python_path)
         .args([
@@ -116,6 +117,7 @@ pub fn python_site_packages_dir(python_path: &Path) -> Result<PathBuf, String> {
     Ok(PathBuf::from(dir))
 }
 
+#[allow(dead_code)]
 pub fn python_file_compiles(python_path: &Path, file_path: &Path) -> Result<bool, String> {
     let output = Command::new(python_path)
         .args([

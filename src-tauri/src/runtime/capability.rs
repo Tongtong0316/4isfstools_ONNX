@@ -157,6 +157,7 @@ except Exception as e:
 }
 
 /// Map CUDA version to PyTorch wheel index suffix.
+#[allow(dead_code)]
 pub fn cuda_version_to_pytorch_index(cuda_ver: &str) -> &'static str {
     let major_minor: Vec<&str> = cuda_ver.split('.').collect();
     match major_minor.first().copied() {
@@ -178,6 +179,7 @@ pub fn cuda_version_to_pytorch_index(cuda_ver: &str) -> &'static str {
     }
 }
 
+#[allow(dead_code)]
 pub fn python_torch_cuda_ready(python_path: &Path) -> bool {
     let check_script = r#"
 import sys
@@ -204,6 +206,7 @@ except:
         .unwrap_or(false)
 }
 
+#[allow(dead_code)]
 pub fn check_gpu_availability(python_path: &PathBuf) -> bool {
     let check_script = r#"
 import sys
