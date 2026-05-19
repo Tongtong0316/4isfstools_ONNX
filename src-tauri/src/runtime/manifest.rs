@@ -45,25 +45,18 @@ pub fn load_runtime_manifest(
 
 pub fn current_platform_manifest(manifest: &RuntimeManifest) -> RuntimeManifestPlatform {
     if cfg!(windows) {
-        let mut platform = manifest.platforms.windows.clone();
-        if platform.models.demucs.is_empty() {
-            platform.models.demucs = manifest.platforms.macos.models.demucs.clone();
-        }
-        if platform.models.whisper_base.is_empty() {
-            platform.models.whisper_base = manifest.platforms.macos.models.whisper_base.clone();
-        }
-        platform
+        manifest.platforms.windows.clone()
     } else {
         manifest.platforms.macos.clone()
     }
 }
 
-pub fn legacy_model_artifacts(
+pub fn fallback_model_artifacts(
     manifest: &RuntimeManifest,
     model_name: &str,
 ) -> Vec<RuntimeManifestArtifact> {
-    let urls = if model_name == "demucs" {
-        manifest.model_sources.demucs.clone()
+    let urls = if model_name == "onnx" {
+        manifest.model_sources.onnx.clone()
     } else {
         manifest.model_sources.whisper_base.clone()
     };
@@ -85,9 +78,6 @@ mod tests {
     #[test]
     fn embedded_manifest_provides_windows_model_sources() {
         let manifest = embedded_runtime_manifest();
-        assert!(!manifest.platforms.macos.models.demucs.is_empty());
-        assert!(!manifest.platforms.windows.models.demucs.is_empty());
-        assert!(!manifest.model_sources.demucs.is_empty());
         assert!(!manifest.platforms.macos.models.whisper_base.is_empty());
         assert!(!manifest.platforms.windows.models.whisper_base.is_empty());
         assert!(!manifest.model_sources.whisper_base.is_empty());

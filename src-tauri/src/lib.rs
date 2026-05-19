@@ -369,7 +369,6 @@ fn whisper_model_is_usable(
 fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
     let python_path = runtime::python::get_python_path(app);
     let python_exists = python_path.exists();
-    let torch_capability = runtime::capability::detect_torch_cuda_capability(&python_path);
     let mut separation_engine = separation::detect_engine_health(app, &get_models_dir(app));
     if python_exists {
         separation_engine.onnxruntime_available =
@@ -382,16 +381,6 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
         }
     }
     let ffmpeg_ready = command_is_available("ffmpeg", "-version");
-    let torch_ready = if python_exists {
-        runtime::capability::python_module_is_available(&python_path, "torch", 6).unwrap_or(false)
-    } else {
-        false
-    };
-    let demucs_ready = if python_exists {
-        runtime::capability::python_module_is_available(&python_path, "demucs", 4).unwrap_or(false)
-    } else {
-        false
-    };
     let faster_whisper_ready = if python_exists {
         runtime::capability::python_module_is_available(&python_path, "faster_whisper", 6)
             .unwrap_or(false)
@@ -415,10 +404,13 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
     } else {
         (false, "AI 听写草稿：Python 未就绪".to_string())
     };
-    let demucs_models_ready = is_demucs_model_ready(app);
-    separation_engine.legacy_demucs_available = demucs_ready && demucs_models_ready;
-
-    let full_ready = is_onnx_capability_ready(&separation_engine, ffmpeg_ready);
+    let soundfile_ready = if python_exists {
+        runtime::capability::python_module_is_available(&python_path, "soundfile", 6)
+            .unwrap_or(false)
+    } else {
+        false
+    };
+    let full_ready = is_onnx_capability_ready(&separation_engine, ffmpeg_ready, soundfile_ready);
     let mut checks = vec![
         RuntimeHealthCheck {
             name: "Python".to_string(),
@@ -431,17 +423,6 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
             detail: Some(python_path.to_string_lossy().to_string()),
         },
         RuntimeHealthCheck {
-            name: "NVIDIA GPU".to_string(),
-            ok: torch_capability.has_nvidia_gpu,
-            severity: "info".to_string(),
-            detail: torch_capability.nvidia_gpu_name.clone().or_else(|| {
-                torch_capability
-                    .nvidia_driver_cuda_version
-                    .clone()
-                    .map(|ver| format!("CUDA Driver {}", ver))
-            }),
-        },
-        RuntimeHealthCheck {
             name: "FFmpeg".to_string(),
             ok: ffmpeg_ready,
             severity: if ffmpeg_ready {
@@ -450,35 +431,6 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
                 "error".to_string()
             },
             detail: Some("音频复合与转换".to_string()),
-        },
-        RuntimeHealthCheck {
-            name: "Torch".to_string(),
-            ok: torch_ready,
-            severity: "info".to_string(),
-            detail: Some("legacy Demucs fallback 运行时".to_string()),
-        },
-        RuntimeHealthCheck {
-            name: "Torch CUDA".to_string(),
-            ok: torch_capability.torch_cuda_available,
-            severity: "info".to_string(),
-            detail: Some(if torch_capability.torch_cuda_available {
-                let device = torch_capability
-                    .torch_cuda_device_name
-                    .clone()
-                    .unwrap_or_else(|| "CUDA 可用".to_string());
-                format!(
-                    "{} | device={}",
-                    torch_capability
-                        .torch_cuda_version
-                        .clone()
-                        .unwrap_or_else(|| "unknown".to_string()),
-                    device
-                )
-            } else if torch_capability.has_nvidia_gpu {
-                "检测到 NVIDIA GPU，但当前 torch 不支持 CUDA".to_string()
-            } else {
-                "未检测到 NVIDIA GPU，使用 CPU".to_string()
-            }),
         },
         RuntimeHealthCheck {
             name: "ONNX Runtime".to_string(),
@@ -540,15 +492,13 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
             }),
         },
         RuntimeHealthCheck {
-            name: "Legacy Demucs fallback".to_string(),
-            ok: demucs_ready && demucs_models_ready,
+            name: "ONNX 高质量模型".to_string(),
+            ok: separation_engine.high_quality_model_ready,
             severity: "info".to_string(),
-            detail: Some(if !demucs_ready {
-                "运行时缺失".to_string()
-            } else if !demucs_models_ready {
-                "分离模型缺失".to_string()
+            detail: Some(if separation_engine.high_quality_model_ready {
+                "可选模型已就绪".to_string()
             } else {
-                "已就绪".to_string()
+                "可选".to_string()
             }),
         },
         RuntimeHealthCheck {
@@ -579,13 +529,13 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
         (
             "ready".to_string(),
             "可运行".to_string(),
-            "ONNX 分离引擎与默认模型已就绪".to_string(),
+            "ONNX 分离引擎、默认模型与音频依赖已就绪".to_string(),
         )
     } else {
         (
             "error".to_string(),
             "环境异常".to_string(),
-            "ONNX Runtime 或默认分离模型未就绪".to_string(),
+            "ONNX Runtime、默认模型或音频依赖未就绪".to_string(),
         )
     };
 
@@ -594,14 +544,14 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
         label,
         detail,
         separation_engine,
-        torch_cuda_available: torch_capability.torch_cuda_available,
-        selected_device: torch_capability.selected_device.clone(),
-        torch_version: torch_capability.torch_version.clone(),
-        torch_cuda_version: torch_capability.torch_cuda_version.clone(),
-        torch_cuda_device_name: torch_capability.torch_cuda_device_name.clone(),
-        has_nvidia_gpu: torch_capability.has_nvidia_gpu,
-        nvidia_driver_visible: torch_capability.nvidia_driver_visible,
-        nvidia_driver_cuda_version: torch_capability.nvidia_driver_cuda_version.clone(),
+        torch_cuda_available: false,
+        selected_device: "cpu".to_string(),
+        torch_version: None,
+        torch_cuda_version: None,
+        torch_cuda_device_name: None,
+        has_nvidia_gpu: false,
+        nvidia_driver_visible: false,
+        nvidia_driver_cuda_version: None,
         checks: {
             checks.sort_by(|a, b| a.name.cmp(&b.name));
             checks
@@ -609,46 +559,17 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
     }
 }
 
-#[allow(dead_code)]
-fn is_full_capability_ready(
-    python_ready: bool,
-    ffmpeg_ready: bool,
-    torch_ready: bool,
-    demucs_ready: bool,
-    demucs_models_ready: bool,
-    soundfile_ready: bool,
-) -> bool {
-    python_ready
-        && ffmpeg_ready
-        && torch_ready
-        && demucs_ready
-        && demucs_models_ready
-        && soundfile_ready
-}
-
 fn is_onnx_capability_ready(
     separation_engine: &SeparationEngineHealth,
     ffmpeg_ready: bool,
+    soundfile_ready: bool,
 ) -> bool {
     ffmpeg_ready
+        && soundfile_ready
         && separation_engine.onnxruntime_available
         && separation_engine.default_model_ready
         && separation_engine.default_model_session_load_ok
         && separation_engine.default_model_metadata_ok
-}
-
-fn is_demucs_model_ready(app: &AppHandle) -> bool {
-    let demucs_dir = get_models_dir(app).join("demucs");
-    if !demucs_dir.exists() {
-        return false;
-    }
-    let required = [
-        "04573f0d-f3cf25b2.th",
-        "92cfc3b6-ef3bcb9c.th",
-        "d12395a8-e57c48e6.th",
-        "f7e0c4bc-ba3fe64a.th",
-    ];
-    required.iter().all(|name| demucs_dir.join(name).exists())
 }
 
 fn now_ms() -> u64 {
@@ -771,12 +692,6 @@ fn legacy_song_workspace_dir(song_id: &str) -> PathBuf {
     get_songs_dir().join(song_id)
 }
 
-fn legacy_demucs_dir(song: &Song) -> PathBuf {
-    legacy_song_workspace_dir(&song.id)
-        .join("htdemucs_ft")
-        .join(song_file_stem(song))
-}
-
 fn resolve_instrumental_path(song_id: &str, settings: &FileStorageSettings) -> PathBuf {
     resolve_asset_root("instrumental", settings)
         .join(song_id)
@@ -849,28 +764,21 @@ fn pick_existing_path(candidates: &[PathBuf]) -> Option<PathBuf> {
 
 fn migrate_song_assets(song: &mut Song, settings: &FileStorageSettings) -> Result<bool, String> {
     let mut changed = false;
-    let legacy_demucs = legacy_demucs_dir(song);
-    let source_instrumental = pick_existing_path(&[
-        song.instrumental_path
-            .as_ref()
-            .map(PathBuf::from)
-            .unwrap_or_default(),
-        legacy_demucs.join("no_vocals.wav"),
-    ]);
-    let source_vocals = pick_existing_path(&[
-        song.vocals_path
-            .as_ref()
-            .map(PathBuf::from)
-            .unwrap_or_default(),
-        legacy_demucs.join("vocals.wav"),
-    ]);
-    let source_mix = pick_existing_path(&[
-        song.original_mix_path
-            .as_ref()
-            .map(PathBuf::from)
-            .unwrap_or_default(),
-        legacy_demucs.join("original_mix.wav"),
-    ]);
+    let source_instrumental = pick_existing_path(&[song
+        .instrumental_path
+        .as_ref()
+        .map(PathBuf::from)
+        .unwrap_or_default()]);
+    let source_vocals = pick_existing_path(&[song
+        .vocals_path
+        .as_ref()
+        .map(PathBuf::from)
+        .unwrap_or_default()]);
+    let source_mix = pick_existing_path(&[song
+        .original_mix_path
+        .as_ref()
+        .map(PathBuf::from)
+        .unwrap_or_default()]);
     let source_lyrics_lrc = pick_existing_path(&[
         song.lyrics_path
             .as_ref()
@@ -1690,20 +1598,6 @@ fn bootstrap_model_from_manifest_sources(
         Err(err) => attempts.push(format!("{}: {}", model_name, err)),
     }
 
-    // Fallback for legacy demucs source lists without targetRelpath:
-    // treat ready when the canonical model files exist.
-    if model_name == "demucs" && target_dir.exists() {
-        let required = [
-            "04573f0d-f3cf25b2.th",
-            "92cfc3b6-ef3bcb9c.th",
-            "d12395a8-e57c48e6.th",
-            "f7e0c4bc-ba3fe64a.th",
-        ];
-        if required.iter().all(|name| target_dir.join(name).exists()) {
-            return Ok(true);
-        }
-    }
-
     let mut missing_files = Vec::new();
     for artifact in sources {
         let rel = match artifact
@@ -1797,7 +1691,7 @@ fn bootstrap_install_whisper_model(app: &AppHandle) -> Result<(), String> {
         runtime::manifest::load_runtime_manifest(app, &get_runtime_dir(), &resolve_project_root());
     let platform_manifest = runtime::manifest::current_platform_manifest(&manifest);
     let whisper_sources = if platform_manifest.models.whisper_base.is_empty() {
-        runtime::manifest::legacy_model_artifacts(&manifest, "whisper")
+        runtime::manifest::fallback_model_artifacts(&manifest, "whisper")
     } else {
         platform_manifest.models.whisper_base
     };
@@ -1887,7 +1781,7 @@ fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
         runtime::manifest::load_runtime_manifest(app, &get_runtime_dir(), &resolve_project_root());
     let platform_manifest = runtime::manifest::current_platform_manifest(&manifest);
     let whisper_sources = if platform_manifest.models.whisper_base.is_empty() {
-        runtime::manifest::legacy_model_artifacts(&manifest, "whisper")
+        runtime::manifest::fallback_model_artifacts(&manifest, "whisper")
     } else {
         platform_manifest.models.whisper_base
     };
@@ -2400,119 +2294,6 @@ fn format_log_block(title: &str, lines: &[(&str, String)]) -> String {
 }
 
 #[allow(dead_code)]
-fn ensure_core_runtime_modules(
-    app: &AppHandle,
-    try_demucs_cuda: bool,
-    require_demucs_cuda: bool,
-    deadline: Instant,
-) -> Result<(), String> {
-    let python_path = runtime::python::get_python_path(app);
-    if !python_path.exists() {
-        return Err("未检测到 Python 运行时".to_string());
-    }
-
-    let torch_capability = runtime::capability::detect_torch_cuda_capability(&python_path);
-    let needs_cuda_torch_refresh = cfg!(windows)
-        && try_demucs_cuda
-        && (!torch_capability.torch_installed || !torch_capability.torch_cuda_available);
-
-    let mut missing = Vec::new();
-    for module in ["torch", "demucs", "faster_whisper", "soundfile"] {
-        if !runtime::capability::python_module_is_available(&python_path, module, 6)
-            .unwrap_or(false)
-        {
-            missing.push(module.to_string());
-        }
-    }
-    if missing.is_empty() && !needs_cuda_torch_refresh {
-        let _ = install_torchaudio_compat_patch(&python_path);
-        return Ok(());
-    }
-
-    // Local offline source (development python env) first, avoids introducing network dependency.
-    // Skip on Windows — the bundled python/lib contains macOS dylibs that are useless here.
-    if !cfg!(windows) {
-        let project_lib_dir = resolve_project_root().join("python").join("lib");
-        let runtime_lib_dir = get_runtime_dir().join("python").join("lib");
-        if project_lib_dir.exists() {
-            let _ = copy_dir_recursive(&project_lib_dir, &runtime_lib_dir);
-        }
-    }
-
-    let mut still_missing = Vec::new();
-    for module in ["torch", "demucs", "faster_whisper"] {
-        if !runtime::capability::python_module_is_available(&python_path, module, 6)
-            .unwrap_or(false)
-        {
-            still_missing.push(module.to_string());
-        }
-    }
-    if still_missing.is_empty() && !needs_cuda_torch_refresh {
-        let _ = install_torchaudio_compat_patch(&python_path);
-        return Ok(());
-    }
-
-    let mut errors = Vec::new();
-
-    // Install torch with CUDA detection (China-accessible Tsinghua mirror)
-    if still_missing.iter().any(|m| m == "torch") || needs_cuda_torch_refresh {
-        match install_torch_with_cuda_detection(app, &python_path, try_demucs_cuda, deadline) {
-            Ok(()) => {}
-            Err(e) => errors.push(format!("torch: {}", e)),
-        }
-    }
-
-    // Install demucs + faster_whisper + soundfile from PyPI mirrors
-    let mut other_pkgs: Vec<&str> = still_missing
-        .iter()
-        .filter(|m| *m != "torch")
-        .map(|m| {
-            if *m == "faster_whisper" {
-                "faster-whisper"
-            } else {
-                m.as_str()
-            }
-        })
-        .collect();
-    // soundfile is needed for torchaudio compat patch (torchaudio 2.11+ needs it as fallback backend)
-    if !other_pkgs.iter().any(|p| *p == "soundfile") {
-        other_pkgs.push("soundfile");
-    }
-    if !other_pkgs.is_empty() {
-        match install_python_packages_with_fallbacks(app, &python_path, &other_pkgs, deadline) {
-            Ok(()) => {}
-            Err(e) => errors.push(e),
-        }
-    }
-
-    let mut final_missing = Vec::new();
-    for module in ["torch", "demucs", "faster_whisper", "soundfile"] {
-        if !runtime::capability::python_module_is_available(&python_path, module, 6)
-            .unwrap_or(false)
-        {
-            final_missing.push(module.to_string());
-        }
-    }
-    if require_demucs_cuda && !runtime::capability::python_torch_cuda_ready(&python_path) {
-        final_missing.push("torch[cuda]".to_string());
-    }
-    if final_missing.is_empty() {
-        // Install torchaudio soundfile backend patch (torchaudio 2.11+ requires torchcodec which needs FFmpeg DLLs)
-        let _ = install_torchaudio_compat_patch(&python_path);
-        Ok(())
-    } else {
-        Err(format!(
-            "一键安装后仍缺少核心模块: {}。已尝试本地离线源、中国大陆 PyPI 镜像、PyTorch CUDA 镜像与官方兜底源。{}",
-            final_missing.join(", "),
-            if errors.is_empty() {
-                String::new()
-            } else {
-                format!("错误详情: {}", errors.join(" | "))
-            }
-        ))
-    }
-}
-
 fn required_onnx_runtime_packages() -> Vec<&'static str> {
     if cfg!(windows) {
         vec!["onnxruntime-directml", "numpy", "soundfile"]
@@ -2822,14 +2603,13 @@ fn install_torch_with_cuda_detection(
 fn detect_bootstrap_status(app: &AppHandle) -> BootstrapStatus {
     let python_path = runtime::python::get_python_path(app);
     let python_ready = python_path.exists();
-    let torch_capability = runtime::capability::detect_torch_cuda_capability(&python_path);
     let mut separation_engine = separation::detect_engine_health(app, &get_models_dir(app));
     if python_ready {
         separation_engine.onnxruntime_available =
             runtime::capability::python_module_is_available(&python_path, "onnxruntime", 6)
                 .unwrap_or(false);
     }
-    let demucs_models_ready = is_demucs_model_ready(app);
+    let onnx_model_ready = separation_engine.default_model_ready;
     let whisper_base_ready = if python_ready {
         resolve_whisper_base_model_dir(app)
             .ok()
@@ -2839,30 +2619,35 @@ fn detect_bootstrap_status(app: &AppHandle) -> BootstrapStatus {
         false
     };
     let ffmpeg_ready = command_is_available("ffmpeg", "-version");
-    let _torch_cuda_ready =
-        torch_capability.torch_cuda_available || !torch_capability.has_nvidia_gpu;
-    let can_run_core = is_onnx_capability_ready(&separation_engine, ffmpeg_ready);
+    let soundfile_ready = if python_ready {
+        runtime::capability::python_module_is_available(&python_path, "soundfile", 6)
+            .unwrap_or(false)
+    } else {
+        false
+    };
+    let can_run_core = is_onnx_capability_ready(&separation_engine, ffmpeg_ready, soundfile_ready);
 
     let detail = if can_run_core {
-        "ONNX Runtime 与默认分离模型已就绪，可运行人声分离。".to_string()
+        "ONNX Runtime、默认分离模型与音频依赖已就绪，可运行人声分离。".to_string()
     } else {
-        "ONNX Runtime 或默认分离模型未就绪，请继续安装/修复。".to_string()
+        "ONNX Runtime、默认分离模型或音频依赖未就绪，请继续安装/修复。".to_string()
     };
 
     BootstrapStatus {
         runtime_ready: python_ready,
-        demucs_models_ready,
+        onnx_model_ready,
         whisper_base_ready,
         ffmpeg_ready,
         can_run_core,
-        torch_cuda_available: torch_capability.torch_cuda_available,
-        selected_device: torch_capability.selected_device,
-        torch_version: torch_capability.torch_version,
-        torch_cuda_version: torch_capability.torch_cuda_version,
-        torch_cuda_device_name: torch_capability.torch_cuda_device_name,
-        has_nvidia_gpu: torch_capability.has_nvidia_gpu,
-        nvidia_driver_visible: torch_capability.nvidia_driver_visible,
-        nvidia_driver_cuda_version: torch_capability.nvidia_driver_cuda_version,
+        selected_provider: separation_engine.selected_provider.clone(),
+        torch_cuda_available: false,
+        selected_device: "cpu".to_string(),
+        torch_version: None,
+        torch_cuda_version: None,
+        torch_cuda_device_name: None,
+        has_nvidia_gpu: false,
+        nvidia_driver_visible: false,
+        nvidia_driver_cuda_version: None,
         detail,
     }
 }
@@ -2872,8 +2657,10 @@ fn format_missing_core_components_with_reason(health: &RuntimeHealthReport) -> S
         .checks
         .iter()
         .filter(|c| !c.ok)
-        // AI 听写草稿是可选功能，不参与核心就绪判断
-        .filter(|c| c.name != "AI 听写草稿" && c.name != "Torch CUDA" && c.name != "NVIDIA GPU")
+        // AI 听写草稿、Torch CUDA、NVIDIA GPU 都是可选能力，不参与核心就绪判断
+        .filter(|c| c.name != "AI 听写草稿")
+        .filter(|c| c.name != "Torch CUDA")
+        .filter(|c| c.name != "NVIDIA GPU")
         .map(|c| {
             let detail = c.detail.as_deref().unwrap_or("").trim();
             if detail.is_empty() {
@@ -3030,11 +2817,6 @@ fn terminate_song_processes(song_id: &str, force: bool) {
             if !line.contains(song_id) {
                 continue;
             }
-            // Legacy Demucs cleanup only. ONNX is the default separation mainline and does
-            // not generate separator.py or invoke demucs processes.
-            if !(line.contains("separator.py") || line.contains("demucs")) {
-                continue;
-            }
             let mut parts = line.split_whitespace();
             let pid = parts.next().and_then(|value| value.parse::<i32>().ok());
             let pgid = parts.next().and_then(|value| value.parse::<i32>().ok());
@@ -3087,10 +2869,7 @@ fn terminate_app_processing_processes(force: bool) {
 
         for line in text.lines().skip(1) {
             let is_app_process = line.contains(&data_dir) || line.contains("4isfstools/songs");
-            // Legacy Demucs cleanup only. Kept temporarily so interrupted legacy fallback
-            // processes can still be terminated when explicitly enabled.
-            let is_processing_process = line.contains("separator.py") || line.contains("demucs");
-            if !is_app_process || !is_processing_process {
+            if !is_app_process {
                 continue;
             }
 
@@ -3649,7 +3428,7 @@ mod tests {
     #[test]
     fn verify_manifest_targets_rejects_hash_mismatch() {
         let runtime_models = unique_temp_dir("manifest_targets");
-        let target_relpath = "demucs/test-model.th";
+        let target_relpath = "onnx/test-model.th";
         let target_path = runtime_models.join(target_relpath);
         if let Some(parent) = target_path.parent() {
             fs::create_dir_all(parent).unwrap();
@@ -5363,7 +5142,7 @@ async fn import_songs(_app: AppHandle, paths: Vec<String>) -> Result<Vec<Song>, 
 async fn start_process(
     app: AppHandle,
     song_id: String,
-    prefer_demucs_cuda: bool,
+    _prefer_onnx_provider: bool,
 ) -> Result<(), String> {
     let song = {
         let songs = SONGS.lock().unwrap();
@@ -5395,14 +5174,13 @@ async fn start_process(
     let input_path = song.original_path.clone();
     let song_duration_ms = song.duration;
 
-    separation_queue::submit_task(separation_queue::DemucsTask {
+    separation_queue::submit_task(separation_queue::SeparationTask {
         app,
         song_id,
         job_token,
         input_path,
         output_dir: song_dir,
         song_duration_ms,
-        prefer_demucs_cuda,
     });
 
     Ok(())
@@ -5482,8 +5260,6 @@ fn process_song_with_onnx_skeleton(
         },
         "stage": "checking_onnx",
         "engine": engine_health.active_engine,
-        "legacy_fallback_engine": engine_health.legacy_fallback_engine,
-        "legacy_demucs_enabled_env": separation::legacy_demucs::LEGACY_DEMUCS_ENV,
         "requested_providers": requested_providers,
         "selected_provider": engine_health.selected_provider,
         "provider_fallback_reason": engine_health.provider_fallback_reason,
@@ -5558,8 +5334,7 @@ fn process_song_with_onnx_skeleton(
         serde_json::json!({
             "engine": "onnx",
             "status": "phase_onnx_a_skeleton",
-            "demucs_mainline": false,
-            "legacy_demucs_env": separation::legacy_demucs::LEGACY_DEMUCS_ENV,
+            "onnx_mainline": true,
         })
         .to_string(),
     );
@@ -5585,22 +5360,8 @@ pub(crate) fn process_song_background(
     input_path: String,
     output_dir: PathBuf,
     _song_duration_ms: u64,
-    _prefer_demucs_cuda: bool,
+    _prefer_onnx_provider: bool,
 ) {
-    if separation::legacy_demucs::legacy_demucs_enabled() {
-        let message = "Legacy Demucs fallback 已从主链路清退；当前构建只保留显式占位入口，不再生成旧动态分离脚本。";
-        emit_error_for_job(&app, &song_id, &job_token, "legacy_demucs", message);
-        update_song_status_for_job(
-            &song_id,
-            &job_token,
-            "error",
-            0,
-            Some("legacy_demucs"),
-            Some(message),
-        );
-        return;
-    }
-
     process_song_with_onnx_skeleton(app, song_id, job_token, input_path, output_dir);
 }
 
@@ -5657,7 +5418,7 @@ async fn delete_song(id: String) -> Result<(), String> {
 async fn reprocess_song(
     app: AppHandle,
     song_id: String,
-    prefer_demucs_cuda: bool,
+    prefer_onnx_provider: bool,
 ) -> Result<(), String> {
     let song = {
         let songs = SONGS.lock().unwrap();
@@ -5704,14 +5465,13 @@ async fn reprocess_song(
     let input_path = song.original_path.clone();
     let song_duration_ms = song.duration;
 
-    separation_queue::submit_task(separation_queue::DemucsTask {
+    separation_queue::submit_task(separation_queue::SeparationTask {
         app,
         song_id,
         job_token,
         input_path,
         output_dir: song_dir,
         song_duration_ms,
-        prefer_demucs_cuda,
     });
 
     Ok(())
@@ -5940,9 +5700,9 @@ async fn get_bootstrap_status(app: AppHandle) -> Result<BootstrapStatus, String>
 #[tauri::command]
 async fn bootstrap_install_minimal(
     app: AppHandle,
-    prefer_demucs_cuda: bool,
+    prefer_onnx_provider: bool,
 ) -> Result<BootstrapStatus, String> {
-    let _legacy_cuda_requested = prefer_demucs_cuda;
+    let _preferred_provider_requested = prefer_onnx_provider;
     let deadline = Instant::now() + BOOTSTRAP_TOTAL_TIMEOUT;
     emit_bootstrap_progress(&app, "python_runtime", 8, "正在检查 Python 运行时...");
     bootstrap_install_python_runtime(&app).map_err(|e| format!("Python 运行时安装失败：{}", e))?;
@@ -5952,13 +5712,11 @@ async fn bootstrap_install_minimal(
         &app,
         "python_modules",
         32,
-        "正在确认/安装 ONNX 分离路线的运行依赖与 legacy fallback 模块...",
+        "正在确认/安装 ONNX Runtime 分离路线的运行依赖...",
     );
-    // Phase ONNX-A: ONNX Runtime is the separation mainline. Demucs/Torch CUDA are legacy
-    // fallback concerns and are not installed as the default separation path.
     ensure_onnx_runtime_modules(&app, deadline)
-        .map_err(|e| format!("运行依赖安装失败（ONNX 路线 / legacy fallback）：{}", e))?;
-    emit_bootstrap_progress(&app, "models", 74, "正在检查 ONNX / legacy 模型...");
+        .map_err(|e| format!("运行依赖安装失败（ONNX 路线）：{}", e))?;
+    emit_bootstrap_progress(&app, "models", 74, "正在检查 ONNX 模型...");
     bootstrap_install_models(&app)
         .map_err(|e| format!("模型安装失败（ONNX/whisper base）：{}", e))?;
     emit_bootstrap_progress(&app, "verify", 92, "正在做最终环境验证...");

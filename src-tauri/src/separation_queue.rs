@@ -3,20 +3,19 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::AppHandle;
 
-pub(crate) struct DemucsTask {
+pub(crate) struct SeparationTask {
     pub app: AppHandle,
     pub song_id: String,
     pub job_token: String,
     pub input_path: String,
     pub output_dir: PathBuf,
     pub song_duration_ms: u64,
-    pub prefer_demucs_cuda: bool,
 }
 
-static QUEUE: Mutex<VecDeque<DemucsTask>> = Mutex::new(VecDeque::new());
+static QUEUE: Mutex<VecDeque<SeparationTask>> = Mutex::new(VecDeque::new());
 static WORKER_RUNNING: Mutex<bool> = Mutex::new(false);
 
-pub(crate) fn submit_task(task: DemucsTask) {
+pub(crate) fn submit_task(task: SeparationTask) {
     {
         let mut queue = QUEUE.lock().unwrap();
         queue.push_back(task);
@@ -64,7 +63,7 @@ fn worker_loop() {
                     t.input_path,
                     t.output_dir,
                     t.song_duration_ms,
-                    t.prefer_demucs_cuda,
+                    false,
                 );
             }
             None => {

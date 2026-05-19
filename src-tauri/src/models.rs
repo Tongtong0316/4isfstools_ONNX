@@ -143,7 +143,6 @@ pub struct RuntimeHealthReport {
 #[serde(rename_all = "camelCase")]
 pub struct SeparationEngineHealth {
     pub active_engine: String,
-    pub legacy_fallback_engine: String,
     pub requested_providers: Vec<String>,
     pub available_providers: Vec<String>,
     pub selected_provider: String,
@@ -171,7 +170,6 @@ pub struct SeparationEngineHealth {
     pub high_quality_model_dummy_inference_ok: Option<bool>,
     pub high_quality_model_dummy_inference_error: Option<String>,
     pub onnxruntime_available: bool,
-    pub legacy_demucs_available: bool,
     pub probe_error: Option<String>,
 }
 
@@ -179,7 +177,6 @@ impl Default for SeparationEngineHealth {
     fn default() -> Self {
         Self {
             active_engine: "onnx".to_string(),
-            legacy_fallback_engine: "legacy_demucs".to_string(),
             requested_providers: vec!["CPUExecutionProvider".to_string()],
             available_providers: vec!["unavailable".to_string()],
             selected_provider: "CPUExecutionProvider".to_string(),
@@ -207,7 +204,6 @@ impl Default for SeparationEngineHealth {
             high_quality_model_dummy_inference_ok: None,
             high_quality_model_dummy_inference_error: None,
             onnxruntime_available: false,
-            legacy_demucs_available: false,
             probe_error: Some("ONNX Runtime API not initialized".to_string()),
         }
     }
@@ -281,10 +277,11 @@ impl Default for OnnxModelProbeResult {
 #[serde(rename_all = "camelCase")]
 pub struct BootstrapStatus {
     pub runtime_ready: bool,
-    pub demucs_models_ready: bool,
+    pub onnx_model_ready: bool,
     pub whisper_base_ready: bool,
     pub ffmpeg_ready: bool,
     pub can_run_core: bool,
+    pub selected_provider: String,
     pub torch_cuda_available: bool,
     pub selected_device: String,
     pub torch_version: Option<String>,
@@ -313,7 +310,7 @@ pub struct RuntimeManifest {
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeManifestModelSources {
     #[serde(default, deserialize_with = "deserialize_model_source_urls")]
-    pub demucs: Vec<String>,
+    pub onnx: Vec<String>,
     #[serde(default, deserialize_with = "deserialize_model_source_urls")]
     pub whisper_base: Vec<String>,
 }
@@ -364,7 +361,7 @@ pub struct RuntimeManifestPlatform {
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeManifestPlatformModels {
     #[serde(default)]
-    pub demucs: Vec<RuntimeManifestArtifact>,
+    pub onnx: Vec<RuntimeManifestArtifact>,
     #[serde(default)]
     pub whisper_base: Vec<RuntimeManifestArtifact>,
 }

@@ -7,7 +7,6 @@ use crate::models::SeparationEngineHealth;
 use crate::runtime::python::get_python_path;
 
 use super::engine::{ProviderStrategy, SeparationEngine, SeparationEngineKind};
-use super::legacy_demucs;
 use super::model_registry::{ModelRegistry, HIGH_QUALITY_ONNX_MODEL_ID};
 
 fn run_onnx_probe_value(
@@ -333,7 +332,6 @@ impl OnnxSeparationEngine {
 
         SeparationEngineHealth {
             active_engine: self.kind().as_str().to_string(),
-            legacy_fallback_engine: legacy_demucs::LEGACY_ENGINE_ID.to_string(),
             requested_providers: requested.clone(),
             available_providers: runtime_probe.available_providers.clone(),
             selected_provider: runtime_probe.selected_provider.clone(),
@@ -371,7 +369,6 @@ impl OnnxSeparationEngine {
                 .dummy_inference_error
                 .clone(),
             onnxruntime_available: runtime_probe.onnxruntime_available,
-            legacy_demucs_available: false,
             probe_error: runtime_probe
                 .probe_error
                 .clone()

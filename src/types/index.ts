@@ -37,7 +37,7 @@ export interface ProcessingStatus {
 }
 
 export interface ModelStatus {
-  status: 'idle' | 'checking_demucs' | 'downloading_demucs' | 'checking_whisper' | 'downloading_whisper' | 'complete' | 'error';
+  status: 'idle' | 'checking_onnx' | 'downloading_onnx' | 'checking_whisper' | 'downloading_whisper' | 'complete' | 'error';
   progress: number;
   message?: string;
 }

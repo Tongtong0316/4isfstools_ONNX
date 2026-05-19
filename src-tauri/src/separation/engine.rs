@@ -4,14 +4,12 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SeparationEngineKind {
     Onnx,
-    LegacyDemucs,
 }
 
 impl SeparationEngineKind {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Onnx => "onnx",
-            Self::LegacyDemucs => "legacy_demucs",
         }
     }
 }

@@ -80,10 +80,43 @@ type RuntimeHealthCheck = {
   detail: string | null;
 };
 
+type SeparationEngineHealth = {
+  activeEngine: string;
+  requestedProviders: string[];
+  availableProviders: string[];
+  selectedProvider: string;
+  providerFallbackReason: string | null;
+  defaultModelId: string;
+  defaultModelPath: string;
+  defaultModelReady: boolean;
+  defaultModelSessionLoadOk: boolean;
+  defaultModelSessionLoadError: string | null;
+  defaultModelMetadataOk: boolean;
+  defaultModelMetadataError: string | null;
+  defaultModelInputShape: string[] | null;
+  defaultModelOutputShape: string[] | null;
+  defaultModelDummyInferenceOk: boolean | null;
+  defaultModelDummyInferenceError: string | null;
+  highQualityModelId: string | null;
+  highQualityModelPath: string;
+  highQualityModelReady: boolean;
+  highQualityModelSessionLoadOk: boolean;
+  highQualityModelSessionLoadError: string | null;
+  highQualityModelMetadataOk: boolean;
+  highQualityModelMetadataError: string | null;
+  highQualityModelInputShape: string[] | null;
+  highQualityModelOutputShape: string[] | null;
+  highQualityModelDummyInferenceOk: boolean | null;
+  highQualityModelDummyInferenceError: string | null;
+  onnxruntimeAvailable: boolean;
+  probeError: string | null;
+};
+
 type RuntimeHealthReport = {
   level: "ready" | "warning" | "error";
   label: string;
   detail: string;
+  separationEngine: SeparationEngineHealth;
   torchCudaAvailable: boolean;
   selectedDevice: "cpu" | "cuda" | string;
   torchVersion: string | null;
@@ -97,10 +130,11 @@ type RuntimeHealthReport = {
 
 type BootstrapStatus = {
   runtimeReady: boolean;
-  demucsModelsReady: boolean;
+  onnxModelReady: boolean;
   whisperBaseReady: boolean;
   ffmpegReady: boolean;
   canRunCore: boolean;
+  selectedProvider: string;
   torchCudaAvailable: boolean;
   selectedDevice: "cpu" | "cuda" | string;
   torchVersion: string | null;
@@ -264,12 +298,13 @@ const SETTINGS_PAGE_COPY: Record<SettingsPane, { title: string; description: str
 const RUNTIME_CHECK_NAMES = [
   "Python",
   "FFmpeg",
-  "Torch",
-  "人声分离",
+  "ONNX Runtime",
+  "ONNX 默认模型",
+  "ONNX Session",
+  "ONNX Metadata",
+  "ONNX 高质量模型",
   "SoundFile",
   "AI 听写草稿",
-  "NVIDIA GPU",
-  "Torch CUDA",
 ];
 
 type TrackGraph = {
@@ -335,24 +370,23 @@ function App() {
     }
   });
 
-  const runtimeSelectedDevice =
-    bootstrapStatus?.selectedDevice ??
-    runtimeHealth?.selectedDevice ??
-    "cpu";
-  const runtimeTorchVersion = bootstrapStatus?.torchVersion ?? runtimeHealth?.torchVersion ?? null;
-  const runtimeTorchCudaVersion =
-    bootstrapStatus?.torchCudaVersion ?? runtimeHealth?.torchCudaVersion ?? null;
-  const runtimeTorchCudaDeviceName =
-    bootstrapStatus?.torchCudaDeviceName ?? runtimeHealth?.torchCudaDeviceName ?? null;
-  const runtimeHasNvidiaGpu = bootstrapStatus?.hasNvidiaGpu ?? runtimeHealth?.hasNvidiaGpu ?? false;
-  const runtimeTorchCudaAvailable =
-    bootstrapStatus?.torchCudaAvailable ?? runtimeHealth?.torchCudaAvailable ?? false;
-  const runtimeDeviceLabel = runtimeTorchCudaAvailable ? "GPU 运行" : "CPU 运行";
-  const runtimeDeviceTitle = runtimeTorchCudaAvailable
-    ? `Torch CUDA 可用${runtimeTorchCudaDeviceName ? `：${runtimeTorchCudaDeviceName}` : ""}`
-    : runtimeHasNvidiaGpu
-      ? "已检测到 NVIDIA GPU，但 Torch CUDA 暂不可用，当前使用 CPU"
-      : "未检测到 NVIDIA GPU，当前使用 CPU";
+  const runtimeSelectedProvider =
+    runtimeHealth?.separationEngine?.selectedProvider ?? bootstrapStatus?.selectedProvider ?? "CPUExecutionProvider";
+  const runtimeProviderLabel =
+    runtimeSelectedProvider === "DmlExecutionProvider"
+      ? "DirectML 运行"
+      : runtimeSelectedProvider === "CoreMLExecutionProvider"
+        ? "CoreML 运行"
+        : "CPU 运行";
+  const runtimeProviderTitle = runtimeHealth?.separationEngine
+    ? [
+        `ONNX Runtime: ${runtimeHealth.separationEngine.onnxruntimeAvailable ? "可用" : "不可用"}`,
+        `当前后端: ${runtimeSelectedProvider}`,
+        runtimeHealth.separationEngine.providerFallbackReason ? `回退原因: ${runtimeHealth.separationEngine.providerFallbackReason}` : null,
+      ]
+        .filter(Boolean)
+        .join(" | ")
+    : "ONNX Runtime 状态未就绪";
   const runtimeChecks = runtimeHealth?.checks ?? [];
   const displayedRuntimeChecks: RuntimeHealthCheck[] = [
     ...RUNTIME_CHECK_NAMES.map((name) => (
@@ -1042,6 +1076,37 @@ function App() {
             level: "error",
             label: "环境异常",
             detail: "无法完成启动检测",
+            separationEngine: {
+              activeEngine: "onnx",
+              requestedProviders: ["CPUExecutionProvider"],
+              availableProviders: ["unavailable"],
+              selectedProvider: "CPUExecutionProvider",
+              providerFallbackReason: "runtime health probe unavailable",
+              defaultModelId: "uvr_mdxnet_9482",
+              defaultModelPath: "",
+              defaultModelReady: false,
+              defaultModelSessionLoadOk: false,
+              defaultModelSessionLoadError: "runtime health probe unavailable",
+              defaultModelMetadataOk: false,
+              defaultModelMetadataError: "runtime health probe unavailable",
+              defaultModelInputShape: null,
+              defaultModelOutputShape: null,
+              defaultModelDummyInferenceOk: null,
+              defaultModelDummyInferenceError: null,
+              highQualityModelId: "bs_polarformer_fp16",
+              highQualityModelPath: "",
+              highQualityModelReady: false,
+              highQualityModelSessionLoadOk: false,
+              highQualityModelSessionLoadError: "runtime health probe unavailable",
+              highQualityModelMetadataOk: false,
+              highQualityModelMetadataError: "runtime health probe unavailable",
+              highQualityModelInputShape: null,
+              highQualityModelOutputShape: null,
+              highQualityModelDummyInferenceOk: null,
+              highQualityModelDummyInferenceError: null,
+              onnxruntimeAvailable: false,
+              probeError: "runtime health probe unavailable",
+            },
             torchCudaAvailable: false,
             selectedDevice: "cpu",
             torchVersion: null,
@@ -1081,7 +1146,7 @@ function App() {
     setBootstrapMessage("正在安装运行时与模型...");
     try {
       const status = await invoke<BootstrapStatus>("bootstrap_install_minimal", {
-        preferDemucsCuda: false,
+        preferOnnxProvider: false,
       });
       const health = await invoke<RuntimeHealthReport>("get_runtime_health");
       setBootstrapStatus(status);
@@ -1263,7 +1328,7 @@ function App() {
       await Promise.all(
         newSongs.map(async (song) => {
           try {
-            await invoke("start_process", { songId: song.id, preferDemucsCuda: true });
+            await invoke("start_process", { songId: song.id, preferOnnxProvider: true });
             setSongs((prev) => prev.map((item) =>
               item.id === song.id && item.status !== "processing" && item.status !== "cancelling"
                 ? { ...item, status: "queued" as const, progress: 0, processingStage: "queued" as ProcessingStage, error_message: undefined }
@@ -1356,7 +1421,7 @@ function App() {
   const handleSeparateInstrumental = useCallback(async (song: Song) => {
     try {
       const command = song.status === "ready" ? "reprocess_song" : "start_process";
-      await invoke(command, { songId: song.id, preferDemucsCuda: true });
+      await invoke(command, { songId: song.id, preferOnnxProvider: true });
       setSongs((prev) => prev.map((item) =>
         item.id === song.id && item.status !== "processing" && item.status !== "cancelling"
           ? { ...item, status: "queued" as const, progress: 0, processingStage: "queued" as ProcessingStage, error_message: undefined }
@@ -1738,15 +1803,11 @@ function App() {
               </span>
             </button>
             <div
-              className={`status-chip ${runtimeTorchCudaAvailable ? "border-[color-mix(in_srgb,var(--status-success)_32%,transparent)]" : ""}`}
-              title={runtimeDeviceTitle}
+              className="status-chip"
+              title={runtimeProviderTitle}
             >
-              <span
-                className={`status-chip-dot ${
-                  runtimeTorchCudaAvailable ? "status-chip-dot-success" : ""
-                }`}
-              />
-              <span className="ui-chip-text">{runtimeDeviceLabel}</span>
+              <span className="status-chip-dot status-chip-dot-success" />
+              <span className="ui-chip-text">{runtimeProviderLabel}</span>
             </div>
           </div>
           <div className="app-header-right">
@@ -2312,7 +2373,6 @@ function App() {
                           {[
                             "FFmpeg — FFmpeg Developers",
                             "PyTorch — PyTorch Contributors / Linux Foundation",
-                            "Demucs — Meta AI / Facebook Research",
                             "Whisper — OpenAI",
                             "SoundFile / python-soundfile — Bastibe and contributors",
                             "NumPy — NumPy Developers",
@@ -2358,7 +2418,7 @@ function App() {
                                 {runtimeHealth?.level === "ready" ? "环境可运行" : "需要处理"}
                               </div>
                               <div className="mt-1 max-w-[620px] truncate text-[13px] leading-5 text-[var(--text-secondary)]" title={bootstrapStatus?.detail ?? runtimeHealth?.detail ?? "正在获取环境状态..."}>
-                                {runtimeHealth?.level === "ready" ? "核心依赖已就绪，可运行人声分离。" : bootstrapStatus?.detail ?? runtimeHealth?.detail ?? "正在获取环境状态..."}
+                                {runtimeHealth?.level === "ready" ? "ONNX Runtime、默认模型与音频依赖已就绪。" : bootstrapStatus?.detail ?? runtimeHealth?.detail ?? "正在获取环境状态..."}
                               </div>
                             </div>
                           </div>
@@ -2404,12 +2464,12 @@ function App() {
 
                       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                         {[
-                          ["NVIDIA GPU", runtimeHasNvidiaGpu ? "已检测" : "未检测"],
-                          ["Torch 版本", runtimeTorchVersion ?? "未安装"],
-                          ["Torch CUDA", runtimeTorchCudaAvailable ? "可用" : "不可用"],
-                          ["CUDA 版本", runtimeTorchCudaVersion ?? "无"],
-                          ["运行设备", runtimeSelectedDevice],
-                          ["GPU 设备名", runtimeTorchCudaDeviceName ?? "无"],
+                          ["执行后端", runtimeProviderLabel],
+                          ["默认模型", runtimeHealth?.separationEngine?.defaultModelReady ? runtimeHealth.separationEngine.defaultModelId : "未就绪"],
+                          ["高质量模型", runtimeHealth?.separationEngine?.highQualityModelReady ? "已就绪" : "可选"],
+                          ["ONNX Runtime", runtimeHealth?.separationEngine?.onnxruntimeAvailable ? "可用" : "不可用"],
+                          ["音频解码/写入", runtimeHealth?.checks.find((check) => check.name === "FFmpeg" && check.ok) ? "已检查" : "未就绪"],
+                          ["AI 听写", bootstrapStatus?.whisperBaseReady ? "可用" : "可选"],
                         ].map(([label, value]) => (
                           <div key={label} className="runtime-info-card flex h-16 min-w-0 flex-col justify-center rounded-[12px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] px-4">
                             <div className="truncate text-[12px] font-semibold text-[var(--text-muted)]">{label}</div>
