@@ -1,11 +1,79 @@
 # Macaron Singer
 
-本地歌曲处理与练唱应用：导入音频后做人声分离、歌词候选匹配、歌词编辑与同步播放，支持边播边改歌词时间轴。
+本地音频处理桌面应用。核心能力是人声分离、AI 听写草稿、歌词搜索/导入、播放与歌词编辑。
 
-- 技术栈：Tauri 2.x（Rust + React）、Demucs（htdemucs_ft）、TailwindCSS、Python 3.10 embedded
-- 产品规格：[SPEC.md](./SPEC.md)
-- Agent 交接与接手：[CLAUDE.md](./CLAUDE.md)
-- 开发锚点与历史基线：[DEVELOPMENT_ANCHORS.md](./DEVELOPMENT_ANCHORS.md)
+当前仓库的单一文档入口只有本文件，其他 `.md` 已移除。文档必须跟随当前代码状态，不保留过期的 Demucs / CUDA 主线描述。
+
+## 当前状态
+
+- 分离主线已切到 ONNX Runtime 探测层，默认路径不会执行 `python -m demucs`。
+- Demucs 仅保留显式 legacy fallback，只有设置 `MACARON_USE_LEGACY_DEMUCS=1` 才会进入。
+- 旧 `separator.py` / `demucs_wrapper.py` 动态主链路不再是默认实现。
+- AI 听写保持独立，仍依赖 `faster-whisper`，默认 CPU-only。
+- Windows 是当前主开发线；macOS 仍作为冻结参考线。
+
+## 架构
+
+- 前端：React + TypeScript
+- 桌面壳：Tauri 2.x
+- 后端：Rust
+- 运行时：嵌入式 Python
+- 分离引擎：ONNX Runtime provider / model metadata probe
+- 听写引擎：faster-whisper
+
+### 分离主线
+
+- 默认模型：`UVR_MDXNET_9482.onnx`
+- 高质量可选模型：`BS_PolarFormer_FP16.onnx`
+- Provider 策略：
+  - Windows: `DmlExecutionProvider -> CPUExecutionProvider`
+  - macOS: `CoreMLExecutionProvider -> CPUExecutionProvider`
+  - fallback: `CPUExecutionProvider`
+- 目前实现是探测层，不是完整音频分离执行。
+- `RuntimeHealthReport.separationEngine` 记录 `requestedProviders`、`selectedProvider`、`providerFallbackReason`、`defaultModelReady`、`highQualityModelReady`、`onnxruntimeAvailable` 等信息。
+
+### 听写主线
+
+- faster-whisper 保持独立
+- 不复用分离引擎的 GPU 勾选状态
+- 不把分离主线故障扩散为听写故障
+
+## 依赖策略
+
+- PyPI / Python 运行时 / 模型下载走大陆优先策略 + 官方兜底
+- ONNX 分离主线依赖：
+  - `onnxruntime` 或 Windows 的 `onnxruntime-directml`
+  - `numpy`
+  - `soundfile`
+- 听写额外依赖：
+  - `faster-whisper`
+- Demucs / CUDA Torch 不再是主分离路线的安装前提
+
+## 目录
+
+```text
+src/
+  App.tsx
+  components/
+  stores/
+  types/
+  utils/
+
+src-tauri/src/
+  lib.rs
+  models.rs
+  events.rs
+  process_control.rs
+  runtime/
+  separation/
+  storage/
+  separation_queue.rs
+
+src-tauri/python/
+src-tauri/python_workers/
+python/
+runtime-manifest.json
+```
 
 ## 开发
 
@@ -15,59 +83,51 @@ npm run tauri dev
 npm run tauri build
 ```
 
-### 隔离测试环境（无依赖/无模型）
+### 隔离开发
 
 ```bash
 npm run tauri:dev:isolated
 ```
 
-- 启动时会启用 `FORISFSTOOLS_ISOLATED=1`
-- 使用独立数据目录 `FORISFSTOOLS_DATA_DIR=/tmp/forisfstools-isolated-runtime`
-- 不会读取开发目录内的 `python/models`，用于验证"最小壳 + 首次自部署"链路
+- `FORISFSTOOLS_ISOLATED=1`
+- `FORISFSTOOLS_DATA_DIR=/tmp/forisfstools-isolated-runtime`
+- 不读取开发目录内的 `python/models`
 
-### Windows 便携版交付（ZIP，无安装器）
+### Windows 便携版
 
 ```bash
 npm run win:portable
 ```
 
-产物：`dist-portable/Macaron-Singer-Windows-Portable.zip`
-
-使用方式：解压 ZIP → 运行 `forisfstools.exe` → 偏好设置 → 依赖与模型 → 一键安装运行环境。
-
-## 主要目录
+产物：
 
 ```text
-src/
-  App.tsx
-  components/
-    Playlist.tsx
-    lyrics/LyricsPanel.tsx
-  types/
-    index.ts
-    lyrics.ts
-
-src-tauri/src/
-  lib.rs
-  models.rs
-  events.rs
-  separation_queue.rs
-  process_control.rs
-  runtime/
-  storage/
-
-CLAUDE.md
-DEVELOPMENT_ANCHORS.md
-SPEC.md
-README.md
+dist-portable/Macaron-Singer-Windows-Portable.zip
 ```
 
-## 后端命令（核心）
+## 后端命令
 
 - `import_songs(paths)`
 - `start_process(song_id)`
 - `cancel_process(song_id)`
 - `reprocess_song(song_id)`
 - `get_songs()`
+- `get_song(song_id)`
+- `get_runtime_health()`
+- `get_bootstrap_status()`
 - `get_lyrics_document(song_id)`
 - `save_lyrics_document(song_id, document)`
+
+## 验证
+
+```bash
+cargo fmt --manifest-path src-tauri/Cargo.toml
+cargo check --manifest-path src-tauri/Cargo.toml
+cargo test --manifest-path src-tauri/Cargo.toml
+npm run build
+```
+
+## 说明
+
+- 当前文档以仓库现状为准，不再保留旧的阶段性说明文件。
+- 代码级约束以当前 Rust / 前端实现为准。
