@@ -180,7 +180,7 @@ fn command_is_available(program: &str, arg: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn resolve_ffmpeg_binary_path() -> Option<PathBuf> {
+pub(crate) fn resolve_ffmpeg_binary_path() -> Option<PathBuf> {
     let mut candidates = vec![PathBuf::from("ffmpeg")];
     // Windows: check runtime directory
     if cfg!(windows) {
@@ -188,6 +188,11 @@ fn resolve_ffmpeg_binary_path() -> Option<PathBuf> {
             .join("ffmpeg")
             .join("bin")
             .join("ffmpeg.exe");
+        candidates.insert(0, runtime_ffmpeg);
+    }
+    // macOS: check runtime directory
+    if cfg!(target_os = "macos") {
+        let runtime_ffmpeg = get_runtime_dir().join("ffmpeg").join("bin").join("ffmpeg");
         candidates.insert(0, runtime_ffmpeg);
     }
     // macOS / Linux
@@ -387,7 +392,7 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
     } else {
         false
     };
-    let soundfile_ready = if python_exists {
+    let _soundfile_ready = if python_exists {
         runtime::capability::python_module_is_available(&python_path, "soundfile", 6)
             .unwrap_or(false)
     } else {
@@ -509,7 +514,7 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
             } else {
                 "error".to_string()
             },
-            detail: Some("torchaudio 兼容音频后端".to_string()),
+            detail: Some("SoundFile 音频 I/O 后端".to_string()),
         },
         RuntimeHealthCheck {
             name: "AI 听写草稿".to_string(),
@@ -1041,10 +1046,29 @@ fn build_original_mix(vocals_path: &str, instrumental_path: &str) -> Result<Stri
 }
 
 fn ensure_ffmpeg_runtime() -> Result<(), String> {
+    // 1. Already available on PATH
     if command_is_available("ffmpeg", "-version") {
         return Ok(());
     }
-    if cfg!(target_os = "macos") {
+
+    let runtime_dir = get_runtime_dir();
+    let ffmpeg_dir = runtime_dir.join("ffmpeg");
+    let ffmpeg_bin_dir = ffmpeg_dir.join("bin");
+    let ffmpeg_exe = if cfg!(windows) {
+        ffmpeg_bin_dir.join("ffmpeg.exe")
+    } else {
+        ffmpeg_bin_dir.join("ffmpeg")
+    };
+
+    // 2. Runtime directory already has ffmpeg
+    if ffmpeg_exe.exists() {
+        add_ffmpeg_to_path(&ffmpeg_bin_dir);
+        return Ok(());
+    }
+
+    // 3. macOS: try brew first
+    #[cfg(target_os = "macos")]
+    {
         let has_brew = Command::new("brew")
             .arg("--version")
             .stdout(Stdio::null())
@@ -1057,67 +1081,45 @@ fn ensure_ffmpeg_runtime() -> Result<(), String> {
                 .args(["install", "ffmpeg"])
                 .output()
                 .map_err(|e| format!("调用 brew 安装 FFmpeg 失败: {}", e))?;
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                return Err(format!(
-                    "自动安装 FFmpeg 失败（brew）：{}\n{}",
-                    stderr.trim(),
-                    stdout.trim()
-                ));
-            }
-            if command_is_available("ffmpeg", "-version") {
+            if output.status.success() && command_is_available("ffmpeg", "-version") {
                 return Ok(());
             }
         }
-        return Err("FFmpeg 未就绪：未检测到可用 ffmpeg。请先安装 Homebrew 后执行 `brew install ffmpeg`，然后重启应用。".to_string());
     }
-    if !cfg!(windows) {
+
+    // 4. Not a supported download platform
+    if !cfg!(windows) && !cfg!(target_os = "macos") {
         return Err("FFmpeg 未就绪，请先安装 FFmpeg 并重启应用。".to_string());
     }
 
-    // Windows: download FFmpeg from gh.llkk.cc mirror (China-accessible GitHub proxy)
-    let ffmpeg_mirror_url = "https://gh.llkk.cc/https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip";
-    let ffmpeg_upstream_url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip";
-    let runtime_dir = get_runtime_dir();
-    let ffmpeg_dir = runtime_dir.join("ffmpeg");
-    let ffmpeg_bin = ffmpeg_dir.join("bin").join("ffmpeg.exe");
-
-    if ffmpeg_bin.exists() {
-        // Add to PATH for this session
-        let _ = std::env::set_var(
-            "PATH",
-            format!(
-                "{};{}",
-                ffmpeg_dir.join("bin").to_string_lossy(),
-                std::env::var("PATH").unwrap_or_default()
-            ),
-        );
-        return Ok(());
+    // 5. Download with multi-source fallback
+    let urls = get_ffmpeg_urls();
+    if urls.is_empty() {
+        return Err("FFmpeg 未就绪：暂未配置当前平台的 FFmpeg 下载源。".to_string());
     }
 
     fs::create_dir_all(&ffmpeg_dir).map_err(|e| format!("创建 FFmpeg 目录失败: {}", e))?;
-    let ffmpeg_archive = runtime_dir.join("ffmpeg.zip");
+    let archive_path = runtime_dir.join("ffmpeg.zip");
 
-    let downloaded = if ffmpeg_archive.exists()
-        && ffmpeg_archive
+    let already_downloaded = archive_path.exists()
+        && archive_path
             .metadata()
             .map(|m| m.len() > 1_000_000)
-            .unwrap_or(false)
-    {
-        true
-    } else {
-        download_to_file(ffmpeg_mirror_url, &ffmpeg_archive)
-            .or_else(|_| download_to_file(ffmpeg_upstream_url, &ffmpeg_archive))
-            .is_ok()
-    };
+            .unwrap_or(false);
+    if !already_downloaded {
+        download_with_fallbacks(&urls, &archive_path)?;
+    }
 
-    if downloaded {
-        // Extract zip: PowerShell Expand-Archive
+    // 6. Extract to temp directory
+    let extract_dir = runtime_dir.join(".ffmpeg_extract");
+    let _ = fs::remove_dir_all(&extract_dir);
+    fs::create_dir_all(&extract_dir).map_err(|e| format!("创建解压目录失败: {}", e))?;
+
+    if cfg!(windows) {
         let script = format!(
             "Expand-Archive -LiteralPath '{}' -DestinationPath '{}' -Force",
-            ffmpeg_archive.to_string_lossy().replace('\'', "''"),
-            ffmpeg_dir.to_string_lossy().replace('\'', "''")
+            archive_path.to_string_lossy().replace('\'', "''"),
+            extract_dir.to_string_lossy().replace('\'', "''")
         );
         let mut ps_cmd = Command::new("powershell");
         ps_cmd.args(["-NoProfile", "-Command", &script]);
@@ -1125,42 +1127,54 @@ fn ensure_ffmpeg_runtime() -> Result<(), String> {
         let status = ps_cmd
             .status()
             .map_err(|e| format!("解压 FFmpeg 失败: {}", e))?;
-        if status.success() {
-            // FFmpeg zip extracts to ffmpeg-master-latest-win64-gpl/ directory
-            // Move bin/ contents up to ffmpeg_dir/bin/
-            let extracted_bin = ffmpeg_dir
-                .join("ffmpeg-master-latest-win64-gpl")
-                .join("bin");
-            if extracted_bin.exists() {
-                let target_bin = ffmpeg_dir.join("bin");
-                let _ = fs::create_dir_all(&target_bin);
-                for entry in fs::read_dir(&extracted_bin)
-                    .map_err(|e| format!("读取 FFmpeg bin 失败: {}", e))?
-                {
-                    let entry = entry.map_err(|e| format!("读取 FFmpeg 条目失败: {}", e))?;
-                    let src = entry.path();
-                    let dst = target_bin.join(entry.file_name());
-                    let _ = fs::copy(&src, &dst);
-                }
-                let _ = fs::remove_dir_all(ffmpeg_dir.join("ffmpeg-master-latest-win64-gpl"));
-            }
-            let _ = fs::remove_file(&ffmpeg_archive);
-            if ffmpeg_bin.exists() {
-                let _ = std::env::set_var(
-                    "PATH",
-                    format!(
-                        "{};{}",
-                        ffmpeg_dir.join("bin").to_string_lossy(),
-                        std::env::var("PATH").unwrap_or_default()
-                    ),
-                );
-                return Ok(());
-            }
+        if !status.success() {
+            let _ = fs::remove_dir_all(&extract_dir);
+            let _ = fs::remove_file(&archive_path);
+            return Err("解压 FFmpeg 失败：PowerShell 返回非 0".to_string());
         }
-        let _ = fs::remove_file(&ffmpeg_archive);
+    } else {
+        // macOS: use unzip
+        let status = Command::new("unzip")
+            .arg("-o")
+            .arg(&archive_path)
+            .arg("-d")
+            .arg(&extract_dir)
+            .status()
+            .map_err(|e| format!("解压 FFmpeg 失败: {}", e))?;
+        if !status.success() {
+            let _ = fs::remove_dir_all(&extract_dir);
+            let _ = fs::remove_file(&archive_path);
+            return Err("解压 FFmpeg 失败：unzip 返回非 0".to_string());
+        }
     }
 
-    Err("FFmpeg 自动安装失败。请手动下载 FFmpeg 并放入运行时目录。".to_string())
+    // 7. Find extracted bin directory and move files
+    let result = setup_ffmpeg_from_extraction(&extract_dir, &ffmpeg_bin_dir);
+    let _ = fs::remove_dir_all(&extract_dir);
+    let _ = fs::remove_file(&archive_path);
+    result?;
+
+    // 8. Set executable bits on macOS
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(entries) = fs::read_dir(&ffmpeg_bin_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o755));
+                }
+            }
+        }
+    }
+
+    // 9. Verify and add to PATH
+    if !ffmpeg_exe.exists() {
+        return Err("FFmpeg 安装失败：解压后未找到 ffmpeg 二进制。".to_string());
+    }
+
+    add_ffmpeg_to_path(&ffmpeg_bin_dir);
+    Ok(())
 }
 
 fn get_models_dir(app: &AppHandle) -> PathBuf {
@@ -1263,26 +1277,17 @@ fn bootstrap_install_python_runtime(app: &AppHandle) -> Result<(), String> {
 
     fs::create_dir_all(&runtime_dir).map_err(|e| format!("Failed to create runtime dir: {}", e))?;
 
+    // ── Windows: download with multi-source fallback ──────────────────
     if cfg!(windows) {
-        // Windows: download portable Python from gh.llkk.cc mirror
-        let python_mirror_url = "https://gh.llkk.cc/https://github.com/astral-sh/python-build-standalone/releases/download/20260508/cpython-3.10.20%2B20260508-x86_64-pc-windows-msvc-install_only_stripped.tar.gz";
-        let python_upstream_url = "https://github.com/astral-sh/python-build-standalone/releases/download/20260508/cpython-3.10.20%2B20260508-x86_64-pc-windows-msvc-install_only_stripped.tar.gz";
+        let urls = get_python_runtime_urls();
         let python_archive = runtime_dir.join("python-windows.tar.gz");
 
-        let downloaded = if python_archive.exists()
+        let already_downloaded = python_archive.exists()
             && python_archive
                 .metadata()
                 .map(|m| m.len() > 1_000_000)
-                .unwrap_or(false)
-        {
-            true
-        } else {
-            download_to_file(python_mirror_url, &python_archive)
-                .or_else(|_| download_to_file(python_upstream_url, &python_archive))
-                .is_ok()
-        };
-
-        if downloaded {
+                .unwrap_or(false);
+        if already_downloaded || download_with_fallbacks(&urls, &python_archive).is_ok() {
             let mut tar_cmd = Command::new("tar");
             tar_cmd.args([
                 "-xzf",
@@ -1318,7 +1323,7 @@ fn bootstrap_install_python_runtime(app: &AppHandle) -> Result<(), String> {
         return Err("Python 运行时安装失败：下载便携 Python 失败，系统也未检测到可用 Python。请检查网络连接后重试。".to_string());
     }
 
-    // macOS / Linux: try bundled archive first
+    // ── macOS / Linux: try bundled archive first ─────────────────────
     let resource_dir = app.path().resource_dir().unwrap_or_default();
     let bundled_archives = [
         resource_dir.join("python").join("python-standalone.tar.gz"),
@@ -1349,7 +1354,30 @@ fn bootstrap_install_python_runtime(app: &AppHandle) -> Result<(), String> {
         }
     }
 
-    Err("Python 运行时安装失败：未找到可用安装源（内置包或开发目录）。".to_string())
+    // ── macOS: download with multi-source fallback ──────────────────
+    #[cfg(target_os = "macos")]
+    {
+        let urls = get_macos_python_runtime_urls();
+        if !urls.is_empty() {
+            let archive = runtime_dir.join("python-macos.tar.gz");
+            if download_with_fallbacks(&urls, &archive).is_ok() {
+                let status = Command::new("tar")
+                    .arg("-xzf")
+                    .arg(&archive)
+                    .arg("-C")
+                    .arg(&runtime_dir)
+                    .status()
+                    .map_err(|e| format!("解压 Python 运行时失败: {}", e))?;
+                if status.success() && runtime_bin.exists() {
+                    let _ = fs::remove_file(&archive);
+                    return Ok(());
+                }
+                let _ = fs::remove_file(&archive);
+            }
+        }
+    }
+
+    Err("Python 运行时安装失败：未找到可用安装源（内置包、开发目录或远端下载）。".to_string())
 }
 
 fn host_is_mainland_preferred(url: &str) -> bool {
@@ -1364,6 +1392,11 @@ fn host_is_mainland_preferred(url: &str) -> bool {
         || host.contains("tencent")
         || host == "hf-mirror.com"
         || host.ends_with(".hf-mirror.com")
+        || host == "gh.llkk.cc"
+        || host == "ghproxy.net"
+        || host == "mirror.ghproxy.com"
+        || host == "gh-proxy.com"
+        || host == "gh-proxy.net"
         || host == "dl.fbaipublicfiles.com"
         || host == "mirrors.tuna.tsinghua.edu.cn"
         || host == "mirrors.bfsu.edu.cn"
@@ -1502,10 +1535,135 @@ fn extract_archive(archive_path: &Path, runtime_models: &Path) -> Result<(), Str
     Ok(())
 }
 
+fn download_with_fallbacks(urls: &[String], target: &Path) -> Result<(), String> {
+    let mut errors = Vec::new();
+    for url in urls {
+        match download_to_file(url, target) {
+            Ok(()) => {
+                let size_ok = target
+                    .metadata()
+                    .map(|m| m.len() > 1_000_000)
+                    .unwrap_or(false);
+                if size_ok {
+                    return Ok(());
+                }
+                let size_kb = target
+                    .metadata()
+                    .map(|m| m.len() as f64 / 1024.0)
+                    .unwrap_or(0.0);
+                errors.push(format!("{}: 下载文件过小（{:.1}KB）", url, size_kb));
+            }
+            Err(e) => errors.push(format!("{}: {}", url, e)),
+        }
+    }
+    Err(format!("所有下载源均失败：{}", errors.join(" | ")))
+}
+
+fn get_python_runtime_urls() -> Vec<String> {
+    let base = "astral-sh/python-build-standalone/releases/download/20260508";
+    let filename = if cfg!(windows) {
+        "cpython-3.10.20%2B20260508-x86_64-pc-windows-msvc-install_only_stripped.tar.gz"
+    } else if cfg!(target_os = "macos") {
+        // macOS handled by get_macos_python_runtime_urls
+        return vec![];
+    } else {
+        return vec![];
+    };
+    let official = format!("https://github.com/{}/{}", base, filename);
+    vec![
+        format!("https://gh.llkk.cc/{}", official),
+        format!("https://ghproxy.net/{}", official),
+        format!("https://mirror.ghproxy.com/{}", official),
+        official,
+    ]
+}
+
+fn get_macos_python_runtime_urls() -> Vec<String> {
+    let base = "astral-sh/python-build-standalone/releases/download/20260508";
+    let arch = if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else {
+        "x86_64"
+    };
+    let filename = format!(
+        "cpython-3.10.20%2B20260508-{}-apple-darwin-install_only_stripped.tar.gz",
+        arch
+    );
+    let official = format!("https://github.com/{}/{}", base, filename);
+    vec![
+        format!("https://gh.llkk.cc/{}", official),
+        format!("https://ghproxy.net/{}", official),
+        format!("https://mirror.ghproxy.com/{}", official),
+        official,
+    ]
+}
+
+fn get_ffmpeg_urls() -> Vec<String> {
+    let filename = if cfg!(windows) {
+        "ffmpeg-master-latest-win64-gpl.zip"
+    } else if cfg!(target_os = "macos") {
+        if cfg!(target_arch = "aarch64") {
+            "ffmpeg-master-latest-macOS12.0-arm64-gpl.zip"
+        } else {
+            "ffmpeg-master-latest-macos64-gpl.zip"
+        }
+    } else {
+        return vec![];
+    };
+    let official = format!(
+        "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/{}",
+        filename
+    );
+    vec![
+        format!("https://gh.llkk.cc/{}", official),
+        format!("https://ghproxy.net/{}", official),
+        format!("https://mirror.ghproxy.com/{}", official),
+        official,
+    ]
+}
+
+fn add_ffmpeg_to_path(bin_dir: &Path) {
+    let separator = if cfg!(windows) { ";" } else { ":" };
+    let _ = std::env::set_var(
+        "PATH",
+        format!(
+            "{}{}{}",
+            bin_dir.to_string_lossy(),
+            separator,
+            std::env::var("PATH").unwrap_or_default()
+        ),
+    );
+}
+
+fn setup_ffmpeg_from_extraction(extract_dir: &Path, target_bin_dir: &Path) -> Result<(), String> {
+    let entries = fs::read_dir(extract_dir).map_err(|e| format!("读取解压目录失败: {}", e))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("读取解压条目失败: {}", e))?;
+        let path = entry.path();
+        if path.is_dir() {
+            let src_bin = path.join("bin");
+            if src_bin.exists() {
+                fs::create_dir_all(target_bin_dir)
+                    .map_err(|e| format!("创建 bin 目录失败: {}", e))?;
+                for bin_entry in
+                    fs::read_dir(&src_bin).map_err(|e| format!("读取 FFmpeg bin 失败: {}", e))?
+                {
+                    let bin_entry = bin_entry.map_err(|e| format!("读取二进制条目失败: {}", e))?;
+                    let src = bin_entry.path();
+                    let dst = target_bin_dir.join(bin_entry.file_name());
+                    let _ = fs::copy(&src, &dst);
+                }
+                return Ok(());
+            }
+        }
+    }
+    Err("在解压目录中未找到 FFmpeg bin 目录".to_string())
+}
+
 fn bootstrap_model_from_manifest_sources(
     runtime_models: &Path,
     model_name: &str,
-    target_dir: &Path,
+    _target_dir: &Path,
     sources: &[RuntimeManifestArtifact],
 ) -> Result<bool, String> {
     if sources.is_empty() {
@@ -1794,12 +1952,43 @@ fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
                 .join("python")
                 .join("models")
                 .join("onnx"),
+            // tauri.conf.json bundle.resources 路径: models/onnx/UVR_MDXNET_9482.onnx
+            app.path()
+                .resource_dir()
+                .unwrap_or_default()
+                .join("models")
+                .join("onnx"),
         ];
         if let Some(src) = candidate_sources.iter().find(|path| path.exists()) {
             copy_dir_recursive(src, &runtime_onnx)?;
             install_notes.push("onnx default: 已从本地可用源复制".to_string());
         }
     }
+
+    // 安装可选高级模型 UVR-MDX-NET-Inst_HQ_4
+    let hq_model_path = runtime_onnx.join("UVR-MDX-NET-Inst_HQ_4.onnx");
+    if !hq_model_path.exists() {
+        let onnx_sources = platform_manifest.models.onnx.clone();
+        if !onnx_sources.is_empty() {
+            match bootstrap_model_from_manifest_sources(
+                &runtime_models,
+                "onnx",
+                &runtime_onnx,
+                &onnx_sources,
+            ) {
+                Ok(true) => {
+                    install_notes.push("UVR-MDX-NET-Inst_HQ_4: 已从大陆优先在线源下载".to_string());
+                }
+                Ok(false) => {
+                    install_notes.push("UVR-MDX-NET-Inst_HQ_4: 未配置可用在线源".to_string());
+                }
+                Err(err) => {
+                    install_notes.push(format!("UVR-MDX-NET-Inst_HQ_4 下载失败（可选）：{}", err))
+                }
+            }
+        }
+    }
+
     if !runtime_whisper.exists() {
         match bootstrap_model_from_manifest_sources(
             &runtime_models,
@@ -1885,9 +2074,9 @@ fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
         let whisper_missing = still_missing.iter().any(|s| s.contains("whisper base"));
         if onnx_missing {
             Err(format!(
-                "核心模型（人声分离）安装失败：ONNX 默认模型缺失或不可用。请检查模型文件或配置离线模型。细节：{}",
+                "安装包缺少默认 ONNX 模型或模型校验失败，请重新安装完整版本。UVR_MDXNET_9482.onnx 必须随安装包发布，不支持远端自动补齐。细节：{}",
                 if install_notes.is_empty() {
-                    "无安装日志".to_string()
+                    "尝试从预置路径复制模型失败".to_string()
                 } else {
                     install_notes.join(" | ")
                 }
@@ -1983,125 +2172,6 @@ fn install_python_packages_with_fallbacks(
     }
 
     Err(format!("多源安装失败：{}", errors.join(" | ")))
-}
-
-/// Patch torchaudio/__init__.py to use soundfile backend instead of torchcodec.
-/// torchaudio 2.11+ defaults to torchcodec which requires FFmpeg shared DLLs not present in our runtime.
-/// Import hooks (sitecustomize.py) don't work for child processes, so we patch the source directly.
-#[allow(dead_code)]
-fn install_torchaudio_compat_patch(python_path: &Path) -> Result<(), String> {
-    let site_packages = runtime::python::python_site_packages_dir(python_path)?;
-    let init_path = site_packages.join("torchaudio").join("__init__.py");
-    if !init_path.exists() {
-        return Err(format!(
-            "torchaudio __init__.py not found: {}",
-            init_path.display()
-        ));
-    }
-
-    // If the current file is already valid and contains our soundfile fallback, nothing to do.
-    let already_patched = fs::read_to_string(&init_path)
-        .ok()
-        .map(|content| content.contains("soundfile as sf") && content.contains("sf.read"))
-        .unwrap_or(false)
-        && runtime::python::python_file_compiles(python_path, &init_path).unwrap_or(false);
-    if already_patched {
-        return Ok(());
-    }
-
-    // Prefer a backup copy when available so we can repatch a broken runtime file from a clean source.
-    let backup = init_path.with_extension("py.bak");
-    let source_path = if backup.exists() { &backup } else { &init_path };
-    let content = fs::read_to_string(source_path)
-        .map_err(|e| format!("Failed to read torchaudio __init__.py: {}", e))?;
-
-    if !backup.exists() {
-        let _ = fs::copy(&init_path, &backup);
-    }
-
-    // Patch load function: replace `return load_with_torchcodec(...)` block with soundfile impl
-    let load_replacement = r#"import soundfile as sf
-    data, samplerate = sf.read(str(uri), dtype="float32", start=frame_offset, stop=(frame_offset + num_frames if num_frames > 0 else None))
-    data = torch.from_numpy(data)
-    if data.ndim == 1:
-        data = data.unsqueeze(0)
-    elif channels_first:
-        data = data.T
-    return data, samplerate"#;
-
-    // Patch save function: replace `return save_with_torchcodec(...)` block with soundfile impl
-    let save_replacement = r#"import soundfile as sf
-    if src.ndim == 1:
-        src = src.unsqueeze(0)
-    data = src.numpy()
-    if channels_first and data.shape[0] > 1:
-        data = data.T
-    sf.write(str(uri), data, sample_rate, format=format)"#;
-
-    let mut new_content = content.clone();
-
-    // Replace load_with_torchcodec return block
-    if let Some(start) = new_content.find("return load_with_torchcodec(") {
-        if let Some(end) = find_return_block_end(&new_content, start) {
-            let before = &new_content[..start];
-            let after = &new_content[end..];
-            new_content = format!("{}{}{}", before, load_replacement, after);
-        }
-    }
-
-    // Replace save_with_torchcodec return block
-    if let Some(start) = new_content.find("return save_with_torchcodec(") {
-        if let Some(end) = find_return_block_end(&new_content, start) {
-            let before = &new_content[..start];
-            let after = &new_content[end..];
-            new_content = format!("{}{}{}", before, save_replacement, after);
-        }
-    }
-
-    if new_content == content {
-        return Err("Failed to patch torchaudio: patterns not found".to_string());
-    }
-
-    fs::write(&init_path, &new_content)
-        .map_err(|e| format!("Failed to write patched torchaudio: {}", e))?;
-
-    if !runtime::python::python_file_compiles(python_path, &init_path).unwrap_or(false) {
-        if backup.exists() {
-            let _ = fs::copy(&backup, &init_path);
-        }
-        return Err(format!(
-            "Failed to validate patched torchaudio: {}",
-            init_path.display()
-        ));
-    }
-
-    Ok(())
-}
-
-/// Find the end of a `return func(...)` block by tracking parenthesis depth
-#[allow(dead_code)]
-fn find_return_block_end(content: &str, start: usize) -> Option<usize> {
-    let bytes = content[start..].as_bytes();
-    let mut depth = 0i32;
-    for (i, &b) in bytes.iter().enumerate() {
-        match b {
-            b'(' => depth += 1,
-            b')' => {
-                depth -= 1;
-                if depth == 0 {
-                    // Include trailing newline
-                    let end = start + i + 1;
-                    let remaining = &content[end..];
-                    if remaining.starts_with('\n') {
-                        return Some(end + 1);
-                    }
-                    return Some(end);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 fn emit_bootstrap_progress(app: &AppHandle, stage: &str, progress: u32, message: &str) {
@@ -2296,9 +2366,9 @@ fn format_log_block(title: &str, lines: &[(&str, String)]) -> String {
 #[allow(dead_code)]
 fn required_onnx_runtime_packages() -> Vec<&'static str> {
     if cfg!(windows) {
-        vec!["onnxruntime-directml", "numpy", "soundfile"]
+        vec!["onnxruntime-directml", "numpy", "soundfile", "sherpa-onnx"]
     } else {
-        vec!["onnxruntime", "numpy", "soundfile"]
+        vec!["onnxruntime", "numpy", "soundfile", "sherpa-onnx"]
     }
 }
 
@@ -2309,7 +2379,7 @@ fn ensure_onnx_runtime_modules(app: &AppHandle, deadline: Instant) -> Result<(),
     }
 
     let mut required_missing = Vec::new();
-    for module in ["onnxruntime", "numpy", "soundfile"] {
+    for module in ["onnxruntime", "numpy", "soundfile", "sherpa_onnx"] {
         if !runtime::capability::python_module_is_available(&python_path, module, 6)
             .unwrap_or(false)
         {
@@ -2324,7 +2394,7 @@ fn ensure_onnx_runtime_modules(app: &AppHandle, deadline: Instant) -> Result<(),
     }
 
     let mut final_missing = Vec::new();
-    for module in ["onnxruntime", "numpy", "soundfile"] {
+    for module in ["onnxruntime", "numpy", "soundfile", "sherpa_onnx"] {
         if !runtime::capability::python_module_is_available(&python_path, module, 6)
             .unwrap_or(false)
         {
@@ -2358,246 +2428,6 @@ fn ensure_onnx_runtime_modules(app: &AppHandle, deadline: Instant) -> Result<(),
     }
 
     Ok(())
-}
-
-#[allow(dead_code)]
-fn uninstall_existing_torch_packages(app: &AppHandle, python_path: &Path, deadline: Instant) {
-    emit_bootstrap_progress(app, "uninstall_torch", 36, "正在清理既有 Torch 组件...");
-    let mut command = Command::new(python_path);
-    command.args([
-        "-m",
-        "pip",
-        "uninstall",
-        "--disable-pip-version-check",
-        "--no-input",
-        "-y",
-        "torch",
-        "torchaudio",
-    ]);
-    let output = run_hidden_command_with_timeout(
-        &mut command,
-        remaining_bootstrap_timeout(deadline, TORCH_UNINSTALL_TIMEOUT)
-            .unwrap_or(Duration::from_secs(5)),
-        "Torch 清理",
-        Some(app),
-        "uninstall_torch",
-        38,
-        "正在清理既有 Torch 组件...",
-    );
-    if let Err(err) = output {
-        eprintln!(
-            "[forisfstools] 卸载既有 torch/torchaudio 时出现错误，继续安装: {}",
-            err
-        );
-    }
-}
-
-/// Install PyTorch with automatic CUDA detection.
-/// Source priority: Aliyun CUDA wheel mirror -> PyTorch official CUDA index -> Tsinghua PyPI/official CPU.
-#[allow(dead_code)]
-fn install_torch_with_cuda_detection(
-    app: &AppHandle,
-    python_path: &Path,
-    prefer_cuda: bool,
-    deadline: Instant,
-) -> Result<(), String> {
-    let detected_cuda = if prefer_cuda {
-        runtime::capability::detect_nvidia_cuda_version()
-    } else {
-        None
-    };
-    let install_from_index = |cuda_index: &str, expect_cuda: bool| -> Result<(), String> {
-        let mut first_label = "清华 PyPI";
-        let mut args = vec![
-            "-m".to_string(),
-            "pip".to_string(),
-            "install".to_string(),
-            "-U".to_string(),
-            "--disable-pip-version-check".to_string(),
-            "--no-input".to_string(),
-            "--timeout".to_string(),
-            PIP_NETWORK_TIMEOUT_SECONDS.to_string(),
-            "--retries".to_string(),
-            PIP_RETRIES.to_string(),
-        ];
-        if expect_cuda {
-            first_label = "阿里云 PyTorch CUDA 镜像";
-            args.extend([
-                "--force-reinstall".to_string(),
-                "--no-cache-dir".to_string(),
-            ]);
-        }
-        args.extend(["torch".to_string(), "torchaudio".to_string()]);
-        if expect_cuda {
-            let aliyun_links = format!("https://mirrors.aliyun.com/pytorch-wheels/{}/", cuda_index);
-            args.extend([
-                "--no-index".to_string(),
-                "--find-links".to_string(),
-                aliyun_links,
-                "--trusted-host".to_string(),
-                "mirrors.aliyun.com".to_string(),
-            ]);
-        } else {
-            args.extend([
-                "--index-url".to_string(),
-                "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple".to_string(),
-                "--trusted-host".to_string(),
-                "mirrors.tuna.tsinghua.edu.cn".to_string(),
-            ]);
-        }
-        emit_bootstrap_progress(
-            app,
-            "install_torch",
-            if expect_cuda { 42 } else { 44 },
-            if expect_cuda {
-                "正在安装 CUDA 版 Torch，文件较大，请保持网络连接..."
-            } else {
-                "正在安装 CPU 版 Torch..."
-            },
-        );
-        let mut command = Command::new(python_path);
-        command.args(&args);
-        let output = run_hidden_command_with_timeout(
-            &mut command,
-            remaining_bootstrap_timeout(deadline, TORCH_INSTALL_TIMEOUT)?,
-            if expect_cuda {
-                "CUDA Torch 安装"
-            } else {
-                "CPU Torch 安装"
-            },
-            Some(app),
-            "install_torch",
-            if expect_cuda { 46 } else { 48 },
-            if expect_cuda {
-                "正在安装 CUDA 版 Torch，文件较大，请稍候..."
-            } else {
-                "正在安装 CPU 版 Torch..."
-            },
-        )?;
-
-        if output.status.success() {
-            if !expect_cuda {
-                return Ok(());
-            }
-            let refreshed_capability =
-                runtime::capability::detect_torch_cuda_capability(python_path);
-            if refreshed_capability.torch_cuda_available {
-                return Ok(());
-            }
-        }
-
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-        let official_index = format!("https://download.pytorch.org/whl/{}", cuda_index);
-        let mut fallback_args = vec![
-            "-m".to_string(),
-            "pip".to_string(),
-            "install".to_string(),
-            "-U".to_string(),
-            "--disable-pip-version-check".to_string(),
-            "--no-input".to_string(),
-            "--timeout".to_string(),
-            PIP_NETWORK_TIMEOUT_SECONDS.to_string(),
-            "--retries".to_string(),
-            PIP_RETRIES.to_string(),
-        ];
-        if expect_cuda {
-            fallback_args.extend([
-                "--force-reinstall".to_string(),
-                "--no-cache-dir".to_string(),
-            ]);
-        }
-        fallback_args.extend([
-            "torch".to_string(),
-            "torchaudio".to_string(),
-            "--index-url".to_string(),
-            official_index,
-        ]);
-        emit_bootstrap_progress(
-            app,
-            "install_torch_fallback",
-            50,
-            "镜像源未完成，正在尝试 PyTorch 官方源...",
-        );
-        let mut fallback_command = Command::new(python_path);
-        fallback_command.args(&fallback_args);
-        let fallback_output = run_hidden_command_with_timeout(
-            &mut fallback_command,
-            remaining_bootstrap_timeout(deadline, TORCH_FALLBACK_TIMEOUT)?,
-            "Torch 官方源安装",
-            Some(app),
-            "install_torch_fallback",
-            54,
-            "正在尝试 PyTorch 官方源...",
-        )?;
-
-        if fallback_output.status.success() {
-            if !expect_cuda {
-                return Ok(());
-            }
-            let refreshed_capability =
-                runtime::capability::detect_torch_cuda_capability(python_path);
-            if refreshed_capability.torch_cuda_available {
-                return Ok(());
-            }
-        }
-
-        let fallback_stderr = String::from_utf8_lossy(&fallback_output.stderr).to_string();
-        Err(format!(
-            "torch 安装失败。{}: {} | PyTorch 官方: {}",
-            first_label,
-            stderr.trim(),
-            fallback_stderr.trim()
-        ))
-    };
-
-    if prefer_cuda {
-        let preferred_cuda_index = match &detected_cuda {
-            Some(cuda_ver) => {
-                let idx = runtime::capability::cuda_version_to_pytorch_index(&cuda_ver);
-                eprintln!(
-                    "[forisfstools] 检测到 NVIDIA GPU / CUDA {}, 使用 PyTorch {} 版本",
-                    cuda_ver, idx
-                );
-                idx
-            }
-            None if cfg!(windows) => {
-                eprintln!(
-                    "[forisfstools] 请求 CUDA 安装但未能读取 nvidia-smi，先尝试使用 cu124 轮子"
-                );
-                "cu124"
-            }
-            None => "cpu",
-        };
-
-        uninstall_existing_torch_packages(app, python_path, deadline);
-        match install_from_index(preferred_cuda_index, true) {
-            Ok(()) => return Ok(()),
-            Err(cuda_err) => {
-                eprintln!(
-                    "[forisfstools] CUDA torch 安装未成功，回退到 CPU 轮子: {}",
-                    cuda_err
-                );
-                match install_from_index("cpu", false) {
-                    Ok(()) => {
-                        return Err(format!(
-                            "CUDA torch 安装未成功；已回退安装 CPU torch。{}",
-                            cuda_err
-                        ));
-                    }
-                    Err(cpu_err) => {
-                        return Err(format!(
-                            "{} | CPU torch 回退安装也失败: {}",
-                            cuda_err, cpu_err
-                        ));
-                    }
-                }
-            }
-        }
-    }
-
-    eprintln!("[forisfstools] 未请求 CUDA，使用 PyTorch CPU 版本");
-    install_from_index("cpu", false)
 }
 
 fn detect_bootstrap_status(app: &AppHandle) -> BootstrapStatus {
@@ -2734,6 +2564,19 @@ fn make_job_token(song_id: &str) -> String {
     format!("{}:{}:{}", song_id, ts, seq)
 }
 
+pub(crate) fn register_separator_job(song_id: &str, pid: u32) {
+    set_job(
+        song_id,
+        JobHandle {
+            separator_pid: Some(pid),
+        },
+    );
+}
+
+pub(crate) fn clear_separator_job(song_id: &str) {
+    remove_job(song_id);
+}
+
 fn set_active_job_token(song_id: &str, job_token: &str) {
     let mut tokens = ACTIVE_JOB_TOKENS.lock().unwrap();
     if tokens.is_none() {
@@ -2756,6 +2599,12 @@ fn remove_job(song_id: &str) {
     if let Some(ref mut map) = *jobs {
         map.remove(song_id);
     }
+}
+
+fn song_has_live_processing_job(song_id: &str) -> bool {
+    separation_queue::is_queued(song_id)
+        || get_active_job_token(song_id).is_some()
+        || get_job(song_id).is_some()
 }
 
 fn spawn_in_own_process_group(command: &mut Command) -> io::Result<std::process::Child> {
@@ -2802,36 +2651,8 @@ fn terminate_song_processes(song_id: &str, force: bool) {
     }
     #[cfg(unix)]
     {
-        let output = match Command::new("ps")
-            .args(["-axo", "pid,pgid,command"])
-            .output()
-        {
-            Ok(output) => output,
-            Err(_) => return,
-        };
-        let text = String::from_utf8_lossy(&output.stdout);
-        let current_pid = std::process::id() as i32;
-        let mut process_groups = HashSet::new();
-
-        for line in text.lines().skip(1) {
-            if !line.contains(song_id) {
-                continue;
-            }
-            let mut parts = line.split_whitespace();
-            let pid = parts.next().and_then(|value| value.parse::<i32>().ok());
-            let pgid = parts.next().and_then(|value| value.parse::<i32>().ok());
-            if let (Some(pid), Some(pgid)) = (pid, pgid) {
-                if pid != current_pid && pgid > 0 {
-                    process_groups.insert(pgid);
-                }
-            }
-        }
-
-        for pgid in process_groups {
-            unsafe {
-                let signal = if force { libc::SIGKILL } else { libc::SIGTERM };
-                let _ = libc::kill(-(pgid as libc::pid_t), signal);
-            }
+        if let Some(job) = get_job(song_id) {
+            terminate_known_job(&job, force);
         }
     }
 }
@@ -5154,12 +4975,27 @@ async fn start_process(
         None => return Err("Song not found".to_string()),
     };
 
-    if song.status != "pending" && song.status != "error" && song.status != "cancelled" {
+    let live_job = song_has_live_processing_job(&song_id);
+    if live_job
+        || (song.status != "pending"
+            && song.status != "error"
+            && song.status != "cancelled"
+            && !(song.status == "queued" && !live_job))
+    {
         return Err(format!("Cannot process song with status: {}", song.status));
     }
 
-    if separation_queue::is_queued(&song_id) {
-        return Err("Song is already queued for processing".to_string());
+    {
+        let mut songs = SONGS.lock().unwrap();
+        if let Some(ref mut map) = *songs {
+            if let Some(s) = map.get_mut(&song_id) {
+                s.vocals_path = None;
+                s.instrumental_path = None;
+                s.original_mix_path = None;
+                s.error_message = None;
+                s.processing_stage = None;
+            }
+        }
     }
 
     let job_token = JobManager::prepare_song_job(&song_id);
@@ -5244,113 +5080,257 @@ fn process_song_with_onnx_skeleton(
     };
 
     let requested_providers = engine_health.requested_providers.clone();
-    let payload = serde_json::json!({
-        "success": false,
-        "error": message,
-        "error_code": if !engine_health.onnxruntime_available {
-            "ONNX_RUNTIME_UNAVAILABLE"
-        } else if !engine_health.default_model_ready {
-            "ONNX_ENGINE_NOT_READY"
-        } else if !engine_health.default_model_session_load_ok {
-            "ONNX_SESSION_LOAD_FAILED"
-        } else if !engine_health.default_model_metadata_ok {
-            "ONNX_MODEL_METADATA_FAILED"
-        } else {
-            "ONNX_ENGINE_PROBE_ONLY"
-        },
-        "stage": "checking_onnx",
-        "engine": engine_health.active_engine,
-        "requested_providers": requested_providers,
-        "selected_provider": engine_health.selected_provider,
-        "provider_fallback_reason": engine_health.provider_fallback_reason,
-        "onnxruntime_available": engine_health.onnxruntime_available,
-        "default_model_id": engine_health.default_model_id,
-        "default_model_path": engine_health.default_model_path,
-        "default_model_ready": engine_health.default_model_ready,
-        "default_model_session_load_ok": engine_health.default_model_session_load_ok,
-        "default_model_session_load_error": engine_health.default_model_session_load_error,
-        "default_model_metadata_ok": engine_health.default_model_metadata_ok,
-        "default_model_metadata_error": engine_health.default_model_metadata_error,
-        "default_model_input_shape": engine_health.default_model_input_shape,
-        "default_model_output_shape": engine_health.default_model_output_shape,
-        "default_model_dummy_inference_ok": engine_health.default_model_dummy_inference_ok,
-        "default_model_dummy_inference_error": engine_health.default_model_dummy_inference_error,
-        "high_quality_model_id": engine_health.high_quality_model_id,
-        "high_quality_model_path": engine_health.high_quality_model_path,
-        "high_quality_model_ready": engine_health.high_quality_model_ready,
-        "high_quality_model_session_load_ok": engine_health.high_quality_model_session_load_ok,
-        "high_quality_model_session_load_error": engine_health.high_quality_model_session_load_error,
-        "high_quality_model_metadata_ok": engine_health.high_quality_model_metadata_ok,
-        "high_quality_model_metadata_error": engine_health.high_quality_model_metadata_error,
-        "high_quality_model_input_shape": engine_health.high_quality_model_input_shape,
-        "high_quality_model_output_shape": engine_health.high_quality_model_output_shape,
-        "high_quality_model_dummy_inference_ok": engine_health.high_quality_model_dummy_inference_ok,
-        "high_quality_model_dummy_inference_error": engine_health.high_quality_model_dummy_inference_error,
-        "input_path": input_path,
-        "output_dir": output_dir.to_string_lossy(),
-        "debug_log_path": debug_log.to_string_lossy(),
-        "command_file_path": command_file.to_string_lossy(),
-    });
+    if !engine_health.onnxruntime_available
+        || !engine_health.default_model_ready
+        || !engine_health.default_model_session_load_ok
+        || !engine_health.default_model_metadata_ok
+    {
+        let payload = serde_json::json!({
+            "success": false,
+            "error": message,
+            "error_code": if !engine_health.onnxruntime_available {
+                "ONNX_RUNTIME_UNAVAILABLE"
+            } else if !engine_health.default_model_ready {
+                "ONNX_ENGINE_NOT_READY"
+            } else if !engine_health.default_model_session_load_ok {
+                "ONNX_SESSION_LOAD_FAILED"
+            } else {
+                "ONNX_MODEL_METADATA_FAILED"
+            },
+            "stage": "checking_onnx",
+            "engine": engine_health.active_engine,
+            "requested_providers": requested_providers,
+            "selected_provider": engine_health.selected_provider,
+            "provider_fallback_reason": engine_health.provider_fallback_reason,
+            "onnxruntime_available": engine_health.onnxruntime_available,
+            "default_model_id": engine_health.default_model_id,
+            "default_model_path": engine_health.default_model_path,
+            "default_model_ready": engine_health.default_model_ready,
+            "default_model_session_load_ok": engine_health.default_model_session_load_ok,
+            "default_model_session_load_error": engine_health.default_model_session_load_error,
+            "default_model_metadata_ok": engine_health.default_model_metadata_ok,
+            "default_model_metadata_error": engine_health.default_model_metadata_error,
+            "default_model_input_shape": engine_health.default_model_input_shape,
+            "default_model_output_shape": engine_health.default_model_output_shape,
+            "default_model_dummy_inference_ok": engine_health.default_model_dummy_inference_ok,
+            "default_model_dummy_inference_error": engine_health.default_model_dummy_inference_error,
+            "high_quality_model_id": engine_health.high_quality_model_id,
+            "high_quality_model_path": engine_health.high_quality_model_path,
+            "high_quality_model_ready": engine_health.high_quality_model_ready,
+            "high_quality_model_session_load_ok": engine_health.high_quality_model_session_load_ok,
+            "high_quality_model_session_load_error": engine_health.high_quality_model_session_load_error,
+            "high_quality_model_metadata_ok": engine_health.high_quality_model_metadata_ok,
+            "high_quality_model_metadata_error": engine_health.high_quality_model_metadata_error,
+            "high_quality_model_input_shape": engine_health.high_quality_model_input_shape,
+            "high_quality_model_output_shape": engine_health.high_quality_model_output_shape,
+            "high_quality_model_dummy_inference_ok": engine_health.high_quality_model_dummy_inference_ok,
+            "high_quality_model_dummy_inference_error": engine_health.high_quality_model_dummy_inference_error,
+            "input_path": input_path,
+            "output_dir": output_dir.to_string_lossy(),
+            "debug_log_path": debug_log.to_string_lossy(),
+            "command_file_path": command_file.to_string_lossy(),
+        });
+        let payload_text = payload.to_string();
+        let _ = fs::write(&result_file, &payload_text);
+        let _ = fs::write(&debug_result_file, &payload_text);
+        let _ = fs::write(
+            &command_file,
+            serde_json::json!({
+                "engine": "onnx",
+                "status": "separation_failed",
+                "onnx_mainline": true,
+                "selected_provider": engine_health.selected_provider,
+                "provider_fallback_reason": engine_health.provider_fallback_reason,
+            })
+            .to_string(),
+        );
+        let _ = fs::write(
+            &progress_file,
+            serde_json::json!({
+                "percent": 0,
+                "message": message,
+            })
+            .to_string(),
+        );
+        emit_error_for_job(&app, &song_id, &job_token, "checking_onnx", message);
+        update_song_status_for_job(
+            &song_id,
+            &job_token,
+            "error",
+            0,
+            Some("checking_onnx"),
+            Some(message),
+        );
+        return;
+    }
 
-    let _ = fs::write(
-        &progress_file,
-        serde_json::json!({
-            "percent": 5,
-            "message": message,
-        })
-        .to_string(),
+    emit_progress_for_job(
+        &app,
+        &song_id,
+        &job_token,
+        "normalizing_audio",
+        18,
+        "正在准备输入音频...",
+        Some(120),
     );
-    append_text_log(
-        &debug_log,
-        &format_log_block(
-            "onnx separation skeleton",
-            &[
-                ("song_id", song_id.clone()),
-                ("job_token", job_token.clone()),
-                ("input_path", input_path),
-                ("output_dir", output_dir.to_string_lossy().to_string()),
-                ("requested_providers", requested_providers.join(",")),
-                (
-                    "onnxruntime_available",
-                    engine_health.onnxruntime_available.to_string(),
-                ),
-                (
-                    "default_model_ready",
-                    engine_health.default_model_ready.to_string(),
-                ),
-                (
-                    "default_model_session_load_ok",
-                    engine_health.default_model_session_load_ok.to_string(),
-                ),
-                (
-                    "default_model_metadata_ok",
-                    engine_health.default_model_metadata_ok.to_string(),
-                ),
-            ],
-        ),
+    update_song_status_for_job(
+        &song_id,
+        &job_token,
+        "processing",
+        18,
+        Some("normalizing_audio"),
+        None,
     );
+
+    let result = match separation::onnx_engine::run_onnx_separation(
+        &app,
+        &song_id,
+        Path::new(&input_path),
+        &output_dir,
+        Path::new(&engine_health.default_model_path),
+        &requested_providers,
+        &engine_health.selected_provider,
+    ) {
+        Ok(result) => result,
+        Err(err) => serde_json::json!({
+            "success": false,
+            "error": err,
+            "error_code": "ONNX_AUDIO_PREP_FAILED",
+            "stage": "normalizing_audio",
+            "engine": engine_health.active_engine,
+            "requested_providers": requested_providers,
+            "selected_provider": engine_health.selected_provider,
+            "provider_fallback_reason": engine_health.provider_fallback_reason,
+            "onnxruntime_available": engine_health.onnxruntime_available,
+            "default_model_id": engine_health.default_model_id,
+            "default_model_path": engine_health.default_model_path,
+            "default_model_ready": engine_health.default_model_ready,
+            "default_model_session_load_ok": engine_health.default_model_session_load_ok,
+            "default_model_session_load_error": engine_health.default_model_session_load_error,
+            "default_model_metadata_ok": engine_health.default_model_metadata_ok,
+            "default_model_metadata_error": engine_health.default_model_metadata_error,
+            "default_model_input_shape": engine_health.default_model_input_shape,
+            "default_model_output_shape": engine_health.default_model_output_shape,
+            "default_model_dummy_inference_ok": engine_health.default_model_dummy_inference_ok,
+            "default_model_dummy_inference_error": engine_health.default_model_dummy_inference_error,
+            "high_quality_model_id": engine_health.high_quality_model_id,
+            "high_quality_model_path": engine_health.high_quality_model_path,
+            "high_quality_model_ready": engine_health.high_quality_model_ready,
+            "high_quality_model_session_load_ok": engine_health.high_quality_model_session_load_ok,
+            "high_quality_model_session_load_error": engine_health.high_quality_model_session_load_error,
+            "high_quality_model_metadata_ok": engine_health.high_quality_model_metadata_ok,
+            "high_quality_model_metadata_error": engine_health.high_quality_model_metadata_error,
+            "high_quality_model_input_shape": engine_health.high_quality_model_input_shape,
+            "high_quality_model_output_shape": engine_health.high_quality_model_output_shape,
+            "high_quality_model_dummy_inference_ok": engine_health.high_quality_model_dummy_inference_ok,
+            "high_quality_model_dummy_inference_error": engine_health.high_quality_model_dummy_inference_error,
+            "input_path": input_path,
+            "output_dir": output_dir.to_string_lossy(),
+            "debug_log_path": debug_log.to_string_lossy(),
+            "command_file_path": command_file.to_string_lossy(),
+        }),
+    };
+
+    let payload_text = result.to_string();
+    let _ = fs::write(&result_file, &payload_text);
+    let _ = fs::write(&debug_result_file, payload_text);
     let _ = fs::write(
         &command_file,
         serde_json::json!({
             "engine": "onnx",
-            "status": "phase_onnx_a_skeleton",
+            "status": if result.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+                "separation_done"
+            } else {
+                "separation_failed"
+            },
             "onnx_mainline": true,
+            "selected_provider": result.get("selectedProvider").cloned().unwrap_or(serde_json::Value::Null),
+            "provider_fallback_reason": result.get("providerFallbackReason").cloned().unwrap_or(serde_json::Value::Null),
         })
         .to_string(),
     );
-    let payload_text = payload.to_string();
-    let _ = fs::write(&result_file, &payload_text);
-    let _ = fs::write(&debug_result_file, payload_text);
+    let _ = fs::write(
+        &progress_file,
+        serde_json::json!({
+            "percent": if result.get("success").and_then(|v| v.as_bool()).unwrap_or(false) { 100 } else { 0 },
+            "message": if result.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+                "ONNX 分离已完成"
+            } else {
+                result.get("error").and_then(|v| v.as_str()).unwrap_or("ONNX 分离失败")
+            },
+        })
+        .to_string(),
+    );
 
-    emit_error_for_job(&app, &song_id, &job_token, "checking_onnx", message);
+    if result
+        .get("success")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        let vocals_path = output_dir.join("vocals.wav");
+        let instrumental_path = output_dir.join("instrumental.wav");
+        let mut original_mix_path = None;
+        if let Ok(mix_path) = build_original_mix(
+            &vocals_path.to_string_lossy(),
+            &instrumental_path.to_string_lossy(),
+        ) {
+            original_mix_path = Some(mix_path);
+        }
+
+        {
+            let mut songs = SONGS.lock().unwrap();
+            if let Some(ref mut map) = *songs {
+                if let Some(song) = map.get_mut(&song_id) {
+                    song.vocals_path = Some(vocals_path.to_string_lossy().to_string());
+                    song.instrumental_path = Some(instrumental_path.to_string_lossy().to_string());
+                    if let Some(mix_path) = original_mix_path.clone() {
+                        song.original_mix_path = Some(mix_path);
+                    }
+                    song.error_message = None;
+                    song.processing_stage = Some("separation_done".to_string());
+                    song.status = "ready".to_string();
+                    song.progress = 100;
+                }
+            }
+        }
+        save_songs_to_disk();
+
+        emit_progress_for_job(
+            &app,
+            &song_id,
+            &job_token,
+            "complete",
+            100,
+            "ONNX 分离已完成",
+            None,
+        );
+        update_song_status_for_job(&song_id, &job_token, "ready", 100, Some("complete"), None);
+
+        let completed_song = {
+            let songs = SONGS.lock().unwrap();
+            songs.as_ref().and_then(|map| map.get(&song_id).cloned())
+        };
+        if let Some(song) = completed_song {
+            let _ = app.emit("processing-complete", serde_json::json!({ "song": song }));
+        }
+        return;
+    }
+
+    let error_message = result
+        .get("error")
+        .and_then(|v| v.as_str())
+        .unwrap_or("ONNX separation failed")
+        .to_string();
+    emit_error_for_job(&app, &song_id, &job_token, "processing", &error_message);
     update_song_status_for_job(
         &song_id,
         &job_token,
         "error",
         0,
-        Some("checking_onnx"),
-        Some(message),
+        Some("processing"),
+        Some(&error_message),
     );
+    return;
 }
 
 pub(crate) fn process_song_background(
@@ -5388,10 +5368,22 @@ async fn delete_song(id: String) -> Result<(), String> {
     };
 
     if let Some(song) = song_to_delete.as_ref() {
-        if song.status == "queued" || song.status == "processing" || song.status == "cancelling" {
+        let live_job = song_has_live_processing_job(&id);
+        let is_terminal_cancelled = song.status == "cancelled" || song.status == "error";
+        let is_stale_cancelling = song.status == "cancelling" && !live_job;
+        let is_stale_queued = song.status == "queued" && !live_job;
+        if !is_terminal_cancelled && !is_stale_cancelling && !is_stale_queued {
             return Err("Cannot delete a song that is queued or being processed".to_string());
         }
     }
+
+    // Clear any leftover job state so a previously cancelled song can be removed cleanly.
+    if let Some(job) = get_job(&id) {
+        terminate_known_job(&job, true);
+    }
+    clear_active_job_token(&id);
+    clear_cancel_flag(&id);
+    remove_job(&id);
 
     {
         let mut songs = SONGS.lock().unwrap();
@@ -5418,7 +5410,7 @@ async fn delete_song(id: String) -> Result<(), String> {
 async fn reprocess_song(
     app: AppHandle,
     song_id: String,
-    prefer_onnx_provider: bool,
+    _prefer_onnx_provider: bool,
 ) -> Result<(), String> {
     let song = {
         let songs = SONGS.lock().unwrap();
