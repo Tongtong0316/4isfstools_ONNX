@@ -9,9 +9,11 @@ pub(crate) mod onnx_engine;
 
 use std::path::Path;
 
+use tauri::AppHandle;
+
 use crate::models::SeparationEngineHealth;
 
-pub(crate) fn detect_engine_health(models_dir: &Path) -> SeparationEngineHealth {
+pub(crate) fn detect_engine_health(app: &AppHandle, models_dir: &Path) -> SeparationEngineHealth {
     let registry = model_registry::ModelRegistry::from_models_dir(models_dir);
-    onnx_engine::OnnxSeparationEngine::new(registry).health()
+    onnx_engine::OnnxSeparationEngine::new(app.clone(), registry).health()
 }

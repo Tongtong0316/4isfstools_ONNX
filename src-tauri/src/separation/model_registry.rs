@@ -70,4 +70,14 @@ impl ModelRegistry {
     pub(crate) fn model_ready(&self, model: &SeparationModel) -> bool {
         model.path_under(&self.models_dir).exists()
     }
+
+    pub(crate) fn default_model_path(&self) -> Option<PathBuf> {
+        self.default_model()
+            .map(|model| model.path_under(&self.models_dir))
+    }
+
+    pub(crate) fn high_quality_model_path(&self) -> Option<PathBuf> {
+        self.high_quality_model()
+            .map(|model| model.path_under(&self.models_dir))
+    }
 }

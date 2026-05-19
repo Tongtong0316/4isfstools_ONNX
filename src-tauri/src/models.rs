@@ -145,14 +145,22 @@ pub struct SeparationEngineHealth {
     pub active_engine: String,
     pub legacy_fallback_engine: String,
     pub requested_providers: Vec<String>,
+    pub available_providers: Vec<String>,
     pub selected_provider: String,
     pub provider_fallback_reason: Option<String>,
     pub default_model_id: String,
+    pub default_model_path: String,
     pub default_model_ready: bool,
+    pub default_model_input_shape: Option<Vec<String>>,
+    pub default_model_output_shape: Option<Vec<String>>,
     pub high_quality_model_id: Option<String>,
+    pub high_quality_model_path: String,
     pub high_quality_model_ready: bool,
+    pub high_quality_model_input_shape: Option<Vec<String>>,
+    pub high_quality_model_output_shape: Option<Vec<String>>,
     pub onnxruntime_available: bool,
     pub legacy_demucs_available: bool,
+    pub probe_error: Option<String>,
 }
 
 impl Default for SeparationEngineHealth {
@@ -161,14 +169,66 @@ impl Default for SeparationEngineHealth {
             active_engine: "onnx".to_string(),
             legacy_fallback_engine: "legacy_demucs".to_string(),
             requested_providers: vec!["CPUExecutionProvider".to_string()],
+            available_providers: vec!["unavailable".to_string()],
             selected_provider: "CPUExecutionProvider".to_string(),
             provider_fallback_reason: Some("ONNX Runtime API not initialized".to_string()),
             default_model_id: "uvr_mdxnet_9482".to_string(),
+            default_model_path: String::new(),
             default_model_ready: false,
+            default_model_input_shape: None,
+            default_model_output_shape: None,
             high_quality_model_id: Some("bs_polarformer_fp16".to_string()),
+            high_quality_model_path: String::new(),
             high_quality_model_ready: false,
+            high_quality_model_input_shape: None,
+            high_quality_model_output_shape: None,
             onnxruntime_available: false,
             legacy_demucs_available: false,
+            probe_error: Some("ONNX Runtime API not initialized".to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OnnxRuntimeProbeResult {
+    pub onnxruntime_available: bool,
+    pub available_providers: Vec<String>,
+    pub selected_provider: String,
+    pub provider_fallback_reason: Option<String>,
+    pub probe_error: Option<String>,
+}
+
+impl Default for OnnxRuntimeProbeResult {
+    fn default() -> Self {
+        Self {
+            onnxruntime_available: false,
+            available_providers: vec!["unavailable".to_string()],
+            selected_provider: "CPUExecutionProvider".to_string(),
+            provider_fallback_reason: Some("ONNX Runtime probe not initialized".to_string()),
+            probe_error: Some("ONNX Runtime probe not initialized".to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OnnxModelProbeResult {
+    pub model_path: String,
+    pub model_ready: bool,
+    pub input_shape: Option<Vec<String>>,
+    pub output_shape: Option<Vec<String>>,
+    pub probe_error: Option<String>,
+}
+
+impl Default for OnnxModelProbeResult {
+    fn default() -> Self {
+        Self {
+            model_path: String::new(),
+            model_ready: false,
+            input_shape: None,
+            output_shape: None,
+            probe_error: None,
         }
     }
 }

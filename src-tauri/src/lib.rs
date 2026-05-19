@@ -370,7 +370,7 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
     let python_path = runtime::python::get_python_path(app);
     let python_exists = python_path.exists();
     let torch_capability = runtime::capability::detect_torch_cuda_capability(&python_path);
-    let mut separation_engine = separation::detect_engine_health(&get_models_dir(app));
+    let mut separation_engine = separation::detect_engine_health(app, &get_models_dir(app));
     if python_exists {
         separation_engine.onnxruntime_available =
             runtime::capability::python_module_is_available(&python_path, "onnxruntime", 6)
@@ -2770,7 +2770,7 @@ fn detect_bootstrap_status(app: &AppHandle) -> BootstrapStatus {
     let python_path = runtime::python::get_python_path(app);
     let python_ready = python_path.exists();
     let torch_capability = runtime::capability::detect_torch_cuda_capability(&python_path);
-    let mut separation_engine = separation::detect_engine_health(&get_models_dir(app));
+    let mut separation_engine = separation::detect_engine_health(app, &get_models_dir(app));
     if python_ready {
         separation_engine.onnxruntime_available =
             runtime::capability::python_module_is_available(&python_path, "onnxruntime", 6)
@@ -5384,7 +5384,7 @@ fn process_song_with_onnx_skeleton(
         None,
     );
 
-    let mut engine_health = separation::detect_engine_health(&get_models_dir(&app));
+    let mut engine_health = separation::detect_engine_health(&app, &get_models_dir(&app));
     let python_path = runtime::python::get_python_path(&app);
     if python_path.exists() {
         engine_health.onnxruntime_available =
