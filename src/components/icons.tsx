@@ -1,3 +1,5 @@
+import React from "react";
+
 function icon(paths: React.ReactNode, extra?: React.ReactNode) {
   return ({ className = "" }: { className?: string }) => (
     <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -79,3 +81,29 @@ export const InfoIcon = icon(
     <path d="M12 8v1M12 11v5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
   </>
 );
+
+type ThemeSwatchProps = {
+  bgColor: string;
+  accentColor: string;
+  className?: string;
+};
+
+let _swatchId = 0;
+export function ThemeSwatch({ bgColor, accentColor, className = "" }: ThemeSwatchProps) {
+  const clipId = React.useMemo(() => `ts-${++_swatchId}`, []);
+  return (
+    <span className={className} style={{ overflow: "hidden" }}>
+      <svg width="100%" height="100%" viewBox="0 0 64 64" aria-hidden="true" style={{ display: "block" }}>
+        <defs>
+          <clipPath id={clipId}>
+            <rect width={64} height={64} rx={14} ry={14} />
+          </clipPath>
+        </defs>
+        <g clipPath={`url(#${clipId})`}>
+          <rect width={64} height={64} fill={bgColor} />
+          <polygon points="64,0 64,64 0,64" fill={accentColor} />
+        </g>
+      </svg>
+    </span>
+  );
+}

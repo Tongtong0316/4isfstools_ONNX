@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import type { CSSProperties } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -7,7 +6,7 @@ import Playlist from "./components/Playlist";
 import VocalWaveformPreview, { buildWaveformPeaks } from "./components/VocalWaveformPreview";
 import { Song, ProcessingStage, ProcessingStatus } from "./types";
 import LyricsPanel from "./components/lyrics/LyricsPanel";
-import { MicIcon, MusicNoteIcon } from "./components/icons";
+import { MicIcon, MusicNoteIcon, ThemeSwatch, CheckIcon } from "./components/icons";
 import type { LyricDocument } from "./types/lyrics";
 
 const MEDIA_IMPORT_EXTENSIONS = [
@@ -149,7 +148,7 @@ type BootstrapProgress = {
 
 type SettingsPane = "runtime" | "audioOutput" | "paths" | "appearance" | "about";
 
-type ColorThemeId = "peach" | "aurora" | "graphite" | "studio" | "midnight" | "daylight" | "paper" | "passion" | "double" | "zero" | "manifesto";
+type ColorThemeId = "peach" | "aurora" | "daylight" | "ghost_bride" | "zero" | "double" | "passion" | "breeze" | "graphite" | "studio" | "midnight" | "paper" | "manifesto";
 
 const COLOR_THEMES: Array<{
   id: ColorThemeId;
@@ -179,6 +178,60 @@ const COLOR_THEMES: Array<{
     text: "#f8fafc",
   },
   {
+    id: "daylight",
+    name: "天使花嫁",
+    description: "纯白与金色交织的浅色主题，圣洁明亮。",
+    bg: "#faf8f5",
+    card: "#ffffff",
+    accent: "#D4AF37",
+    text: "#2d2a24",
+  },
+  {
+    id: "ghost_bride",
+    name: "鬼花嫁",
+    description: "正红与正黑交织的暗色主题，如夜半花嫁般浓烈。",
+    bg: "#0a0a0a",
+    card: "#1a1515",
+    accent: "#dc2626",
+    text: "#e6dcdc",
+  },
+  {
+    id: "zero",
+    name: "梵高的星空",
+    description: "深蓝夜空与金黄星漩，致敬梵高的传世笔触。",
+    bg: "#07111f",
+    card: "#13233d",
+    accent: "#facc15",
+    text: "#f8fafc",
+  },
+  {
+    id: "double",
+    name: "津韵Double",
+    description: "白灰清爽，适合长时间日间使用。",
+    bg: "#f3f4f6",
+    card: "#ffffff",
+    accent: "#64748b",
+    text: "#111827",
+  },
+  {
+    id: "passion",
+    name: "慵倦晚霞",
+    description: "粉灰与雾蓝的浅色体系，柔和但保持清晰对比。",
+    bg: "#f7eef1",
+    card: "#e8eff7",
+    accent: "#527396",
+    text: "#1f2937",
+  },
+  {
+    id: "breeze",
+    name: "零度天堂",
+    description: "清爽蓝天与纯白，仿佛微风拂过的浅色主题。",
+    bg: "#f4f6fb",
+    card: "#ffffff",
+    accent: "#2563eb",
+    text: "#111827",
+  },
+  {
     id: "graphite",
     name: "石墨夜色",
     description: "低眩光深色，适合长时间编辑。",
@@ -206,15 +259,6 @@ const COLOR_THEMES: Array<{
     text: "#f8fafc",
   },
   {
-    id: "daylight",
-    name: "日间清爽",
-    description: "浅色高对比，适合明亮环境。",
-    bg: "#f4f6fb",
-    card: "#ffffff",
-    accent: "#2563eb",
-    text: "#111827",
-  },
-  {
     id: "paper",
     name: "纸面暖白",
     description: "柔和浅色，减少白底刺眼感。",
@@ -224,36 +268,9 @@ const COLOR_THEMES: Array<{
     text: "#1f2933",
   },
   {
-    id: "passion",
-    name: "慵倦晚霞",
-    description: "粉灰与雾蓝的浅色体系，柔和但保持清晰对比。",
-    bg: "#f7eef1",
-    card: "#e8eff7",
-    accent: "#527396",
-    text: "#1f2937",
-  },
-  {
-    id: "double",
-    name: "津韵Double",
-    description: "白灰清爽，适合长时间日间使用。",
-    bg: "#f3f4f6",
-    card: "#ffffff",
-    accent: "#64748b",
-    text: "#111827",
-  },
-  {
-    id: "zero",
-    name: "零度天堂",
-    description: "深蓝夜空与星光金黄，冷冽梦幻的夜间主题。",
-    bg: "#07111f",
-    card: "#13233d",
-    accent: "#facc15",
-    text: "#f8fafc",
-  },
-  {
     id: "manifesto",
     name: "高级纲领",
-    description: "青绿主调与紫色强调，黑色基底配合浅紫辅助。",
+    description: "逃げちゃダメだ　逃げちゃダメだ　逃げちゃダメだ",
     bg: "#0b0b10",
     card: "#1e1632",
     accent: "#A2DA5A",
@@ -2041,7 +2058,7 @@ function App() {
                           vocalWaveformEnabled ? "is-active" : "hover:bg-[var(--button-hover-bg)]"
                         }`}
                       >
-                        {vocalWaveformEnabled ? "显示原唱波形" : "隐藏原唱波形"}
+                        {vocalWaveformEnabled ? "隐藏原唱波形" : "显示原唱波形"}
                       </button>
                     </div>
                   </div>
@@ -2229,7 +2246,7 @@ function App() {
                     <div data-debug-id="settings-page-title" className="settings-page-title text-[36px] font-extrabold leading-[1.12] tracking-tight text-[var(--text-primary)]">
                       {SETTINGS_PAGE_COPY[settingsPane].title}
                     </div>
-                    <div className="settings-page-description mt-2 text-[15px] leading-6 text-[var(--text-secondary)]">
+                    <div className="settings-page-description mt-2 whitespace-pre-line text-[15px] leading-6 text-[var(--text-secondary)]">
                       {SETTINGS_PAGE_COPY[settingsPane].description}
                     </div>
                   </div>
@@ -2389,18 +2406,25 @@ function App() {
                             }`}
                           >
                             {active && (
-                              <span className="absolute right-3 top-3 inline-flex h-6 items-center justify-center rounded-full bg-[var(--accent)] px-2 text-[11px] font-bold text-white">
+                              <span
+                                className="pointer-events-none absolute right-8 bottom-4 inline-flex h-8 min-w-[92px] items-center justify-center gap-[8px] whitespace-nowrap rounded-full border px-[14px] text-[14px] font-semibold leading-none"
+                                style={{
+                                  backgroundColor: "color-mix(in srgb, var(--accent) 14%, transparent)",
+                                  borderColor: "color-mix(in srgb, var(--accent) 45%, transparent)",
+                                  color: "var(--accent)",
+                                  boxShadow: "0 0 12px color-mix(in srgb, var(--accent) 12%, transparent)",
+                                }}
+                              >
+                                <CheckIcon className="h-3.5 w-3.5" />
                                 已选择
                               </span>
                             )}
                             <div className="flex w-full min-w-0 items-start gap-3 pr-16">
                               <div className="shrink-0">
-                                <span
+                                <ThemeSwatch
+                                  bgColor={theme.card}
+                                  accentColor={theme.accent}
                                   className="theme-swatch settings-theme-swatch block h-10 w-10 rounded-[12px] border border-white/10"
-                                  style={{
-                                    "--theme-bg": theme.id === "manifesto" ? theme.card : theme.bg,
-                                    "--theme-card": theme.id === "manifesto" ? theme.accent : theme.card,
-                                  } as CSSProperties & Record<string, string>}
                                 />
                               </div>
                               <div className="min-w-0">
@@ -2412,7 +2436,7 @@ function App() {
                                 </div>
                               </div>
                             </div>
-                            <div className="mt-4 flex w-full items-center gap-2">
+                            <div className="mt-4 flex w-full items-center gap-2 pr-[130px]">
                               {[theme.bg, theme.card, theme.accent, theme.text].map((color) => (
                                 <span
                                   key={color}
@@ -2421,7 +2445,7 @@ function App() {
                                 />
                               ))}
                             </div>
-                            <div className="mt-3 line-clamp-2 text-[12px] leading-5 text-[var(--text-secondary)]">
+                            <div className="mt-3 line-clamp-2 pr-[130px] text-[12px] leading-5 text-[var(--text-secondary)]">
                               示例文字：歌词编辑、依赖状态与按钮文本保持清晰可读。
                             </div>
                           </button>

@@ -223,18 +223,45 @@
 }
 
 :root[data-theme="daylight"] {
-  --bg-primary: #f4f6fb;
+  --bg-primary: #faf8f5;
   --bg-secondary: #ffffff;
-  --bg-tertiary: #eef2f7;
-  --bg-card: #f8fafc;
-  --accent: #2563eb;
-  --accent-hover: #1d4ed8;
-  --accent2: #0f766e;
-  --text-primary: #111827;
-  --text-secondary: #475569;
-  --text-muted: #64748b;
-  --text-dim: #94a3b8;
-  --border: #d7dee9;
+  --bg-tertiary: #f5f0e8;
+  --bg-card: #fefcf9;
+  --accent: #D4AF37;
+  --accent-hover: #C5A028;
+  --accent2: #f0d68a;
+  --text-primary: #2d2a24;
+  --text-secondary: #5c554a;
+  --text-muted: #8c8377;
+  --text-dim: #b0a698;
+  --border: #e8e0d4;
+  --surface-base: #faf8f5;
+  --surface-panel: #ffffff;
+  --surface-card: #fefcf9;
+  --surface-elevated: #f5f0e8;
+  --surface-muted: #f0ece5;
+  --input-bg: #ffffff;
+  --input-border: rgba(212, 175, 55, 0.30);
+  --border-soft: rgba(212, 175, 55, 0.14);
+  --border-medium: rgba(212, 175, 55, 0.26);
+  --accent-soft: rgba(212, 175, 55, 0.12);
+  --selected-bg: rgba(212, 175, 55, 0.14);
+  --selected-border: rgba(212, 175, 55, 0.40);
+  --button-bg: #ffffff;
+  --button-hover-bg: #f5f0e8;
+  --chip-bg: #ffffff;
+  --chip-border: rgba(212, 175, 55, 0.18);
+  --alert-info-bg: #f5f0e8;
+  --alert-info-border: rgba(212, 175, 55, 0.24);
+  --progress-track: rgba(212, 175, 55, 0.16);
+  --progress-fill: #D4AF37;
+  --focus-ring: #D4AF37;
+  --header-bg: rgba(255, 255, 255, 0.92);
+  --waveform-panel-bg: rgba(255, 255, 255, 0.76);
+  --waveform-overlay-bg: rgba(245, 240, 232, 0.72);
+  --waveform-original: #D4AF37;
+  --waveform-playhead: #D4AF37;
+  --waveform-playhead-glow: rgba(212, 175, 55, 0.36);
   --danger: #dc2626;
   --dangerHover: #b91c1c;
   --dangerActive: #991b1b;
@@ -502,8 +529,129 @@
   --dangerBorder: rgba(248, 113, 113, 0.3);
 }
 
+:root[data-theme="ghost_bride"] {
+  --bg-primary: #0a0a0a;
+  --bg-secondary: #141212;
+  --bg-tertiary: #1e1a1a;
+  --bg-card: #1a1515;
+  --accent: #dc2626;
+  --accent-hover: #ef4444;
+  --accent2: #f87171;
+  --text-primary: #e6dcdc;
+  --text-secondary: #cbb8b8;
+  --text-muted: #a08a8a;
+  --text-dim: #7a6060;
+  --border: rgba(220, 38, 38, 0.22);
+  --surface-base: #0a0a0a;
+  --surface-panel: #141212;
+  --surface-card: #1a1515;
+  --surface-elevated: #221c1c;
+  --surface-muted: #2b2020;
+  --input-bg: #0d0a0a;
+  --input-border: rgba(220, 38, 38, 0.28);
+  --border-soft: rgba(220, 38, 38, 0.16);
+  --border-medium: rgba(220, 38, 38, 0.30);
+  --accent-soft: rgba(220, 38, 38, 0.16);
+  --selected-bg: rgba(220, 38, 38, 0.16);
+  --selected-border: rgba(220, 38, 38, 0.45);
+  --button-bg: rgba(220, 38, 38, 0.18);
+  --button-hover-bg: rgba(248, 113, 113, 0.18);
+  --chip-bg: rgba(10, 10, 10, 0.56);
+  --chip-border: rgba(220, 38, 38, 0.22);
+  --alert-info-bg: rgba(220, 38, 38, 0.12);
+  --alert-info-border: rgba(248, 113, 113, 0.22);
+  --progress-track: rgba(248, 113, 113, 0.18);
+  --progress-fill: #dc2626;
+  --focus-ring: rgba(220, 38, 38, 0.40);
+  --header-bg: rgba(10, 10, 10, 0.92);
+  --header-border: rgba(220, 38, 38, 0.26);
+  --status-success: #ef4444;
+  --status-neutral: #a08989;
+  --stats-text: #cbb8b8;
+  --primary-button-bg: #dc2626;
+  --primary-button-text: #e6dcdc;
+  --ghost-button-bg: rgba(220, 38, 38, 0.08);
+  --ghost-button-hover-bg: rgba(220, 38, 38, 0.16);
+  --panel-border: rgba(220, 38, 38, 0.22);
+  --panel-accent-border: rgba(248, 113, 113, 0.32);
+  --panel-glow: rgba(220, 38, 38, 0.14);
+  --panel-inner-border: rgba(255, 255, 255, 0.04);
+  --level-track: rgba(248, 113, 113, 0.18);
+  --level-instrumental: #f87171;
+  --level-vocal: #dc2626;
+  --level-peak: #ef4444;
+  --level-label: #cbb8b8;
+  --level-border: rgba(220, 38, 38, 0.22);
+  --waveform-panel-bg: rgba(10, 10, 10, 0.84);
+  --waveform-overlay-bg: rgba(26, 21, 21, 0.72);
+  --waveform-overlay-border: rgba(248, 113, 113, 0.22);
+  --waveform-base: rgba(248, 113, 113, 0.30);
+  --waveform-original: rgba(248, 113, 113, 0.58);
+  --waveform-instrumental: rgba(220, 38, 38, 0.58);
+  --waveform-vocal: rgba(248, 113, 113, 0.64);
+  --waveform-muted: rgba(160, 137, 137, 0.22);
+  --waveform-text: #cbb8b8;
+  --waveform-shadow: 0 18px 44px rgba(0, 0, 0, 0.46);
+  --waveform-playhead: #ef4444;
+  --waveform-playhead-glow: rgba(220, 38, 38, 0.42);
+  --waveform-playhead-shadow: 0 0 16px rgba(220, 38, 38, 0.28);
+  --danger: #f87171;
+  --dangerHover: #ef4444;
+  --dangerActive: #dc2626;
+  --dangerSoft: rgba(248, 113, 113, 0.15);
+  --dangerBorder: rgba(248, 113, 113, 0.3);
+}
+
+:root[data-theme="breeze"] {
+  --bg-primary: #f4f6fb;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #eef2f7;
+  --bg-card: #f8fafc;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent2: #0284c7;
+  --text-primary: #111827;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+  --text-dim: #94a3b8;
+  --border: #d7dee9;
+  --surface-base: #f4f6fb;
+  --surface-panel: #ffffff;
+  --surface-card: #f8fafc;
+  --surface-elevated: #eef2f7;
+  --surface-muted: #e8ecf3;
+  --input-bg: #ffffff;
+  --input-border: rgba(37, 99, 235, 0.28);
+  --border-soft: rgba(37, 99, 235, 0.12);
+  --border-medium: rgba(37, 99, 235, 0.24);
+  --accent-soft: rgba(37, 99, 235, 0.10);
+  --selected-bg: rgba(37, 99, 235, 0.12);
+  --selected-border: rgba(37, 99, 235, 0.38);
+  --button-bg: #ffffff;
+  --button-hover-bg: #eef2f7;
+  --chip-bg: #ffffff;
+  --chip-border: rgba(37, 99, 235, 0.16);
+  --alert-info-bg: #eef2f7;
+  --alert-info-border: rgba(37, 99, 235, 0.22);
+  --progress-track: rgba(37, 99, 235, 0.14);
+  --progress-fill: #2563eb;
+  --focus-ring: #2563eb;
+  --header-bg: rgba(255, 255, 255, 0.92);
+  --waveform-panel-bg: rgba(255, 255, 255, 0.76);
+  --waveform-overlay-bg: rgba(238, 242, 247, 0.72);
+  --waveform-original: #2563eb;
+  --waveform-playhead: #2563eb;
+  --waveform-playhead-glow: rgba(37, 99, 235, 0.36);
+  --danger: #dc2626;
+  --dangerHover: #b91c1c;
+  --dangerActive: #991b1b;
+  --dangerSoft: rgba(220, 38, 38, 0.1);
+  --dangerBorder: rgba(220, 38, 38, 0.25);
+}
+
 :root[data-theme="peach"] .theme-aware-surface,
 :root[data-theme="daylight"] .theme-aware-surface,
+:root[data-theme="breeze"] .theme-aware-surface,
 :root[data-theme="paper"] .theme-aware-surface,
 :root[data-theme="passion"] .theme-aware-surface,
 :root[data-theme="double"] .theme-aware-surface {
@@ -512,6 +660,7 @@
 
 :root[data-theme="peach"] .theme-subtle-surface,
 :root[data-theme="daylight"] .theme-subtle-surface,
+:root[data-theme="breeze"] .theme-subtle-surface,
 :root[data-theme="paper"] .theme-subtle-surface,
 :root[data-theme="passion"] .theme-subtle-surface,
 :root[data-theme="double"] .theme-subtle-surface {
@@ -752,8 +901,7 @@ html, body {
 }
 
 .theme-swatch {
-  background:
-    linear-gradient(135deg, var(--theme-bg) 0 48%, var(--theme-card) 48% 100%);
+  overflow: hidden;
 }
 
 .ui-text-ellipsis {
@@ -1629,6 +1777,7 @@ html, body {
 
 :root[data-theme="peach"] .context-menu,
 :root[data-theme="daylight"] .context-menu,
+:root[data-theme="breeze"] .context-menu,
 :root[data-theme="paper"] .context-menu,
 :root[data-theme="passion"] .context-menu,
 :root[data-theme="double"] .context-menu {
@@ -1684,6 +1833,7 @@ html, body {
 
 :root[data-theme="peach"] .status-badge-ok,
 :root[data-theme="daylight"] .status-badge-ok,
+:root[data-theme="breeze"] .status-badge-ok,
 :root[data-theme="paper"] .status-badge-ok,
 :root[data-theme="passion"] .status-badge-ok,
 :root[data-theme="double"] .status-badge-ok {
@@ -1692,6 +1842,7 @@ html, body {
 
 :root[data-theme="peach"] .status-badge-warning,
 :root[data-theme="daylight"] .status-badge-warning,
+:root[data-theme="breeze"] .status-badge-warning,
 :root[data-theme="paper"] .status-badge-warning,
 :root[data-theme="passion"] .status-badge-warning,
 :root[data-theme="double"] .status-badge-warning {
@@ -1700,6 +1851,7 @@ html, body {
 
 :root[data-theme="peach"] .status-badge-info,
 :root[data-theme="daylight"] .status-badge-info,
+:root[data-theme="breeze"] .status-badge-info,
 :root[data-theme="paper"] .status-badge-info,
 :root[data-theme="passion"] .status-badge-info,
 :root[data-theme="double"] .status-badge-info {
@@ -1708,6 +1860,7 @@ html, body {
 
 :root[data-theme="peach"] .status-badge-error,
 :root[data-theme="daylight"] .status-badge-error,
+:root[data-theme="breeze"] .status-badge-error,
 :root[data-theme="paper"] .status-badge-error,
 :root[data-theme="passion"] .status-badge-error,
 :root[data-theme="double"] .status-badge-error {

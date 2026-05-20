@@ -539,7 +539,11 @@ export default function Playlist({
 
   const renderSongModelBadge = (song: Song) => {
     if (song.separationModelId === "high_quality") {
-      return { label: "HQ", className: "border-[rgba(251,146,60,0.35)] bg-[rgba(251,146,60,0.12)] text-[#fb923c]" };
+      return {
+        label: "HQ",
+        className:
+          "border-[color-mix(in_srgb,var(--accent)_34%,transparent)] bg-[color-mix(in_srgb,var(--accent)_14%,transparent)] text-[var(--accent)]",
+      };
     }
     return null;
   };
@@ -595,42 +599,63 @@ export default function Playlist({
             {getStatusIcon(song)}
           </span>
         )}
-        <div className={viewMode === "list" ? "grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] items-center gap-3" : "relative min-w-0 flex-1 self-center pr-10"}>
-          <div className={`${viewMode === "list" ? "text-[13px]" : "text-[15px]"} ui-text-ellipsis min-w-0 font-semibold text-[var(--text-primary)]`} title={song.name}>
-            {song.name}
-          </div>
-          {viewMode === "cards" && modelBadge && (
-            <div className="absolute right-0 bottom-0">
-              <span
-                className={`inline-flex items-center rounded-[7px] border px-1.5 py-[1px] text-[10px] font-semibold leading-none ${modelBadge.className}`}
+        <div
+          className={
+            viewMode === "list"
+              ? "grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] items-center gap-3"
+              : "flex min-w-0 flex-1 items-center gap-3 self-center"
+          }
+        >
+          {viewMode === "cards" && (
+            <div className="min-w-0 flex-1">
+              <div
+                className="ui-text-ellipsis min-w-0 text-[15px] font-semibold text-[var(--text-primary)]"
+                title={song.name}
               >
-                {modelBadge.label}
-              </span>
-            </div>
-          )}
-          {viewMode === "list" ? (
-            <div className="max-w-[82px] truncate text-right text-[13px] text-[var(--text-muted)]">
-              {meta}
-            </div>
-          ) : (
-            <div className="mt-1.5 min-w-0 text-[13px] text-[var(--text-muted)]">
-              {song.status === "processing" ? (
-                <div className="flex items-center gap-2">
-                  <div className="h-1 flex-1 overflow-hidden rounded-full bg-[var(--border)]">
-                    <div
-                      className="h-full transition-all duration-500"
-                      style={{ width: `${song.progress}%`, background: "var(--accent)" }}
-                    />
-                  </div>
-                  <span className="shrink-0 font-mono text-[11px] text-[var(--accent)]">{song.progress}%</span>
+                {song.name}
+              </div>
+              {viewMode === "cards" && (
+                <div className="mt-1.5 min-w-0 text-[13px] text-[var(--text-muted)]">
+                  {song.status === "processing" ? (
+                    <div className="flex items-center gap-2">
+                      <div className="h-1 flex-1 overflow-hidden rounded-full bg-[var(--border)]">
+                        <div
+                          className="h-full transition-all duration-500"
+                          style={{ width: `${song.progress}%`, background: "var(--accent)" }}
+                        />
+                      </div>
+                      <span className="shrink-0 font-mono text-[11px] text-[var(--accent)]">{song.progress}%</span>
+                    </div>
+                  ) : (
+                    <span className={`${song.status === "error" ? "block truncate text-[#ef4444]" : "inline-flex items-center gap-1.5"}`}>
+                      {song.status === "ready" && <ClockIcon className="h-3.5 w-3.5" />}
+                      {meta}
+                    </span>
+                  )}
                 </div>
-              ) : (
-                <span className={`${song.status === "error" ? "block truncate text-[#ef4444]" : "inline-flex items-center gap-1.5"}`}>
-                  {song.status === "ready" && <ClockIcon className="h-3.5 w-3.5" />}
-                  {meta}
-                </span>
               )}
             </div>
+          )}
+          {viewMode === "list" && (
+            <>
+              <div className="ui-text-ellipsis min-w-0 font-semibold text-[13px] text-[var(--text-primary)]" title={song.name}>
+                {song.name}
+              </div>
+              <div className="max-w-[82px] truncate text-right text-[13px] text-[var(--text-muted)]">
+                {meta}
+              </div>
+            </>
+          )}
+          {viewMode === "cards" && modelBadge && (
+            <span
+              className={`pointer-events-none inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-full border px-1.5 py-0 text-[8px] font-extrabold leading-none tracking-[0.05em] ${modelBadge.className}`}
+              style={{
+                minWidth: 26,
+                height: 16,
+              }}
+            >
+              {modelBadge.label}
+            </span>
           )}
         </div>
         {viewMode === "cards" && (

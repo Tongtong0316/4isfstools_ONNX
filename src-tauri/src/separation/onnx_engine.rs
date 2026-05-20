@@ -24,12 +24,12 @@ pub(crate) struct HiddenSeparationTuning {
 fn hidden_separation_tuning(model_id: &str) -> HiddenSeparationTuning {
     match model_id {
         "high_quality" => HiddenSeparationTuning {
-            segment_size: 512,
+            segment_size: 256,
             overlap_ratio: 0.25,
             vocals_first: false,
         },
         _ => HiddenSeparationTuning {
-            segment_size: 512,
+            segment_size: 256,
             overlap_ratio: 0.25,
             vocals_first: true,
         },
@@ -377,6 +377,7 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 import onnxruntime as ort
+import torch
 
 payload = {
     "success": False,
@@ -407,6 +408,64 @@ def provider_to_sherpa(provider):
         "CPUExecutionProvider": "cpu",
     }.get(provider, "cpu")
 
+def coreml_provider_options():
+    return {
+        "MLComputeUnits": "CPUAndGPU",
+        "ModelFormat": "NeuralNetwork",
+        "RequireStaticInputShapes": "0",
+        "EnableOnSubgraphs": "0",
+    }
+
+class MDXSTFT:
+    def __init__(self, n_fft, hop_length, dim_f):
+        self.n_fft = n_fft
+        self.hop_length = hop_length
+        self.dim_f = dim_f
+        self.window = torch.hann_window(window_length=self.n_fft, periodic=True)
+
+    def __call__(self, input_tensor):
+        batch_dimensions = input_tensor.shape[:-2]
+        channel_dim, time_dim = input_tensor.shape[-2:]
+        reshaped_tensor = input_tensor.reshape([-1, time_dim])
+        stft_window = self.window.to(input_tensor.device)
+        stft_output = torch.stft(
+            reshaped_tensor,
+            n_fft=self.n_fft,
+            hop_length=self.hop_length,
+            window=stft_window,
+            center=True,
+            return_complex=False,
+        )
+        permuted_stft_output = stft_output.permute([0, 3, 1, 2])
+        final_output = permuted_stft_output.reshape(
+            [*batch_dimensions, channel_dim, 2, -1, permuted_stft_output.shape[-1]]
+        ).reshape([*batch_dimensions, channel_dim * 2, -1, permuted_stft_output.shape[-1]])
+        return final_output[..., : self.dim_f, :]
+
+    def inverse(self, input_tensor):
+        batch_dimensions = input_tensor.shape[:-3]
+        channel_dim, freq_dim, time_dim = input_tensor.shape[-3:]
+        num_freq_bins = self.n_fft // 2 + 1
+        if freq_dim < num_freq_bins:
+            freq_padding = torch.zeros(
+                [*batch_dimensions, channel_dim, num_freq_bins - freq_dim, time_dim],
+                device=input_tensor.device,
+            )
+            input_tensor = torch.cat([input_tensor, freq_padding], -2)
+        reshaped_tensor = input_tensor.reshape([*batch_dimensions, channel_dim // 2, 2, num_freq_bins, time_dim])
+        flattened_tensor = reshaped_tensor.reshape([-1, 2, num_freq_bins, time_dim])
+        permuted_tensor = flattened_tensor.permute([0, 2, 3, 1])
+        complex_tensor = permuted_tensor[..., 0] + permuted_tensor[..., 1] * 1.0j
+        stft_window = self.window.to(input_tensor.device)
+        istft_result = torch.istft(
+            complex_tensor,
+            n_fft=self.n_fft,
+            hop_length=self.hop_length,
+            window=stft_window,
+            center=True,
+        )
+        return istft_result.reshape([*batch_dimensions, 2, -1])
+
 def make_session(model_path, provider):
     available = list(ort.get_available_providers())
     payload["availableProviders"] = available or ["unavailable"]
@@ -417,6 +476,147 @@ def make_session(model_path, provider):
         payload["providerFallbackReason"] = f"provider_fallback:{provider}->{chosen}"
     payload["selectedProvider"] = chosen
     return ort.InferenceSession(str(model_path), providers=[chosen])
+
+def make_direct_session(model_path, provider):
+    available = list(ort.get_available_providers())
+    payload["availableProviders"] = available or ["unavailable"]
+    provider_specs = []
+    chosen = provider if provider in available else "CPUExecutionProvider"
+    if chosen != provider:
+        payload["providerFallbackReason"] = f"provider_fallback:{provider}->{chosen}"
+    if chosen == "CoreMLExecutionProvider":
+        provider_specs.append(("CoreMLExecutionProvider", coreml_provider_options()))
+        provider_specs.append("CPUExecutionProvider")
+    elif chosen == "DmlExecutionProvider":
+        provider_specs.append("DmlExecutionProvider")
+        provider_specs.append("CPUExecutionProvider")
+    else:
+        chosen = "CPUExecutionProvider"
+        provider_specs.append("CPUExecutionProvider")
+    try:
+        session = ort.InferenceSession(str(model_path), providers=provider_specs)
+        payload["selectedProvider"] = session.get_providers()[0] if session.get_providers() else chosen
+        return session
+    except Exception as exc:
+        if chosen != "CPUExecutionProvider":
+            payload["providerFallbackReason"] = f"provider_exec_failed:{provider}->{chosen}: {exc}"
+            session = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
+            payload["selectedProvider"] = "CPUExecutionProvider"
+            return session
+        raise
+
+def separate_hq5_mdx(model_path, input_path, vocals_path, instrumental_path, provider):
+    samples, sample_rate = sf.read(str(input_path), dtype="float32", always_2d=True)
+    samples = np.transpose(samples)
+    original_sample_count = int(samples.shape[1])
+    if samples.shape[0] == 1:
+        samples = np.repeat(samples, 2, axis=0)
+    if samples.shape[0] != 2:
+        payload["error_code"] = "ONNX_AUDIO_PREP_FAILED"
+        payload["error"] = f"expected_stereo_input:{samples.shape}"
+        return
+
+    segment_size = int((model_cfg or {}).get("segment_size") or 512)
+    overlap_ratio = float((model_cfg or {}).get("overlap_ratio") or 0.25)
+    compensate = 1.010
+    hop_length = 1024
+    n_fft = 5120
+    dim_f = 2560
+    trim = n_fft // 2
+    batch_size = 4
+    chunk_size = max(hop_length * (segment_size - 1), hop_length)
+    gen_size = chunk_size - 2 * trim
+    if gen_size <= 0:
+        payload["error_code"] = "ONNX_AUDIO_PREP_FAILED"
+        payload["error"] = f"invalid_gen_size:{gen_size}"
+        return
+
+    pad = gen_size + trim - (samples.shape[1] % gen_size)
+    mixture = np.concatenate(
+        (
+            np.zeros((2, trim), dtype="float32"),
+            samples,
+            np.zeros((2, pad), dtype="float32"),
+            np.zeros((2, trim), dtype="float32"),
+        ),
+        axis=1,
+    )
+
+    step = max(1, int((1 - overlap_ratio) * chunk_size))
+    total_segments = max(1, (mixture.shape[-1] + step - 1) // step)
+    stft = MDXSTFT(n_fft=n_fft, hop_length=hop_length, dim_f=dim_f)
+    session = make_direct_session(model_path, provider)
+    input_name = session.get_inputs()[0].name
+    output_name = session.get_outputs()[0].name
+    progress_path = vocals_path.parent / "separator_progress.json"
+    result = np.zeros((1, 2, mixture.shape[-1]), dtype=np.float32)
+    divider = np.zeros((1, 2, mixture.shape[-1]), dtype=np.float32)
+    segment_count = 0
+    pending_chunks = []
+    pending_meta = []
+
+    def flush_pending():
+        nonlocal segment_count
+        if not pending_chunks:
+            return
+        batch_tensor = torch.from_numpy(np.stack(pending_chunks, axis=0)).to(torch.float32)
+        spek = stft(batch_tensor)
+        spek[:, :, :3, :] *= 0
+        spec_pred = session.run([output_name], {input_name: spek.cpu().numpy()})[0]
+        tar_waves = stft.inverse(torch.tensor(spec_pred, dtype=torch.float32)).cpu().numpy()
+        for index, meta in enumerate(pending_meta):
+            start = meta["start"]
+            chunk_len = meta["chunk_len"]
+            target = tar_waves[index, :, :chunk_len].astype(np.float32, copy=False)
+            if overlap_ratio != 0:
+                window = np.hanning(chunk_len).astype(np.float32)
+                target *= window[np.newaxis, :]
+                divider[0, :, start:start + chunk_len] += window[np.newaxis, :]
+            else:
+                divider[0, :, start:start + chunk_len] += 1
+            result[0, :, start:start + chunk_len] += target
+            segment_count += 1
+        pending_chunks.clear()
+        pending_meta.clear()
+
+    for start in range(0, mixture.shape[-1], step):
+        end = min(start + chunk_size, mixture.shape[-1])
+        if end <= start:
+            break
+        chunk = mixture[:, start:end]
+        chunk_len = chunk.shape[1]
+        if chunk_len <= 0:
+            continue
+        if end != start + chunk_size:
+            pad_size = (start + chunk_size) - end
+            chunk = np.concatenate((chunk, np.zeros((2, pad_size), dtype="float32")), axis=-1)
+        pending_chunks.append(chunk)
+        pending_meta.append({"start": start, "chunk_len": chunk_len})
+        if len(pending_chunks) >= batch_size:
+            flush_pending()
+        if progress_path:
+            pct = min(int(segment_count / total_segments * 74) + 18, 92)
+            with open(progress_path, 'w') as pf:
+                json.dump({"percent": pct, "message": f"分离中... ({segment_count}/{total_segments})"}, pf)
+
+    flush_pending()
+
+    if segment_count == 0:
+        payload["error_code"] = "ONNX_SEPARATION_FAILED"
+        payload["error"] = "no_segments_processed"
+        return
+
+    safe_divider = np.where(divider > 1e-8, divider, 1.0)
+    primary_source = (result / safe_divider)[:, :, trim:-trim]
+    primary_source = primary_source[:, :, :original_sample_count]
+    primary_source = np.transpose(primary_source[0], (1, 0))
+    primary_source = primary_source.astype("float32")
+    secondary_source = (np.transpose(samples, (1, 0)) - (primary_source * compensate)).astype("float32")
+    sf.write(str(instrumental_path), primary_source, samplerate=sample_rate)
+    sf.write(str(vocals_path), secondary_source, samplerate=sample_rate)
+    payload["sampleRate"] = int(sample_rate)
+    payload["segmentCount"] = int(segment_count)
+    payload["outputSampleCount"] = int(primary_source.shape[0])
 
 def separate_via_sherpa(model_path, input_path, vocals_path, instrumental_path, provider):
     import sherpa_onnx
@@ -444,6 +644,7 @@ def separate_via_sherpa(model_path, input_path, vocals_path, instrumental_path, 
             payload["error_code"] = "ONNX_AUDIO_PREP_FAILED"
             payload["error"] = f"expected_stereo_input:{samples.shape}"
             return
+        original_sample_count = int(samples.shape[1])
 
         segment_size = int((model_cfg or {}).get("segment_size") or 0)
         overlap_ratio = float((model_cfg or {}).get("overlap_ratio") or 0.0)
@@ -462,6 +663,8 @@ def separate_via_sherpa(model_path, input_path, vocals_path, instrumental_path, 
             else:
                 vocals = np.transpose(output.stems[1].data)
                 non_vocals = np.transpose(output.stems[0].data)
+            vocals = vocals[:original_sample_count]
+            non_vocals = non_vocals[:original_sample_count]
             sf.write(str(vocals_path), vocals, samplerate=output.sample_rate)
             sf.write(str(instrumental_path), non_vocals, samplerate=output.sample_rate)
 
@@ -549,6 +752,8 @@ def separate_via_sherpa(model_path, input_path, vocals_path, instrumental_path, 
         safe_weight = np.where(weight_acc > 1e-8, weight_acc, 1.0)
         vocals = (vocals_acc / safe_weight[np.newaxis, :]).T
         non_vocals = (non_vocals_acc / safe_weight[np.newaxis, :]).T
+        vocals = vocals[:total_samples]
+        non_vocals = non_vocals[:total_samples]
         sf.write(str(vocals_path), vocals, samplerate=sample_rate)
         sf.write(str(instrumental_path), non_vocals, samplerate=sample_rate)
 
@@ -568,6 +773,7 @@ try:
     instrumental_path = Path(sys.argv[5])
     provider = sys.argv[6]
     model_cfg = json.loads(sys.argv[7]) if len(sys.argv) > 7 else {}
+    model_id = sys.argv[8] if len(sys.argv) > 8 else ""
 
     payload["requestedProviders"] = requested
     payload["modelPath"] = str(model_path)
@@ -576,6 +782,7 @@ try:
     payload["instrumentalPath"] = str(instrumental_path)
     payload["selectedProvider"] = provider
     payload["modelTuning"] = model_cfg
+    payload["modelId"] = model_id
 
     if not model_path.is_file():
         payload["error_code"] = "ONNX_ENGINE_NOT_READY"
@@ -589,7 +796,10 @@ try:
     payload["onnxruntimeAvailable"] = True
 
     try:
-        separate_via_sherpa(model_path, input_path, vocals_path, instrumental_path, provider)
+        if model_id == "high_quality":
+            separate_hq5_mdx(model_path, input_path, vocals_path, instrumental_path, provider)
+        else:
+            separate_via_sherpa(model_path, input_path, vocals_path, instrumental_path, provider)
     except Exception as first_exc:
         if provider != "CPUExecutionProvider":
             fallback_provider = "CPUExecutionProvider"
@@ -605,13 +815,22 @@ try:
                 except Exception:
                     pass
             try:
-                separate_via_sherpa(
-                    model_path,
-                    input_path,
-                    vocals_path,
-                    instrumental_path,
-                    fallback_provider,
-                )
+                if model_id == "high_quality":
+                    separate_hq5_mdx(
+                        model_path,
+                        input_path,
+                        vocals_path,
+                        instrumental_path,
+                        fallback_provider,
+                    )
+                else:
+                    separate_via_sherpa(
+                        model_path,
+                        input_path,
+                        vocals_path,
+                        instrumental_path,
+                        fallback_provider,
+                    )
             except Exception as second_exc:
                 payload["error_code"] = payload["error_code"] or "ONNX_SEPARATION_FAILED"
                 payload["error"] = str(second_exc)
@@ -652,6 +871,7 @@ except Exception as exc:
             &instrumental_output_path.to_string_lossy(),
             provider,
             &serde_json::to_string(&hidden_tuning).unwrap_or_else(|_| "{}".to_string()),
+            model_id,
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
