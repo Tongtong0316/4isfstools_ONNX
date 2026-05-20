@@ -6443,28 +6443,42 @@ fn reveal_in_file_manager(path: String) -> Result<(), String> {
     if !path_buf.exists() {
         return Err(format!("文件不存在: {}", path));
     }
+    let is_dir = path_buf.is_dir();
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("open")
-            .args(["-R", &path])
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("explorer")
-            .args(["/select,", &path])
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
-    #[cfg(target_os = "linux")]
-    {
-        if let Some(parent) = path_buf.parent() {
-            std::process::Command::new("xdg-open")
-                .arg(parent)
+        if is_dir {
+            std::process::Command::new("open")
+                .arg(&path)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+        } else {
+            std::process::Command::new("open")
+                .args(["-R", &path])
                 .spawn()
                 .map_err(|e| e.to_string())?;
         }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if is_dir {
+            std::process::Command::new("explorer")
+                .arg(&path)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+        } else {
+            std::process::Command::new("explorer")
+                .args(["/select,", &path])
+                .spawn()
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let target = if is_dir { &path_buf } else { path_buf.parent().unwrap_or(&path_buf) };
+        std::process::Command::new("xdg-open")
+            .arg(target)
+            .spawn()
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }

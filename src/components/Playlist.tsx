@@ -830,8 +830,10 @@ export default function Playlist({
                   icon={<RevealIcon className="h-5 w-5" />}
                   onClick={async () => {
                     try {
-                      const targetPath = contextMenu.song.vocalsPath || contextMenu.song.instrumentalPath || contextMenu.song.originalPath;
-                      await invoke("reveal_in_file_manager", { path: targetPath });
+                      const filePath = contextMenu.song.vocalsPath || contextMenu.song.instrumentalPath || contextMenu.song.originalPath;
+                      const sep = filePath.includes("/") ? "/" : "\\";
+                      const dir = filePath.substring(0, filePath.lastIndexOf(sep));
+                      await invoke("reveal_in_file_manager", { path: dir || filePath });
                     } catch (e) {
                       console.error("Failed to reveal in file manager:", e);
                     }
