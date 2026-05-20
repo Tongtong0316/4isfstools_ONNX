@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { Song, STAGE_LABELS, STAGE_ICONS, STATUS_ICONS, ProcessingStage } from "../types";
 
 interface PlaylistProps {
@@ -158,6 +159,15 @@ function FolderInputIcon({ className = "" }: { className?: string }) {
     <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
       <path d="M4 7.2h5l1.7 2h8.8v8.9a2 2 0 0 1-2 2H4.8a2 2 0 0 1-2-2V9.2a2 2 0 0 1 1.2-2Z" stroke={iconStroke} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M9 14h6m0 0-2-2m2 2-2 2" stroke={iconStroke} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function RevealIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M4 8h4l1.5 2h6.5v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V10a2 2 0 0 1 1-2Z" stroke={iconStroke} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M9 17V7l8 5-8 5Z" stroke={iconStroke} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -814,6 +824,19 @@ export default function Playlist({
                   }}
                 >
                   移动到...
+                </ContextMenuItem>
+                <ContextMenuItem
+                  icon={<RevealIcon className="h-5 w-5" />}
+                  onClick={async () => {
+                    try {
+                      await invoke("reveal_in_file_manager", { path: contextMenu.song.originalPath });
+                    } catch (e) {
+                      console.error("Failed to reveal in file manager:", e);
+                    }
+                    closeContextMenu();
+                  }}
+                >
+                  {navigator.platform.startsWith("Mac") ? "在访达中打开" : "在资源管理器中打开"}
                 </ContextMenuItem>
                 {contextMenu.song.status !== "processing" && contextMenu.song.status !== "queued" && contextMenu.song.status !== "cancelling" && (
                   <>
