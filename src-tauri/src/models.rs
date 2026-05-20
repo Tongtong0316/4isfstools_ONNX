@@ -128,11 +128,7 @@ pub struct RuntimeHealthReport {
     pub detail: String,
     #[serde(default)]
     pub separation_engine: SeparationEngineHealth,
-    pub torch_cuda_available: bool,
     pub selected_device: String,
-    pub torch_version: Option<String>,
-    pub torch_cuda_version: Option<String>,
-    pub torch_cuda_device_name: Option<String>,
     pub has_nvidia_gpu: bool,
     pub nvidia_driver_visible: bool,
     pub nvidia_driver_cuda_version: Option<String>,
@@ -170,6 +166,8 @@ pub struct SeparationEngineHealth {
     pub high_quality_model_dummy_inference_ok: Option<bool>,
     pub high_quality_model_dummy_inference_error: Option<String>,
     pub onnxruntime_available: bool,
+    pub gpu_vendor: Option<String>,
+    pub gpu_name: Option<String>,
     pub probe_error: Option<String>,
 }
 
@@ -204,6 +202,8 @@ impl Default for SeparationEngineHealth {
             high_quality_model_dummy_inference_ok: None,
             high_quality_model_dummy_inference_error: None,
             onnxruntime_available: false,
+            gpu_vendor: None,
+            gpu_name: None,
             probe_error: Some("ONNX Runtime API not initialized".to_string()),
         }
     }
@@ -282,11 +282,7 @@ pub struct BootstrapStatus {
     pub ffmpeg_ready: bool,
     pub can_run_core: bool,
     pub selected_provider: String,
-    pub torch_cuda_available: bool,
     pub selected_device: String,
-    pub torch_version: Option<String>,
-    pub torch_cuda_version: Option<String>,
-    pub torch_cuda_device_name: Option<String>,
     pub has_nvidia_gpu: bool,
     pub nvidia_driver_visible: bool,
     pub nvidia_driver_cuda_version: Option<String>,

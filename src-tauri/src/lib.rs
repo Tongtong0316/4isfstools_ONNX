@@ -371,10 +371,67 @@ fn whisper_model_is_usable(
     Ok(whisper_model_probe(python_path, model_dir, timeout_secs).is_ok())
 }
 
+fn detect_gpu_hardware_name(_selected_provider: &str, gpu_vendor: &str) -> Option<String> {
+    match gpu_vendor {
+        "apple_silicon" => {
+            let output = std::process::Command::new("sysctl")
+                .args(["-n", "machdep.cpu.brand_string"])
+                .output()
+                .ok()?;
+            if output.status.success() {
+                let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !name.is_empty() {
+                    return Some(name);
+                }
+            }
+            Some("Apple Silicon".to_string())
+        }
+        "nvidia" => {
+            let output = std::process::Command::new("nvidia-smi")
+                .args(["--query-gpu=name", "--format=csv,noheader,nounits"])
+                .output()
+                .ok()?;
+            if output.status.success() {
+                let name = String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .next()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                if let Some(n) = name {
+                    return Some(n);
+                }
+            }
+            Some("NVIDIA GPU".to_string())
+        }
+        "amd" => Some("AMD GPU".to_string()),
+        _ => None,
+    }
+}
+
 fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
     let python_path = runtime::python::get_python_path(app);
     let python_exists = python_path.exists();
     let mut separation_engine = separation::detect_engine_health(app, &get_models_dir(app));
+    // Detect GPU vendor based on selected provider
+    separation_engine.gpu_vendor = Some(
+        match separation_engine.selected_provider.as_str() {
+            p if p.contains("CoreML") => "apple_silicon",
+            p if p.contains("Dml") || p.contains("DirectML") => {
+                if command_is_available("nvidia-smi", "--version") {
+                    "nvidia"
+                } else {
+                    "amd"
+                }
+            }
+            _ => "cpu",
+        }
+        .to_string(),
+    );
+    // Detect actual GPU hardware name
+    separation_engine.gpu_name = detect_gpu_hardware_name(
+        &separation_engine.selected_provider,
+        separation_engine.gpu_vendor.as_deref().unwrap_or("cpu"),
+    );
     if python_exists {
         separation_engine.onnxruntime_available =
             runtime::capability::python_module_is_available(&python_path, "onnxruntime", 6)
@@ -388,12 +445,6 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
     let ffmpeg_ready = command_is_available("ffmpeg", "-version");
     let faster_whisper_ready = if python_exists {
         runtime::capability::python_module_is_available(&python_path, "faster_whisper", 6)
-            .unwrap_or(false)
-    } else {
-        false
-    };
-    let _soundfile_ready = if python_exists {
-        runtime::capability::python_module_is_available(&python_path, "soundfile", 6)
             .unwrap_or(false)
     } else {
         false
@@ -415,7 +466,24 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
     } else {
         false
     };
-    let full_ready = is_onnx_capability_ready(&separation_engine, ffmpeg_ready, soundfile_ready);
+    let numpy_ready = if python_exists {
+        runtime::capability::python_module_is_available(&python_path, "numpy", 6).unwrap_or(false)
+    } else {
+        false
+    };
+    let sherpa_ready = if python_exists {
+        runtime::capability::python_module_is_available(&python_path, "sherpa_onnx", 6)
+            .unwrap_or(false)
+    } else {
+        false
+    };
+    let full_ready = is_onnx_capability_ready(
+        &separation_engine,
+        ffmpeg_ready,
+        soundfile_ready,
+        numpy_ready,
+        sherpa_ready,
+    );
     let mut checks = vec![
         RuntimeHealthCheck {
             name: "Python".to_string(),
@@ -517,6 +585,26 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
             detail: Some("SoundFile 音频 I/O 后端".to_string()),
         },
         RuntimeHealthCheck {
+            name: "NumPy".to_string(),
+            ok: numpy_ready,
+            severity: if numpy_ready {
+                "info".to_string()
+            } else {
+                "error".to_string()
+            },
+            detail: Some("NumPy 频谱处理后端".to_string()),
+        },
+        RuntimeHealthCheck {
+            name: "Sherpa ONNX".to_string(),
+            ok: sherpa_ready,
+            severity: if sherpa_ready {
+                "info".to_string()
+            } else {
+                "error".to_string()
+            },
+            detail: Some("默认 UVR 模型生产执行器".to_string()),
+        },
+        RuntimeHealthCheck {
             name: "AI 听写草稿".to_string(),
             ok: faster_whisper_ready && whisper_base_ready,
             severity: "info".to_string(),
@@ -549,11 +637,7 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
         label,
         detail,
         separation_engine,
-        torch_cuda_available: false,
         selected_device: "cpu".to_string(),
-        torch_version: None,
-        torch_cuda_version: None,
-        torch_cuda_device_name: None,
         has_nvidia_gpu: false,
         nvidia_driver_visible: false,
         nvidia_driver_cuda_version: None,
@@ -568,9 +652,13 @@ fn is_onnx_capability_ready(
     separation_engine: &SeparationEngineHealth,
     ffmpeg_ready: bool,
     soundfile_ready: bool,
+    numpy_ready: bool,
+    sherpa_ready: bool,
 ) -> bool {
     ffmpeg_ready
         && soundfile_ready
+        && numpy_ready
+        && sherpa_ready
         && separation_engine.onnxruntime_available
         && separation_engine.default_model_ready
         && separation_engine.default_model_session_load_ok
@@ -1460,7 +1548,8 @@ fn verify_download_sha256(path: &Path, expected: &Option<String>) -> Result<(), 
 
 fn download_to_file(url: &str, target_file: &Path) -> Result<(), String> {
     let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(1200))
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(300))
         .build()
         .map_err(|e| format!("创建下载客户端失败: {}", e))?;
     let mut response = client
@@ -1966,25 +2055,23 @@ fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
     }
 
     // 安装可选高级模型 UVR-MDX-NET-Inst_HQ_4
-    let hq_model_path = runtime_onnx.join("UVR-MDX-NET-Inst_HQ_4.onnx");
-    if !hq_model_path.exists() {
-        let onnx_sources = platform_manifest.models.onnx.clone();
-        if !onnx_sources.is_empty() {
-            match bootstrap_model_from_manifest_sources(
-                &runtime_models,
-                "onnx",
-                &runtime_onnx,
-                &onnx_sources,
-            ) {
-                Ok(true) => {
-                    install_notes.push("UVR-MDX-NET-Inst_HQ_4: 已从大陆优先在线源下载".to_string());
-                }
-                Ok(false) => {
-                    install_notes.push("UVR-MDX-NET-Inst_HQ_4: 未配置可用在线源".to_string());
-                }
-                Err(err) => {
-                    install_notes.push(format!("UVR-MDX-NET-Inst_HQ_4 下载失败（可选）：{}", err))
-                }
+    let onnx_sources = platform_manifest.models.onnx.clone();
+    if !onnx_sources.is_empty() && verify_manifest_targets(&runtime_models, &onnx_sources).is_err()
+    {
+        match bootstrap_model_from_manifest_sources(
+            &runtime_models,
+            "onnx",
+            &runtime_onnx,
+            &onnx_sources,
+        ) {
+            Ok(true) => {
+                install_notes.push("UVR-MDX-NET-Inst_HQ_4: 已从大陆优先在线源下载".to_string());
+            }
+            Ok(false) => {
+                install_notes.push("UVR-MDX-NET-Inst_HQ_4: 未配置可用在线源".to_string());
+            }
+            Err(err) => {
+                install_notes.push(format!("UVR-MDX-NET-Inst_HQ_4 下载失败（可选）：{}", err))
             }
         }
     }
@@ -2455,7 +2542,24 @@ fn detect_bootstrap_status(app: &AppHandle) -> BootstrapStatus {
     } else {
         false
     };
-    let can_run_core = is_onnx_capability_ready(&separation_engine, ffmpeg_ready, soundfile_ready);
+    let numpy_ready = if python_ready {
+        runtime::capability::python_module_is_available(&python_path, "numpy", 6).unwrap_or(false)
+    } else {
+        false
+    };
+    let sherpa_ready = if python_ready {
+        runtime::capability::python_module_is_available(&python_path, "sherpa_onnx", 6)
+            .unwrap_or(false)
+    } else {
+        false
+    };
+    let can_run_core = is_onnx_capability_ready(
+        &separation_engine,
+        ffmpeg_ready,
+        soundfile_ready,
+        numpy_ready,
+        sherpa_ready,
+    );
 
     let detail = if can_run_core {
         "ONNX Runtime、默认分离模型与音频依赖已就绪，可运行人声分离。".to_string()
@@ -2470,11 +2574,7 @@ fn detect_bootstrap_status(app: &AppHandle) -> BootstrapStatus {
         ffmpeg_ready,
         can_run_core,
         selected_provider: separation_engine.selected_provider.clone(),
-        torch_cuda_available: false,
         selected_device: "cpu".to_string(),
-        torch_version: None,
-        torch_cuda_version: None,
-        torch_cuda_device_name: None,
         has_nvidia_gpu: false,
         nvidia_driver_visible: false,
         nvidia_driver_cuda_version: None,
@@ -2487,9 +2587,8 @@ fn format_missing_core_components_with_reason(health: &RuntimeHealthReport) -> S
         .checks
         .iter()
         .filter(|c| !c.ok)
-        // AI 听写草稿、Torch CUDA、NVIDIA GPU 都是可选能力，不参与核心就绪判断
+        // AI 听写草稿和 GPU 硬件提示是可选能力，不参与核心就绪判断
         .filter(|c| c.name != "AI 听写草稿")
-        .filter(|c| c.name != "Torch CUDA")
         .filter(|c| c.name != "NVIDIA GPU")
         .map(|c| {
             let detail = c.detail.as_deref().unwrap_or("").trim();
@@ -3206,11 +3305,7 @@ mod tests {
             label: "环境异常".to_string(),
             detail: "core missing".to_string(),
             separation_engine: SeparationEngineHealth::default(),
-            torch_cuda_available: false,
             selected_device: "cpu".to_string(),
-            torch_version: None,
-            torch_cuda_version: None,
-            torch_cuda_device_name: None,
             has_nvidia_gpu: false,
             nvidia_driver_visible: false,
             nvidia_driver_cuda_version: None,
@@ -3223,12 +3318,6 @@ mod tests {
                 },
                 RuntimeHealthCheck {
                     name: "AI 听写草稿".to_string(),
-                    ok: false,
-                    severity: "info".to_string(),
-                    detail: Some("optional".to_string()),
-                },
-                RuntimeHealthCheck {
-                    name: "Torch CUDA".to_string(),
                     ok: false,
                     severity: "info".to_string(),
                     detail: Some("optional".to_string()),
@@ -3270,26 +3359,6 @@ mod tests {
         assert!(result.is_err());
 
         let _ = fs::remove_dir_all(&runtime_models);
-    }
-
-    #[test]
-    fn cuda_version_mapping_covers_supported_ranges() {
-        assert_eq!(
-            crate::runtime::capability::cuda_version_to_pytorch_index("12.4"),
-            "cu124"
-        );
-        assert_eq!(
-            crate::runtime::capability::cuda_version_to_pytorch_index("12.8"),
-            "cu124"
-        );
-        assert_eq!(
-            crate::runtime::capability::cuda_version_to_pytorch_index("12.1"),
-            "cu121"
-        );
-        assert_eq!(
-            crate::runtime::capability::cuda_version_to_pytorch_index("11.8"),
-            "cu118"
-        );
     }
 }
 
@@ -4964,6 +5033,7 @@ async fn start_process(
     app: AppHandle,
     song_id: String,
     _prefer_onnx_provider: bool,
+    model_id: String,
 ) -> Result<(), String> {
     let song = {
         let songs = SONGS.lock().unwrap();
@@ -5017,6 +5087,7 @@ async fn start_process(
         input_path,
         output_dir: song_dir,
         song_duration_ms,
+        model_id,
     });
 
     Ok(())
@@ -5028,6 +5099,7 @@ fn process_song_with_onnx_skeleton(
     job_token: String,
     input_path: String,
     output_dir: PathBuf,
+    model_id: &str,
 ) {
     if check_cancel_flag(&song_id) {
         return;
@@ -5182,14 +5254,60 @@ fn process_song_with_onnx_skeleton(
         None,
     );
 
+    let (model_path, effective_model_id) = if model_id == "high_quality" {
+        if !engine_health.high_quality_model_ready {
+            let result = serde_json::json!({
+                "success": false,
+                "error": "high_quality_model_not_ready",
+                "error_code": "ONNX_ENGINE_NOT_READY",
+                "stage": "model_select",
+                "engine": engine_health.active_engine,
+                "requested_model_id": model_id,
+                "high_quality_model_id": engine_health.high_quality_model_id,
+                "high_quality_model_path": engine_health.high_quality_model_path,
+                "high_quality_model_ready": engine_health.high_quality_model_ready,
+            });
+            let result_path = output_dir.join("separator_result.json");
+            let _ = fs::write(
+                &result_path,
+                serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_string()),
+            );
+            let debug_dir = output_dir.join("debug");
+            let _ = fs::create_dir_all(&debug_dir);
+            let _ = fs::write(
+                debug_dir.join("separator_result.json"),
+                serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_string()),
+            );
+            emit_error_for_job(
+                &app,
+                &song_id,
+                &job_token,
+                "processing",
+                "[ONNX_ENGINE_NOT_READY] high_quality_model_not_ready",
+            );
+            update_song_status_for_job(
+                &song_id,
+                &job_token,
+                "error",
+                0,
+                Some("processing"),
+                Some("[ONNX_ENGINE_NOT_READY] high_quality_model_not_ready"),
+            );
+            return;
+        }
+        (&engine_health.high_quality_model_path, "high_quality")
+    } else {
+        (&engine_health.default_model_path, "default")
+    };
     let result = match separation::onnx_engine::run_onnx_separation(
         &app,
         &song_id,
         Path::new(&input_path),
         &output_dir,
-        Path::new(&engine_health.default_model_path),
+        Path::new(model_path),
         &requested_providers,
         &engine_health.selected_provider,
+        effective_model_id,
     ) {
         Ok(result) => result,
         Err(err) => serde_json::json!({
@@ -5316,11 +5434,19 @@ fn process_song_with_onnx_skeleton(
         return;
     }
 
-    let error_message = result
-        .get("error")
+    // Use a concise error code + first line for UI display; full detail is in separator_result.json
+    let error_code = result
+        .get("error_code")
         .and_then(|v| v.as_str())
-        .unwrap_or("ONNX separation failed")
-        .to_string();
+        .unwrap_or("ONNX_SEPARATION_FAILED");
+    let error_detail = result.get("error").and_then(|v| v.as_str()).unwrap_or("");
+    let first_line = error_detail.lines().next().unwrap_or(error_detail);
+    let truncated = if first_line.len() > 200 {
+        format!("{}...", &first_line[..200])
+    } else {
+        first_line.to_string()
+    };
+    let error_message = format!("[{}] {}", error_code, truncated);
     emit_error_for_job(&app, &song_id, &job_token, "processing", &error_message);
     update_song_status_for_job(
         &song_id,
@@ -5341,8 +5467,9 @@ pub(crate) fn process_song_background(
     output_dir: PathBuf,
     _song_duration_ms: u64,
     _prefer_onnx_provider: bool,
+    model_id: String,
 ) {
-    process_song_with_onnx_skeleton(app, song_id, job_token, input_path, output_dir);
+    process_song_with_onnx_skeleton(app, song_id, job_token, input_path, output_dir, &model_id);
 }
 
 #[tauri::command]
@@ -5369,7 +5496,8 @@ async fn delete_song(id: String) -> Result<(), String> {
 
     if let Some(song) = song_to_delete.as_ref() {
         let live_job = song_has_live_processing_job(&id);
-        let is_terminal_cancelled = song.status == "cancelled" || song.status == "error";
+        let is_terminal_cancelled =
+            song.status == "ready" || song.status == "cancelled" || song.status == "error";
         let is_stale_cancelling = song.status == "cancelling" && !live_job;
         let is_stale_queued = song.status == "queued" && !live_job;
         if !is_terminal_cancelled && !is_stale_cancelling && !is_stale_queued {
@@ -5411,6 +5539,7 @@ async fn reprocess_song(
     app: AppHandle,
     song_id: String,
     _prefer_onnx_provider: bool,
+    model_id: String,
 ) -> Result<(), String> {
     let song = {
         let songs = SONGS.lock().unwrap();
@@ -5464,6 +5593,7 @@ async fn reprocess_song(
         input_path,
         output_dir: song_dir,
         song_duration_ms,
+        model_id,
     });
 
     Ok(())
@@ -5672,6 +5802,58 @@ async fn rename_playlist_folder(old_name: String, new_name: String) -> Result<()
     drop(songs);
     save_songs_to_disk();
     Ok(())
+}
+
+#[tauri::command]
+async fn download_hq_model(app: AppHandle) -> Result<String, String> {
+    let runtime_models = get_runtime_dir().join("models");
+    let runtime_onnx = runtime_models.join("onnx");
+    let manifest =
+        runtime::manifest::load_runtime_manifest(&app, &get_runtime_dir(), &resolve_project_root());
+    let platform_manifest = runtime::manifest::current_platform_manifest(&manifest);
+    let onnx_sources = platform_manifest.models.onnx.clone();
+    if onnx_sources.is_empty() {
+        let fallback = runtime::manifest::fallback_model_artifacts(&manifest, "onnx");
+        if fallback.is_empty() {
+            return Err("未配置高质量模型的在线源".to_string());
+        }
+    }
+    let sources: Vec<RuntimeManifestArtifact> = if onnx_sources.is_empty() {
+        runtime::manifest::fallback_model_artifacts(&manifest, "onnx")
+    } else {
+        onnx_sources
+    };
+    if verify_manifest_targets(&runtime_models, &sources).is_ok() {
+        return Ok("高质量模型已就绪".to_string());
+    }
+    fs::create_dir_all(&runtime_onnx).map_err(|e| format!("创建目录失败: {}", e))?;
+    // Run blocking HTTP downloads on a dedicated thread to avoid tokio runtime conflict with reqwest::blocking
+    let runtime_models_clone = runtime_models.clone();
+    let runtime_onnx_clone = runtime_onnx.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        bootstrap_model_from_manifest_sources(
+            &runtime_models_clone,
+            "onnx",
+            &runtime_onnx_clone,
+            &sources,
+        )
+    })
+    .await
+    .map_err(|e| format!("下载线程崩溃: {}", e))?;
+    match result {
+        Ok(true) => Ok("高质量模型下载完成".to_string()),
+        Ok(false) => Err("未配置可用在线源".to_string()),
+        Err(err) => Err(format!("下载失败: {}", err)),
+    }
+}
+
+#[tauri::command]
+async fn download_whisper_model(app: AppHandle) -> Result<String, String> {
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn_blocking(move || bootstrap_install_whisper_model(&app_clone))
+        .await
+        .map_err(|e| format!("下载线程崩溃: {}", e))?
+        .map(|_| "听写模型下载完成".to_string())
 }
 
 #[tauri::command]
@@ -6239,6 +6421,8 @@ pub fn run() {
             get_runtime_health,
             get_bootstrap_status,
             bootstrap_install_minimal,
+            download_hq_model,
+            download_whisper_model,
             update_file_storage_settings,
             search_match_lyrics,
             generate_whisper_base_lyrics,

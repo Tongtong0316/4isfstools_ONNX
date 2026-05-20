@@ -11,6 +11,51 @@ use super::audio_io::normalize_source_audio;
 use super::engine::{ProviderStrategy, SeparationEngine, SeparationEngineKind};
 use super::model_registry::{ModelRegistry, HIGH_QUALITY_ONNX_MODEL_ID};
 
+/// Per-model configuration for the separation pipeline.
+/// Each model_id maps to one of these; the config is passed to the Python script.
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct ModelConfig {
+    /// "sherpa_uvr" uses the upstream UVR implementation; "direct_ort" uses the local sidecar config path.
+    pub execution_backend: String,
+    /// "Voc" if the model outputs vocal masks, "Inst" if it outputs instrumental masks
+    pub output_target: String,
+    /// "mask" if output should multiply the input spectrogram, "direct" if output is raw STFT
+    pub output_mode: String,
+    /// Internal chunk size along the time axis (256 for standard MDX-NET)
+    pub chunk_size: u32,
+    pub n_fft: u32,
+    pub hop_length: u32,
+    pub dim_f: u32,
+    pub model_id: String,
+}
+
+fn get_model_config(model_id: &str) -> ModelConfig {
+    match model_id {
+        // HQ model: outputs instrumental mask, n_fft=5120
+        "high_quality" => ModelConfig {
+            execution_backend: "direct_ort".into(),
+            output_target: "Inst".into(),
+            output_mode: "mask".into(),
+            chunk_size: 256,
+            n_fft: 5120,
+            hop_length: 1280,
+            dim_f: 2560,
+            model_id: "high_quality".into(),
+        },
+        // Default / Karaoke / standard MDX-NET: output vocal mask, n_fft=4096
+        _ => ModelConfig {
+            execution_backend: "sherpa_uvr".into(),
+            output_target: "Voc".into(),
+            output_mode: "mask".into(),
+            chunk_size: 256,
+            n_fft: 4096,
+            hop_length: 1024,
+            dim_f: 2048,
+            model_id: model_id.into(),
+        },
+    }
+}
+
 fn run_onnx_probe_value(
     python_path: &Path,
     model_path: &Path,
@@ -298,15 +343,6 @@ fn probe_model_metadata(
     }
 }
 
-fn provider_to_sherpa_name(provider: &str) -> &str {
-    match provider {
-        "CoreMLExecutionProvider" => "coreml",
-        "DmlExecutionProvider" => "dml",
-        "CPUExecutionProvider" => "cpu",
-        _ => "cpu",
-    }
-}
-
 pub(crate) fn run_onnx_separation(
     app: &AppHandle,
     song_id: &str,
@@ -315,7 +351,9 @@ pub(crate) fn run_onnx_separation(
     model_path: &Path,
     requested: &[String],
     selected_provider: &str,
+    model_id: &str,
 ) -> Result<serde_json::Value, String> {
+    let model_config = get_model_config(model_id);
     let python_path = get_python_path(app);
     if !python_path.exists() {
         return Err("Python runtime not found".to_string());
@@ -337,7 +375,7 @@ pub(crate) fn run_onnx_separation(
         selected_provider,
         "CoreMLExecutionProvider" | "DmlExecutionProvider" | "CPUExecutionProvider"
     ) {
-        provider_to_sherpa_name(selected_provider)
+        selected_provider
     } else {
         requested
             .iter()
@@ -347,8 +385,8 @@ pub(crate) fn run_onnx_separation(
                     "CoreMLExecutionProvider" | "DmlExecutionProvider" | "CPUExecutionProvider"
                 )
             })
-            .map(|provider| provider_to_sherpa_name(provider))
-            .unwrap_or("cpu")
+            .map(|provider| provider.as_str())
+            .unwrap_or("CPUExecutionProvider")
     };
 
     let script = r#"
@@ -357,8 +395,8 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import sherpa_onnx
 import soundfile as sf
+import onnxruntime as ort
 
 payload = {
     "success": False,
@@ -381,6 +419,214 @@ payload = {
 def write_payload():
     print(json.dumps(payload, ensure_ascii=False))
 
+def provider_to_sherpa(provider):
+    return {
+        "CoreMLExecutionProvider": "coreml",
+        "DmlExecutionProvider": "dml",
+        "CPUExecutionProvider": "cpu",
+    }.get(provider, "cpu")
+
+def make_session(model_path, provider):
+    available = list(ort.get_available_providers())
+    payload["availableProviders"] = available or ["unavailable"]
+    chosen = provider if provider in available else "CPUExecutionProvider"
+    if chosen not in available:
+        chosen = available[0] if available else "CPUExecutionProvider"
+    if chosen != provider:
+        payload["providerFallbackReason"] = f"provider_fallback:{provider}->{chosen}"
+    payload["selectedProvider"] = chosen
+    return ort.InferenceSession(str(model_path), providers=[chosen])
+
+def separate_via_sherpa(model_path, input_path, vocals_path, instrumental_path, model_cfg=None):
+    import sherpa_onnx
+
+    provider = model_cfg.get("provider", "CPUExecutionProvider") if model_cfg else "CPUExecutionProvider"
+    config = sherpa_onnx.OfflineSourceSeparationConfig(
+        model=sherpa_onnx.OfflineSourceSeparationModelConfig(
+            uvr=sherpa_onnx.OfflineSourceSeparationUvrModelConfig(model=str(model_path)),
+            num_threads=1,
+            debug=False,
+            provider=provider_to_sherpa(provider),
+        )
+    )
+    if not config.validate():
+        payload["error_code"] = "ONNX_MODEL_METADATA_FAILED"
+        payload["error"] = "invalid_offline_source_separation_config"
+        return
+
+    sp = sherpa_onnx.OfflineSourceSeparation(config)
+    samples, sample_rate = sf.read(str(input_path), dtype="float32", always_2d=True)
+    samples = np.transpose(samples)
+    if samples.shape[0] == 1:
+        samples = np.repeat(samples, 2, axis=0)
+    if samples.shape[0] != 2:
+        payload["error_code"] = "ONNX_AUDIO_PREP_FAILED"
+        payload["error"] = f"expected_stereo_input:{samples.shape}"
+        return
+
+    output = sp.process(sample_rate=sample_rate, samples=np.ascontiguousarray(samples))
+    payload["sampleRate"] = int(output.sample_rate)
+    if len(output.stems) != 2:
+        payload["error_code"] = "ONNX_SEPARATION_FAILED"
+        payload["error"] = f"unexpected_stem_count:{len(output.stems)}"
+        return
+
+    vocals = np.transpose(output.stems[0].data)
+    non_vocals = np.transpose(output.stems[1].data)
+    sf.write(str(vocals_path), vocals, samplerate=output.sample_rate)
+    sf.write(str(instrumental_path), non_vocals, samplerate=output.sample_rate)
+
+    payload["segmentCount"] = 1
+    payload["outputSampleCount"] = int(vocals.shape[0])
+
+def stft_np(signal, n_fft, hop, window):
+    pad = n_fft // 2
+    if signal.shape[0] == 0:
+        raise ValueError("empty_audio")
+    padded = np.pad(signal, (pad, pad), mode="reflect" if signal.shape[0] > 1 else "constant")
+    if padded.shape[0] < n_fft:
+        padded = np.pad(padded, (0, n_fft - padded.shape[0]), mode="constant")
+    frame_count = 1 + max(0, (padded.shape[0] - n_fft) // hop)
+    frames = np.empty((n_fft // 2 + 1, frame_count), dtype=np.complex64)
+    for idx in range(frame_count):
+        start = idx * hop
+        frame = padded[start:start + n_fft]
+        if frame.shape[0] < n_fft:
+            frame = np.pad(frame, (0, n_fft - frame.shape[0]), mode="constant")
+        frames[:, idx] = np.fft.rfft(frame * window).astype(np.complex64)
+    return frames
+
+def istft_np(spec, n_fft, hop, window, original_len):
+    pad = n_fft // 2
+    frame_count = spec.shape[1]
+    out_len = n_fft + hop * max(0, frame_count - 1)
+    output = np.zeros(out_len, dtype=np.float32)
+    window_sum = np.zeros(out_len, dtype=np.float32)
+    for idx in range(frame_count):
+        start = idx * hop
+        frame = np.fft.irfft(spec[:, idx], n=n_fft).astype(np.float32)
+        output[start:start + n_fft] += frame * window
+        window_sum[start:start + n_fft] += window * window
+    nonzero = window_sum > 1e-8
+    output[nonzero] /= window_sum[nonzero]
+    end = pad + original_len
+    if output.shape[0] < end:
+        output = np.pad(output, (0, end - output.shape[0]), mode="constant")
+    return output[pad:end].astype(np.float32)
+
+def separate_via_ort(model_path, input_path, vocals_path, instrumental_path, model_cfg=None):
+    """Use onnxruntime directly with numpy STFT/ISTFT."""
+    if model_cfg is None:
+        model_cfg = {}
+    provider = model_cfg.get("provider", "CPUExecutionProvider")
+    sess = make_session(model_path, provider)
+    meta = sess.get_modelmeta()
+    in_name = sess.get_inputs()[0].name
+    out_name = sess.get_outputs()[0].name
+
+    samples, sr = sf.read(str(input_path), dtype="float32", always_2d=True)
+    samples_t = np.transpose(samples)
+    if samples_t.shape[0] == 1:
+        samples_t = np.repeat(samples_t, 2, axis=0)
+    original_len = samples_t.shape[1]
+
+    payload["sampleRate"] = sr
+    # Derive dim_f from ONNX model's input shape: [batch, 4, dim_f, 256]
+    in_shape = sess.get_inputs()[0].shape
+    inferred_dim_f = 2560
+    if len(in_shape) >= 3:
+        d = in_shape[2]
+        if isinstance(d, int) and d > 0:
+            inferred_dim_f = d
+    n_fft = int(model_cfg.get("n_fft") or meta.custom_metadata_map.get("n_fft", str(inferred_dim_f * 2)))
+    hop = int(model_cfg.get("hop_length") or meta.custom_metadata_map.get("hop_length", str(n_fft // 4)))
+    dim_f = int(model_cfg.get("dim_f") or meta.custom_metadata_map.get("dim_f", str(inferred_dim_f)))
+    fft_bins = n_fft // 2 + 1
+    if dim_f > fft_bins:
+        raise ValueError(f"invalid_dim_f:{dim_f}>fft_bins:{fft_bins}")
+
+    window = np.hanning(n_fft).astype(np.float32)
+    specs = []
+    for ch in range(2):
+        specs.append(stft_np(samples_t[ch].astype(np.float32), n_fft, hop, window))
+
+    n_frames = min(s.shape[-1] for s in specs)
+    stack = []
+    for s in specs:
+        s = s[:dim_f, :n_frames]
+        stack.append(s.real)
+        stack.append(s.imag)
+    model_in = np.stack(stack, axis=0)[None, :, :, :].astype(np.float32)  # [1, 4, dim_f, n_frames]
+
+    chunk_size = int(model_cfg.get("chunk_size", 256))
+    t = model_in.shape[3]
+    if t == 0:
+        raise ValueError("empty_spectrogram")
+
+    pad_len = (chunk_size - t % chunk_size) % chunk_size
+    if pad_len:
+        model_in = np.pad(model_in, ((0, 0), (0, 0), (0, 0), (0, pad_len)), mode="constant")
+        t_padded = model_in.shape[3]
+    else:
+        t_padded = t
+
+    num_chunks = t_padded // chunk_size
+    ort_parts = []
+    for i in range(num_chunks):
+        chunk = model_in[:, :, :, i * chunk_size : (i + 1) * chunk_size]
+        part = sess.run([out_name], {in_name: chunk.astype(np.float32)})[0]
+        ort_parts.append(part)
+
+    ort_out = np.concatenate(ort_parts, axis=3)
+    if pad_len:
+        ort_out = ort_out[:, :, :, :-pad_len]
+    ort_out = ort_out[:, :, :dim_f, :n_frames]
+
+    output_mode = model_cfg.get("output_mode", "mask")
+    out_chs = []
+    for ch_idx in range(2):
+        ch_real = ort_out[0, ch_idx * 2].astype(np.float32)
+        ch_imag = ort_out[0, ch_idx * 2 + 1].astype(np.float32)
+        spec = specs[ch_idx][:, :n_frames]
+        if output_mode == "direct":
+            spec_out = np.zeros((fft_bins, n_frames), dtype=np.complex64)
+            spec_out[:dim_f] = ch_real + 1j * ch_imag
+        else:
+            spec_out = spec.copy()
+            mask = ch_real + 1j * ch_imag
+            spec_out[:dim_f] = spec[:dim_f] * mask
+        out_chs.append(istft_np(spec_out, n_fft, hop, window, original_len))
+
+    max_len = max(len(c) for c in out_chs)
+    out_stereo = np.zeros((max_len, 2), dtype=np.float32)
+    for i, c in enumerate(out_chs):
+        out_stereo[:len(c), i] = c
+
+    # Normalize output to prevent clipping
+    peak = np.max(np.abs(out_stereo))
+    if peak > 1.0:
+        out_stereo /= peak
+
+    # Output target: "Voc" or "Inst", from model config (fallback: detect from model name)
+    output_target = model_cfg.get("output_target", None)
+    if output_target is None:
+        output_target = "Inst" if "Inst" in meta.custom_metadata_map.get("model_name", "") else "Voc"
+
+    inp = np.transpose(samples_t)
+    min_len = min(inp.shape[0], out_stereo.shape[0])
+    if output_target == "Inst":
+        # Model outputs instrumental → instrumental = model_out, vocals = mix - instrumental
+        sf.write(str(instrumental_path), out_stereo, samplerate=sr)
+        voc = inp[:min_len] - out_stereo[:min_len]
+        sf.write(str(vocals_path), voc, samplerate=sr)
+    else:
+        # Model outputs vocals → vocals = model_out, instrumental = mix - vocals
+        sf.write(str(vocals_path), out_stereo, samplerate=sr)
+        instr = inp[:min_len] - out_stereo[:min_len]
+        sf.write(str(instrumental_path), instr, samplerate=sr)
+    payload["segmentCount"] = num_chunks
+    payload["outputSampleCount"] = int(out_stereo.shape[0])
+
 try:
     requested = json.loads(sys.argv[1])
     model_path = Path(sys.argv[2])
@@ -388,6 +634,8 @@ try:
     vocals_path = Path(sys.argv[4])
     instrumental_path = Path(sys.argv[5])
     provider = sys.argv[6]
+    model_cfg = json.loads(sys.argv[7]) if len(sys.argv) > 7 else {}
+    model_cfg["provider"] = provider
 
     payload["requestedProviders"] = requested
     payload["modelPath"] = str(model_path)
@@ -402,56 +650,23 @@ try:
         write_payload()
         raise SystemExit(0)
 
-    if requested and provider == "cpu" and requested[0] != "CPUExecutionProvider":
+    if requested and provider == "CPUExecutionProvider" and requested[0] != "CPUExecutionProvider":
         payload["providerFallbackReason"] = f"provider_fallback_to_cpu:{requested[0]}"
 
-    available = ["CPUExecutionProvider", "CoreMLExecutionProvider", "DmlExecutionProvider"]
     payload["onnxruntimeAvailable"] = True
-    payload["availableProviders"] = available
 
-    config = sherpa_onnx.OfflineSourceSeparationConfig(
-        model=sherpa_onnx.OfflineSourceSeparationModelConfig(
-            uvr=sherpa_onnx.OfflineSourceSeparationUvrModelConfig(model=str(model_path)),
-            num_threads=1,
-            debug=False,
-            provider=provider,
-        )
-    )
-    if not config.validate():
-        payload["error_code"] = "ONNX_MODEL_METADATA_FAILED"
-        payload["error"] = "invalid_offline_source_separation_config"
+    if model_cfg.get("execution_backend") == "sherpa_uvr":
+        separate_via_sherpa(model_path, input_path, vocals_path, instrumental_path, model_cfg)
+    else:
+        separate_via_ort(model_path, input_path, vocals_path, instrumental_path, model_cfg)
+
+    if payload["error_code"] is not None:
         write_payload()
         raise SystemExit(0)
-
-    sp = sherpa_onnx.OfflineSourceSeparation(config)
-    samples, sample_rate = sf.read(str(input_path), dtype="float32", always_2d=True)
-    samples = np.transpose(samples)
-    if samples.shape[0] == 1:
-        samples = np.repeat(samples, 2, axis=0)
-    if samples.shape[0] != 2:
-        payload["error_code"] = "ONNX_AUDIO_PREP_FAILED"
-        payload["error"] = f"expected_stereo_input:{samples.shape}"
-        write_payload()
-        raise SystemExit(0)
-
-    output = sp.process(sample_rate=sample_rate, samples=np.ascontiguousarray(samples))
-    payload["sampleRate"] = int(output.sample_rate)
-    if len(output.stems) != 2:
-        payload["error_code"] = "ONNX_SEPARATION_FAILED"
-        payload["error"] = f"unexpected_stem_count:{len(output.stems)}"
-        write_payload()
-        raise SystemExit(0)
-
-    vocals = np.transpose(output.stems[0].data)
-    non_vocals = np.transpose(output.stems[1].data)
-    sf.write(str(vocals_path), vocals, samplerate=output.sample_rate)
-    sf.write(str(instrumental_path), non_vocals, samplerate=output.sample_rate)
 
     payload["success"] = True
     payload["error_code"] = None
     payload["error"] = None
-    payload["segmentCount"] = 1
-    payload["outputSampleCount"] = int(vocals.shape[0])
     write_payload()
 except Exception as exc:
     if payload["error_code"] is None:
@@ -460,6 +675,7 @@ except Exception as exc:
     write_payload()
 "#;
 
+    let config_json = serde_json::to_string(&model_config).unwrap_or_else(|_| "{}".to_string());
     let mut command = Command::new(python_path);
     command
         .args([
@@ -473,6 +689,7 @@ except Exception as exc:
             &vocals_output_path.to_string_lossy(),
             &instrumental_output_path.to_string_lossy(),
             provider,
+            &config_json,
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -491,7 +708,7 @@ except Exception as exc:
         serde_json::json!({
             "success": false,
             "error_code": "ONNX_SEPARATION_FAILED",
-            "error": format!("onnx separation parse failed: {}", stdout),
+            "error": format!("onnx separation parse failed: [stdout]{} [stderr]{}", stdout, stderr),
             "selectedProvider": provider,
         })
     });
@@ -584,6 +801,8 @@ impl OnnxSeparationEngine {
                 .dummy_inference_error
                 .clone(),
             onnxruntime_available: runtime_probe.onnxruntime_available,
+            gpu_vendor: None,
+            gpu_name: None,
             probe_error: runtime_probe
                 .probe_error
                 .clone()

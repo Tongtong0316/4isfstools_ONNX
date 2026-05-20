@@ -109,6 +109,8 @@ type SeparationEngineHealth = {
   highQualityModelDummyInferenceOk: boolean | null;
   highQualityModelDummyInferenceError: string | null;
   onnxruntimeAvailable: boolean;
+  gpuVendor: string | null;
+  gpuName: string | null;
   probeError: string | null;
 };
 
@@ -117,11 +119,7 @@ type RuntimeHealthReport = {
   label: string;
   detail: string;
   separationEngine: SeparationEngineHealth;
-  torchCudaAvailable: boolean;
   selectedDevice: "cpu" | "cuda" | string;
-  torchVersion: string | null;
-  torchCudaVersion: string | null;
-  torchCudaDeviceName: string | null;
   hasNvidiaGpu: boolean;
   nvidiaDriverVisible: boolean;
   nvidiaDriverCudaVersion: string | null;
@@ -135,11 +133,7 @@ type BootstrapStatus = {
   ffmpegReady: boolean;
   canRunCore: boolean;
   selectedProvider: string;
-  torchCudaAvailable: boolean;
   selectedDevice: "cpu" | "cuda" | string;
-  torchVersion: string | null;
-  torchCudaVersion: string | null;
-  torchCudaDeviceName: string | null;
   hasNvidiaGpu: boolean;
   nvidiaDriverVisible: boolean;
   nvidiaDriverCudaVersion: string | null;
@@ -154,7 +148,7 @@ type BootstrapProgress = {
 
 type SettingsPane = "runtime" | "audioOutput" | "paths" | "appearance" | "about";
 
-type ColorThemeId = "graphite" | "aurora" | "studio" | "midnight" | "daylight" | "paper" | "passion" | "double" | "zero" | "manifesto";
+type ColorThemeId = "peach" | "aurora" | "graphite" | "studio" | "midnight" | "daylight" | "paper" | "passion" | "double" | "zero" | "manifesto";
 
 const COLOR_THEMES: Array<{
   id: ColorThemeId;
@@ -166,13 +160,13 @@ const COLOR_THEMES: Array<{
   text: string;
 }> = [
   {
-    id: "graphite",
-    name: "石墨夜色",
-    description: "低眩光深色，适合长时间编辑。",
-    bg: "#0b0b0d",
-    card: "#202026",
-    accent: "#8b5cf6",
-    text: "#fafafa",
+    id: "peach",
+    name: "蜜桃",
+    description: "蜜桃柔粉与纯白交映，明亮温和的浅色主题。",
+    bg: "#fdf5f4",
+    card: "#ffffff",
+    accent: "#efbdc5",
+    text: "#3d454a",
   },
   {
     id: "aurora",
@@ -182,6 +176,15 @@ const COLOR_THEMES: Array<{
     card: "#1a2230",
     accent: "#14b8a6",
     text: "#f8fafc",
+  },
+  {
+    id: "graphite",
+    name: "石墨夜色",
+    description: "低眩光深色，适合长时间编辑。",
+    bg: "#0b0b0d",
+    card: "#202026",
+    accent: "#8b5cf6",
+    text: "#fafafa",
   },
   {
     id: "studio",
@@ -250,8 +253,8 @@ const COLOR_THEMES: Array<{
     id: "manifesto",
     name: "高级纲领",
     description: "青绿主调与紫色强调，黑色基底配合浅紫辅助。",
-    bg: "#000000",
-    card: "#17101d",
+    bg: "#0b0b10",
+    card: "#1e1632",
     accent: "#A2DA5A",
     text: "#f8fafc",
   },
@@ -304,6 +307,8 @@ const RUNTIME_CHECK_NAMES = [
   "ONNX Metadata",
   "ONNX 高质量模型",
   "SoundFile",
+  "NumPy",
+  "Sherpa ONNX",
   "AI 听写草稿",
 ];
 
@@ -359,6 +364,14 @@ function App() {
   const [bootstrapMessage, setBootstrapMessage] = useState<string | null>(null);
   const [bootstrapProgress, setBootstrapProgress] = useState<BootstrapProgress | null>(null);
   const [bootstrapStartedAt, setBootstrapStartedAt] = useState<number | null>(null);
+  const [selectedSeparationModel, setSelectedSeparationModel] = useState<"default" | "high_quality">(() => {
+    if (typeof window === "undefined") return "default";
+    return (localStorage.getItem("4isfstools.separation_model") as "default" | "high_quality") || "default";
+  });
+  const [transcriptionReady, setTranscriptionReady] = useState(false);
+  const [modelActivity, setModelActivity] = useState<{target: "hq" | "whisper"; phase: "downloading" | "preparing"} | null>(null);
+  const [hqDownloadError, setHqDownloadError] = useState(false);
+  const [whisperDownloadError, setWhisperDownloadError] = useState(false);
   const themeStorageKey = "4isfstools.color_theme";
   const [colorTheme, setColorTheme] = useState<ColorThemeId>(() => {
     if (typeof window === "undefined") return "graphite";
@@ -373,6 +386,14 @@ function App() {
   const runtimeSelectedProvider =
     runtimeHealth?.separationEngine?.selectedProvider ?? bootstrapStatus?.selectedProvider ?? "CPUExecutionProvider";
   const runtimeProviderLabel =
+    runtimeHealth?.separationEngine?.gpuName
+      ? runtimeHealth.separationEngine.gpuName
+      : runtimeSelectedProvider === "DmlExecutionProvider"
+        ? "DirectML 运行"
+        : runtimeSelectedProvider === "CoreMLExecutionProvider"
+          ? "CoreML 运行"
+          : "CPU 运行";
+  const runtimeModeLabel =
     runtimeSelectedProvider === "DmlExecutionProvider"
       ? "DirectML 运行"
       : runtimeSelectedProvider === "CoreMLExecutionProvider"
@@ -381,7 +402,7 @@ function App() {
   const runtimeProviderTitle = runtimeHealth?.separationEngine
     ? [
         `ONNX Runtime: ${runtimeHealth.separationEngine.onnxruntimeAvailable ? "可用" : "不可用"}`,
-        `当前后端: ${runtimeSelectedProvider}`,
+        `当前硬件: ${runtimeSelectedProvider}`,
         runtimeHealth.separationEngine.providerFallbackReason ? `回退原因: ${runtimeHealth.separationEngine.providerFallbackReason}` : null,
       ]
         .filter(Boolean)
@@ -411,6 +432,15 @@ function App() {
       // ignore persistence failures
     }
   }, [colorTheme]);
+
+  // Persist model selection across restarts
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("4isfstools.separation_model", selectedSeparationModel);
+    } catch {
+      // ignore persistence failures
+    }
+  }, [selectedSeparationModel]);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const originalAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -1105,13 +1135,11 @@ function App() {
               highQualityModelDummyInferenceOk: null,
               highQualityModelDummyInferenceError: null,
               onnxruntimeAvailable: false,
+              gpuVendor: null,
+              gpuName: null,
               probeError: "runtime health probe unavailable",
             },
-            torchCudaAvailable: false,
             selectedDevice: "cpu",
-            torchVersion: null,
-            torchCudaVersion: null,
-            torchCudaDeviceName: null,
             hasNvidiaGpu: false,
             nvidiaDriverVisible: false,
             nvidiaDriverCudaVersion: null,
@@ -1170,6 +1198,60 @@ function App() {
       setBootstrapStartedAt(null);
     }
   }, [bootstrapProgressValue, isDesktopRuntime]);
+
+  // Sync transcript readiness from runtime health
+  useEffect(() => {
+    if (bootstrapStatus?.whisperBaseReady) {
+      setTranscriptionReady(true);
+    }
+  }, [bootstrapStatus]);
+
+  const handleSelectDefaultModel = useCallback(() => {
+    if (modelActivity) return;
+    setSelectedSeparationModel("default");
+  }, [modelActivity]);
+
+  const handleSelectHighQualityModel = useCallback(async () => {
+    if (modelActivity) return;
+    const isReady = runtimeHealth?.separationEngine?.highQualityModelReady;
+    if (isReady) {
+      setSelectedSeparationModel("high_quality");
+      return;
+    }
+    setHqDownloadError(false);
+    setModelActivity({ target: "hq", phase: "downloading" });
+    try {
+      const result = await Promise.race([
+        invoke("download_hq_model"),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("下载超时，请检查网络连接")), 180_000)
+        ),
+      ]);
+      console.log("HQ model download result:", result);
+      setSelectedSeparationModel("high_quality");
+    } catch (error) {
+      console.error("Failed to download HQ model:", error);
+      setHqDownloadError(true);
+    } finally {
+      setModelActivity(null);
+    }
+  }, [modelActivity, runtimeHealth]);
+
+  const handleToggleTranscription = useCallback(async () => {
+    if (modelActivity) return;
+    if (transcriptionReady) return;
+    setWhisperDownloadError(false);
+    setModelActivity({ target: "whisper", phase: "downloading" });
+    try {
+      await invoke("download_whisper_model");
+      setTranscriptionReady(true);
+    } catch (error) {
+      console.error("Failed to download whisper model:", error);
+      setWhisperDownloadError(true);
+    } finally {
+      setModelActivity(null);
+    }
+  }, [modelActivity, transcriptionReady]);
 
   useEffect(() => {
     if (!isDesktopRuntime) {
@@ -1328,7 +1410,7 @@ function App() {
       await Promise.all(
         newSongs.map(async (song) => {
           try {
-            await invoke("start_process", { songId: song.id, preferOnnxProvider: true });
+            await invoke("start_process", { songId: song.id, preferOnnxProvider: true, modelId: selectedSeparationModel });
             setSongs((prev) => prev.map((item) =>
               item.id === song.id && item.status !== "processing" && item.status !== "cancelling"
                 ? { ...item, status: "queued" as const, progress: 0, processingStage: "queued" as ProcessingStage, error_message: undefined }
@@ -1342,7 +1424,7 @@ function App() {
     } catch (e) {
       console.error("Failed to import songs:", e);
     }
-  }, []);
+  }, [selectedSeparationModel]);
 
   const handleSaveStorageSettings = useCallback(async (settingsOverride?: FileStorageSettings) => {
     const settingsToSave = settingsOverride ?? fileStorageSettings;
@@ -1421,7 +1503,7 @@ function App() {
   const handleSeparateInstrumental = useCallback(async (song: Song) => {
     try {
       const command = song.status === "ready" ? "reprocess_song" : "start_process";
-      await invoke(command, { songId: song.id, preferOnnxProvider: true });
+      await invoke(command, { songId: song.id, preferOnnxProvider: true, modelId: selectedSeparationModel });
       setSongs((prev) => prev.map((item) =>
         item.id === song.id && item.status !== "processing" && item.status !== "cancelling"
           ? { ...item, status: "queued" as const, progress: 0, processingStage: "queued" as ProcessingStage, error_message: undefined }
@@ -1430,7 +1512,7 @@ function App() {
     } catch (e) {
       console.error("Failed to start separation:", e);
     }
-  }, []);
+  }, [selectedSeparationModel]);
 
   // Select a song - always select, auto-play only when ready
   const handleSelectSong = useCallback(async (song: Song) => {
@@ -2314,8 +2396,8 @@ function App() {
                                 <span
                                   className="theme-swatch settings-theme-swatch block h-10 w-10 rounded-[12px] border border-white/10"
                                   style={{
-                                    "--theme-bg": theme.bg,
-                                    "--theme-card": theme.card,
+                                    "--theme-bg": theme.id === "manifesto" ? theme.card : theme.bg,
+                                    "--theme-card": theme.id === "manifesto" ? theme.accent : theme.card,
                                   } as CSSProperties & Record<string, string>}
                                 />
                               </div>
@@ -2372,7 +2454,6 @@ function App() {
                         <div className="ui-chip-wrap mt-4">
                           {[
                             "FFmpeg — FFmpeg Developers",
-                            "PyTorch — PyTorch Contributors / Linux Foundation",
                             "Whisper — OpenAI",
                             "SoundFile / python-soundfile — Bastibe and contributors",
                             "NumPy — NumPy Developers",
@@ -2463,19 +2544,191 @@ function App() {
                       </div>
 
                       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                        <div className="runtime-info-card flex h-16 min-w-0 items-center gap-3 rounded-[12px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] px-4">
+                          <img
+                            src={
+                              runtimeHealth?.separationEngine?.gpuVendor === "apple_silicon"
+                                ? "/mclip.png"
+                                : runtimeHealth?.separationEngine?.gpuVendor === "nvidia"
+                                  ? "/ncard.png"
+                                  : runtimeHealth?.separationEngine?.gpuVendor === "amd"
+                                    ? "/acard.png"
+                                    : "/fallback.png"
+                            }
+                            className="h-10 w-10 shrink-0 object-contain"
+                            alt=""
+                          />
+                          <div className="min-w-0">
+                            <div className="truncate text-[12px] font-semibold text-[var(--text-muted)]">算力硬件</div>
+                            <div className="mt-1 truncate text-sm font-bold text-[var(--text-primary)]" title={runtimeProviderLabel}>{runtimeProviderLabel}</div>
+                          </div>
+                        </div>
+                        <div className="runtime-info-card flex h-16 min-w-0 items-center gap-3 rounded-[12px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] px-4">
+                          <img
+                            src={
+                              runtimeSelectedProvider === "DmlExecutionProvider"
+                                ? "/dir.png"
+                                : runtimeSelectedProvider === "CoreMLExecutionProvider"
+                                  ? "/core.png"
+                                  : "/fallback.png"
+                            }
+                            className="h-10 w-10 shrink-0 object-contain"
+                            alt=""
+                          />
+                          <div className="min-w-0">
+                            <div className="truncate text-[12px] font-semibold text-[var(--text-muted)]">运行模式</div>
+                            <div className="mt-1 truncate text-sm font-bold text-[var(--text-primary)]" title={runtimeModeLabel}>{runtimeModeLabel}</div>
+                          </div>
+                        </div>
+                        {/* Static info cards */}
                         {[
-                          ["执行后端", runtimeProviderLabel],
-                          ["默认模型", runtimeHealth?.separationEngine?.defaultModelReady ? runtimeHealth.separationEngine.defaultModelId : "未就绪"],
-                          ["高质量模型", runtimeHealth?.separationEngine?.highQualityModelReady ? "已就绪" : "可选"],
-                          ["ONNX Runtime", runtimeHealth?.separationEngine?.onnxruntimeAvailable ? "可用" : "不可用"],
-                          ["音频解码/写入", runtimeHealth?.checks.find((check) => check.name === "FFmpeg" && check.ok) ? "已检查" : "未就绪"],
-                          ["AI 听写", bootstrapStatus?.whisperBaseReady ? "可用" : "可选"],
-                        ].map(([label, value]) => (
-                          <div key={label} className="runtime-info-card flex h-16 min-w-0 flex-col justify-center rounded-[12px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] px-4">
-                            <div className="truncate text-[12px] font-semibold text-[var(--text-muted)]">{label}</div>
-                            <div className="mt-1 truncate text-[15px] font-bold text-[var(--text-primary)]" title={value}>{value}</div>
+                          { label: "ONNX Runtime", value: runtimeHealth?.separationEngine?.onnxruntimeAvailable ? "可用" : "不可用", icon: "/ONNX.png" },
+                          { label: "Python", value: runtimeHealth?.checks.find((c) => c.name === "Python")?.ok ? "已就绪" : "未就绪", icon: "/pyth.png" },
+                          { label: "FFmpeg", value: runtimeHealth?.checks.find((c) => c.name === "FFmpeg")?.ok ? "已就绪" : "未就绪", icon: "/ff.png" },
+                          { label: "SoundFile", value: runtimeHealth?.checks.find((c) => c.name === "SoundFile")?.ok ? "已就绪" : "未就绪", icon: "/sf.png" },
+                        ].map(({ label, value, icon }) => (
+                          <div key={label} className="runtime-info-card flex h-16 min-w-0 items-center gap-3 rounded-[12px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] px-4">
+                            <img src={icon} className="h-10 w-10 shrink-0 object-contain" alt="" />
+                            <div className="min-w-0">
+                              <div className="truncate text-[12px] font-semibold text-[var(--text-muted)]">{label}</div>
+                              <div className="mt-1 truncate text-sm font-bold text-[var(--text-primary)]" title={value}>{value}</div>
+                            </div>
                           </div>
                         ))}
+                        {/* 默认模型 — 互斥组 · 内置必需 */}
+                        <div
+                          onClick={handleSelectDefaultModel}
+                          className="runtime-info-card flex h-16 min-w-0 cursor-pointer items-center gap-3 rounded-[12px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] px-4"
+                        >
+                          <img src="/ok.png" className="h-10 w-10 shrink-0 object-contain" alt="" />
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-[12px] font-semibold text-[var(--text-muted)]">默认模型</div>
+                            <div className={`mt-0.5 truncate text-[13px] font-semibold ${runtimeHealth?.separationEngine?.defaultModelReady ? "text-[var(--text-primary)]" : "text-rose-400"}`}>
+                              {runtimeHealth?.separationEngine?.defaultModelReady
+                                ? selectedSeparationModel === "default"
+                                  ? `使用中 · ${runtimeHealth.separationEngine.defaultModelId}`
+                                  : `已内置 · ${runtimeHealth.separationEngine.defaultModelId}`
+                                : "模型缺失"
+                              }
+                            </div>
+                          </div>
+                          <div
+                            style={{
+                              width: "10px",
+                              height: "10px",
+                              borderRadius: "50%",
+                              border: selectedSeparationModel === "default" ? "1.5px solid var(--accent)" : "1.5px solid rgba(148,163,184,0.3)",
+                              background: selectedSeparationModel === "default" ? "var(--accent)" : "transparent",
+                              flexShrink: 0,
+                            }}
+                          />
+                        </div>
+                        {/* 高质量模型 — 互斥组 · 可选高级 */}
+                        <div
+                          onClick={handleSelectHighQualityModel}
+                          className="runtime-info-card flex h-16 min-w-0 cursor-pointer items-center gap-3 rounded-[12px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] px-4"
+                        >
+                          <img src="/pro.png" className="h-10 w-10 shrink-0 object-contain" alt="" />
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-[12px] font-semibold text-[var(--text-muted)]">高质量模型</div>
+                            <div className="mt-0.5 truncate text-[13px] font-semibold"
+                              style={{
+                                color: hqDownloadError
+                                  ? "#fb923c"
+                                  : selectedSeparationModel === "high_quality" || runtimeHealth?.separationEngine?.highQualityModelReady
+                                    ? "var(--text-primary)"
+                                    : "var(--text-muted)",
+                              }}
+                            >
+                              {modelActivity?.target === "hq" && modelActivity.phase === "downloading"
+                                ? "下载中..."
+                                : modelActivity?.target === "hq" && modelActivity.phase === "preparing"
+                                  ? "准备中..."
+                                  : hqDownloadError
+                                    ? "下载失败，点击重试"
+                                    : selectedSeparationModel === "high_quality"
+                                      ? "使用中 · Inst_HQ_4"
+                                      : runtimeHealth?.separationEngine?.highQualityModelReady
+                                        ? "Inst_HQ_4"
+                                        : "可选下载"
+                              }
+                            </div>
+                          </div>
+                          {modelActivity?.target === "hq" ? (
+                            <div className="h-[10px] w-[10px] shrink-0 rounded-full border-[1.5px] border-transparent border-t-[var(--accent)] animate-spin" style={{ animationDuration: modelActivity.phase === "preparing" ? "1.5s" : "0.8s" }} />
+                          ) : (
+                            <div
+                              style={{
+                                width: "10px",
+                                height: "10px",
+                                borderRadius: "50%",
+                                border: hqDownloadError
+                                  ? "1.5px solid rgba(251,146,60,0.5)"
+                                  : selectedSeparationModel === "high_quality"
+                                    ? "1.5px solid var(--accent)"
+                                    : "1.5px solid rgba(148,163,184,0.3)",
+                                background: hqDownloadError
+                                  ? "rgba(251,146,60,0.5)"
+                                  : selectedSeparationModel === "high_quality"
+                                    ? "var(--accent)"
+                                    : "transparent",
+                                flexShrink: 0,
+                              }}
+                            />
+                          )}
+                        </div>
+                        {/* AI 听写 — 独立开关 */}
+                        <div
+                          onClick={handleToggleTranscription}
+                          className="runtime-info-card flex h-16 min-w-0 cursor-pointer items-center gap-3 rounded-[12px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] px-4"
+                        >
+                          <img src="/lrc.png" className="h-10 w-10 shrink-0 object-contain" alt="" />
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-[12px] font-semibold text-[var(--text-muted)]">AI 听写</div>
+                            <div className="mt-0.5 truncate text-[13px] font-semibold"
+                              style={{
+                                color: whisperDownloadError
+                                  ? "#fb923c"
+                                  : transcriptionReady
+                                    ? "var(--text-primary)"
+                                    : "var(--text-muted)",
+                              }}
+                            >
+                              {modelActivity?.target === "whisper" && modelActivity.phase === "downloading"
+                                ? "下载中..."
+                                : modelActivity?.target === "whisper" && modelActivity.phase === "preparing"
+                                  ? "准备中..."
+                                  : whisperDownloadError
+                                    ? "下载失败，点击重试"
+                                    : transcriptionReady
+                                      ? "可用"
+                                      : "可选"
+                              }
+                            </div>
+                          </div>
+                          {modelActivity?.target === "whisper" ? (
+                            <div className="h-[10px] w-[10px] shrink-0 rounded-full border-[1.5px] border-transparent border-t-[var(--accent)] animate-spin" style={{ animationDuration: modelActivity.phase === "preparing" ? "1.5s" : "0.8s" }} />
+                          ) : (
+                            <div
+                              style={{
+                                width: "10px",
+                                height: "10px",
+                                borderRadius: "50%",
+                                border: whisperDownloadError
+                                  ? "1.5px solid rgba(251,146,60,0.5)"
+                                  : transcriptionReady
+                                    ? "1.5px solid var(--accent)"
+                                    : "1.5px solid rgba(148,163,184,0.3)",
+                                background: whisperDownloadError
+                                  ? "rgba(251,146,60,0.5)"
+                                  : transcriptionReady
+                                    ? "var(--accent)"
+                                    : "transparent",
+                                flexShrink: 0,
+                              }}
+                            />
+                          )}
+                        </div>
                       </div>
 
                       <div className="flex items-center justify-between gap-4">
@@ -2485,16 +2738,15 @@ function App() {
                         </div>
                       </div>
 
-                      <div data-debug-id="dependency-list" className="dependency-list grid w-full gap-3 lg:grid-cols-2">
+                      <div className="ui-chip-wrap">
                         {displayedRuntimeChecks.map((check) => (
                           <div
                             key={check.name}
-                            data-debug-id="dependency-card"
-                            className="dependency-card flex h-[68px] min-w-0 items-center gap-3 rounded-[14px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] px-4 transition-colors"
+                            className="ui-chip"
+                            title={check.detail ?? check.name}
                           >
                             <span
-                              data-debug-id="status-dot"
-                              className={`h-2.5 w-2.5 shrink-0 rounded-full ${
+                              className={`h-2 w-2 shrink-0 rounded-full ${
                                 check.ok
                                   ? "bg-emerald-300"
                                   : check.severity === "warning"
@@ -2504,28 +2756,7 @@ function App() {
                                       : "bg-rose-300"
                               }`}
                             />
-                            <div className="min-w-0 flex-1">
-                              <div className="truncate text-[15px] font-bold leading-[1.25] tracking-tight text-[var(--text-primary)]">
-                                {check.name}
-                              </div>
-                              {check.detail && (
-                                <div className="mt-1 truncate text-[12px] leading-[1.3] text-[var(--text-muted)]" title={check.detail}>{check.detail}</div>
-                              )}
-                            </div>
-                            <div
-                              data-debug-id="status-badge"
-                              className={`status-badge ${
-                                check.ok
-                                  ? "status-badge-ok"
-                                  : check.severity === "warning"
-                                    ? "status-badge-warning"
-                                    : check.severity === "info"
-                                      ? "status-badge-info"
-                                      : "status-badge-error"
-                              }`}
-                            >
-                              {check.ok ? "正常" : check.severity === "warning" ? "注意" : check.severity === "info" ? "未确认" : "异常"}
-                            </div>
+                            <span>{check.name}</span>
                           </div>
                         ))}
                       </div>

@@ -10,6 +10,7 @@ pub(crate) struct SeparationTask {
     pub input_path: String,
     pub output_dir: PathBuf,
     pub song_duration_ms: u64,
+    pub model_id: String,
 }
 
 static QUEUE: Mutex<VecDeque<SeparationTask>> = Mutex::new(VecDeque::new());
@@ -64,6 +65,7 @@ fn worker_loop() {
                     t.output_dir,
                     t.song_duration_ms,
                     false,
+                    t.model_id,
                 );
             }
             None => {

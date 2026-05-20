@@ -122,6 +122,26 @@
   --buttonSecondaryHoverBg: var(--button-hover-bg);
 }
 
+:root[data-theme="peach"] {
+  --bg-primary: #fdf5f4;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #f7eceb;
+  --bg-card: #fefcfb;
+  --accent: #efbdc5;
+  --accent-hover: #e599aa;
+  --accent2: #97b9c9;
+  --text-primary: #3d454a;
+  --text-secondary: #5a646b;
+  --text-muted: #77848c;
+  --text-dim: #9ba5ac;
+  --border: #f0dfe1;
+  --danger: #dc2626;
+  --dangerHover: #b91c1c;
+  --dangerActive: #991b1b;
+  --dangerSoft: rgba(220, 38, 38, 0.1);
+  --dangerBorder: rgba(220, 38, 38, 0.25);
+}
+
 :root[data-theme="aurora"] {
   --bg-primary: #090b10;
   --bg-secondary: #12161f;
@@ -482,6 +502,7 @@
   --dangerBorder: rgba(248, 113, 113, 0.3);
 }
 
+:root[data-theme="peach"] .theme-aware-surface,
 :root[data-theme="daylight"] .theme-aware-surface,
 :root[data-theme="paper"] .theme-aware-surface,
 :root[data-theme="passion"] .theme-aware-surface,
@@ -489,6 +510,7 @@
   background-color: color-mix(in srgb, var(--bg-secondary) 94%, transparent);
 }
 
+:root[data-theme="peach"] .theme-subtle-surface,
 :root[data-theme="daylight"] .theme-subtle-surface,
 :root[data-theme="paper"] .theme-subtle-surface,
 :root[data-theme="passion"] .theme-subtle-surface,
@@ -1605,6 +1627,7 @@ html, body {
   background: rgba(239, 68, 68, 0.18);
 }
 
+:root[data-theme="peach"] .context-menu,
 :root[data-theme="daylight"] .context-menu,
 :root[data-theme="paper"] .context-menu,
 :root[data-theme="passion"] .context-menu,
@@ -1659,6 +1682,7 @@ html, body {
   color: #fca5a5;
 }
 
+:root[data-theme="peach"] .status-badge-ok,
 :root[data-theme="daylight"] .status-badge-ok,
 :root[data-theme="paper"] .status-badge-ok,
 :root[data-theme="passion"] .status-badge-ok,
@@ -1666,6 +1690,7 @@ html, body {
   color: #047857;
 }
 
+:root[data-theme="peach"] .status-badge-warning,
 :root[data-theme="daylight"] .status-badge-warning,
 :root[data-theme="paper"] .status-badge-warning,
 :root[data-theme="passion"] .status-badge-warning,
@@ -1673,6 +1698,7 @@ html, body {
   color: #92400e;
 }
 
+:root[data-theme="peach"] .status-badge-info,
 :root[data-theme="daylight"] .status-badge-info,
 :root[data-theme="paper"] .status-badge-info,
 :root[data-theme="passion"] .status-badge-info,
@@ -1680,6 +1706,7 @@ html, body {
   color: #0369a1;
 }
 
+:root[data-theme="peach"] .status-badge-error,
 :root[data-theme="daylight"] .status-badge-error,
 :root[data-theme="paper"] .status-badge-error,
 :root[data-theme="passion"] .status-badge-error,
