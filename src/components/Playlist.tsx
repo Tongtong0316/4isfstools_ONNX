@@ -166,8 +166,9 @@ function FolderInputIcon({ className = "" }: { className?: string }) {
 function RevealIcon({ className = "" }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M4 8h4l1.5 2h6.5v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V10a2 2 0 0 1 1-2Z" stroke={iconStroke} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M9 17V7l8 5-8 5Z" stroke={iconStroke} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M3 8.5h4l1.5 2h7.5v7a2 2 0 0 1-2 2H4a1 1 0 0 1-1-1v-10Z" stroke={iconStroke} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="17" cy="17" r="4" stroke={iconStroke} strokeWidth="1.7" />
+      <path d="m21.5 21.5-2.5-2.5" stroke={iconStroke} strokeWidth="1.7" strokeLinecap="round" />
     </svg>
   );
 }
@@ -829,7 +830,8 @@ export default function Playlist({
                   icon={<RevealIcon className="h-5 w-5" />}
                   onClick={async () => {
                     try {
-                      await invoke("reveal_in_file_manager", { path: contextMenu.song.originalPath });
+                      const targetPath = contextMenu.song.vocalsPath || contextMenu.song.instrumentalPath || contextMenu.song.originalPath;
+                      await invoke("reveal_in_file_manager", { path: targetPath });
                     } catch (e) {
                       console.error("Failed to reveal in file manager:", e);
                     }
