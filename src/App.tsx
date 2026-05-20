@@ -7,6 +7,7 @@ import Playlist from "./components/Playlist";
 import VocalWaveformPreview, { buildWaveformPeaks } from "./components/VocalWaveformPreview";
 import { Song, ProcessingStage, ProcessingStatus } from "./types";
 import LyricsPanel from "./components/lyrics/LyricsPanel";
+import { MicIcon, MusicNoteIcon } from "./components/icons";
 import type { LyricDocument } from "./types/lyrics";
 
 const MEDIA_IMPORT_EXTENSIONS = [
@@ -278,7 +279,7 @@ const SETTINGS_NAV_ITEMS: Array<{
 const SETTINGS_PAGE_COPY: Record<SettingsPane, { title: string; description: string }> = {
   runtime: {
     title: "运行环境",
-    description: "检测依赖、模型与 GPU 状态，确保核心功能可以正常运行。",
+    description: "检测依赖、模型与 GPU 状态，确保核心功能可以正常运行。\n默认模型稳，HQ5 更强但更慢，可在两者间切换。",
   },
   audioOutput: {
     title: "音频输出",
@@ -2014,7 +2015,7 @@ function App() {
                   {/* Song Info */}
                   <div className="player-track-info-row">
                     <div className="player-track-info-left">
-                      <div className="player-track-icon">🎵</div>
+                      <div className="player-track-icon"><MusicNoteIcon className="w-10 h-10 text-[var(--text-primary)]" /></div>
                       <div className="min-w-0">
                         <div className="ui-text-ellipsis text-sm font-semibold text-[var(--text-primary)]" title={currentSong.name}>{currentSong.name}</div>
                         <div className="ui-text-ellipsis text-xs text-[var(--text-secondary)]">
@@ -2152,7 +2153,7 @@ function App() {
               </div>
             ) : (
               <div className="h-full flex flex-col items-center justify-center text-[var(--text-muted)]">
-                <div className="text-4xl mb-4">🎤</div>
+                <MicIcon className="w-10 h-10 mb-4" />
                 <div className="text-sm">从左侧列表选择歌曲</div>
                 <div className="text-xs text-[var(--text-muted)] mt-2">使用右上“导入歌曲”按钮添加音乐</div>
               </div>
@@ -2648,9 +2649,9 @@ function App() {
                                   : hqDownloadError
                                     ? "下载失败，点击重试"
                                     : selectedSeparationModel === "high_quality"
-                                      ? "使用中 · Inst_HQ_4"
+                                      ? "使用中 · Inst_HQ_5"
                                       : runtimeHealth?.separationEngine?.highQualityModelReady
-                                        ? "Inst_HQ_4"
+                                        ? "Inst_HQ_5"
                                         : "可选下载"
                               }
                             </div>

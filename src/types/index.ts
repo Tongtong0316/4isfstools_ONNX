@@ -7,6 +7,7 @@ export interface Song {
   instrumentalPath: string | null;
   originalMixPath: string | null;
   lyricsPath: string | null;
+  separationModelId?: string | null;
   duration: number;
   status: 'pending' | 'queued' | 'processing' | 'ready' | 'error' | 'cancelled' | 'cancelling';
   progress: number;
@@ -73,24 +74,24 @@ export const STATUS_LABELS: Record<string, string> = {
 };
 
 export const STATUS_ICONS: Record<string, string> = {
-  'pending': '📁',
-  'queued': '⏳',
-  'processing': '⚙️',
-  'ready': '🎤',
-  'error': '❌',
-  'cancelled': '⏸',
-  'cancelling': '🔄'
+  'pending': 'folder',
+  'queued': 'queued',
+  'processing': 'settings',
+  'ready': 'mic',
+  'error': 'error',
+  'cancelled': 'paused',
+  'cancelling': 'refresh'
 };
 
 export const STAGE_ICONS: Record<ProcessingStage, string> = {
-  'checking_gpu': '🔍',
-  'gpu_available': '🚀',
-  'cpu_fallback': '💻',
-  'separating': '🎤',
-  'aligning': '🎯',
-  'complete': '✅',
-  'queued': '⏳',
-  'cancelling': '🔄',
-  'cancelled': '⏸',
-  'error': '❌'
+  'checking_gpu': 'search',
+  'gpu_available': 'rocket',
+  'cpu_fallback': 'laptop',
+  'separating': 'mic',
+  'aligning': 'target',
+  'complete': 'check',
+  'queued': 'queued',
+  'cancelling': 'refresh',
+  'cancelled': 'paused',
+  'error': 'error'
 };

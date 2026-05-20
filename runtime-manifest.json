@@ -33,16 +33,16 @@
         ],
         "onnx": [
           {
-            "url": "https://hf-mirror.com/Blane187/all_public_uvr_models/resolve/main/UVR-MDX-NET-Inst_HQ_4.onnx",
-            "sha256": "3c4b5b9b05090fdf238f38ba5046813982d50e2a652e9cb3324ea79720c3c9c8",
-            "targetRelpath": "onnx/UVR-MDX-NET-Inst_HQ_4.onnx",
-            "note": "UVR-MDX-NET-Inst_HQ_4 (可选高级模型，国内镜像)"
+            "url": "https://ghproxy.net/https://github.com/k2-fsa/sherpa-onnx/releases/download/source-separation-models/UVR-MDX-NET-Inst_HQ_5.onnx",
+            "sha256": "487e35ae87ed9af9914c85c357e60800c07b8196949e274fe884c18a0c620dbb",
+            "targetRelpath": "onnx/UVR-MDX-NET-Inst_HQ_5.onnx",
+            "note": "UVR-MDX-NET-Inst_HQ_5 (可选高级模型，国内镜像 1)"
           },
           {
-            "url": "https://huggingface.co/Blane187/all_public_uvr_models/resolve/main/UVR-MDX-NET-Inst_HQ_4.onnx",
-            "sha256": "3c4b5b9b05090fdf238f38ba5046813982d50e2a652e9cb3324ea79720c3c9c8",
-            "targetRelpath": "onnx/UVR-MDX-NET-Inst_HQ_4.onnx",
-            "note": "UVR-MDX-NET-Inst_HQ_4 (可选高级模型，官方兜底)"
+            "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/source-separation-models/UVR-MDX-NET-Inst_HQ_5.onnx",
+            "sha256": "487e35ae87ed9af9914c85c357e60800c07b8196949e274fe884c18a0c620dbb",
+            "targetRelpath": "onnx/UVR-MDX-NET-Inst_HQ_5.onnx",
+            "note": "UVR-MDX-NET-Inst_HQ_5 (官方兜底)"
           }
         ],
         "whisperBase": [
@@ -239,16 +239,16 @@
         ],
         "onnx": [
           {
-            "url": "https://hf-mirror.com/Blane187/all_public_uvr_models/resolve/main/UVR-MDX-NET-Inst_HQ_4.onnx",
-            "sha256": "3c4b5b9b05090fdf238f38ba5046813982d50e2a652e9cb3324ea79720c3c9c8",
-            "targetRelpath": "onnx/UVR-MDX-NET-Inst_HQ_4.onnx",
-            "note": "UVR-MDX-NET-Inst_HQ_4 (可选高级模型，国内镜像)"
+            "url": "https://ghproxy.net/https://github.com/k2-fsa/sherpa-onnx/releases/download/source-separation-models/UVR-MDX-NET-Inst_HQ_5.onnx",
+            "sha256": "487e35ae87ed9af9914c85c357e60800c07b8196949e274fe884c18a0c620dbb",
+            "targetRelpath": "onnx/UVR-MDX-NET-Inst_HQ_5.onnx",
+            "note": "UVR-MDX-NET-Inst_HQ_5 (可选高级模型，国内镜像 1)"
           },
           {
-            "url": "https://huggingface.co/Blane187/all_public_uvr_models/resolve/main/UVR-MDX-NET-Inst_HQ_4.onnx",
-            "sha256": "3c4b5b9b05090fdf238f38ba5046813982d50e2a652e9cb3324ea79720c3c9c8",
-            "targetRelpath": "onnx/UVR-MDX-NET-Inst_HQ_4.onnx",
-            "note": "UVR-MDX-NET-Inst_HQ_4 (可选高级模型，官方兜底)"
+            "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/source-separation-models/UVR-MDX-NET-Inst_HQ_5.onnx",
+            "sha256": "487e35ae87ed9af9914c85c357e60800c07b8196949e274fe884c18a0c620dbb",
+            "targetRelpath": "onnx/UVR-MDX-NET-Inst_HQ_5.onnx",
+            "note": "UVR-MDX-NET-Inst_HQ_5 (官方兜底)"
           }
         ]
       }

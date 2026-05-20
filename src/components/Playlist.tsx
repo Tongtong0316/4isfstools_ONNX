@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Song, STAGE_LABELS, STAGE_ICONS, STATUS_ICONS, ProcessingStage } from "../types";
+import { Song, STAGE_LABELS, ProcessingStage } from "../types";
+import { MicIcon as StatusMicIcon, FileIcon, SettingsIcon, RefreshIcon, RocketIcon, LaptopIcon, TargetIcon, CheckIcon, FolderIcon } from "./icons";
 
 interface PlaylistProps {
   songs: Song[];
@@ -84,17 +85,6 @@ function SearchIcon({ className = "" }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
       <path d="m17.2 17.2 3.3 3.3M10.8 18a7.2 7.2 0 1 1 0-14.4 7.2 7.2 0 0 1 0 14.4Z" stroke={iconStroke} strokeWidth="1.9" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function MicIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M8.2 11.8 17.6 2.4a3.2 3.2 0 0 1 4.5 4.5l-9.4 9.4" stroke={iconStroke} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="m7 13 4 4-5.5 3.5-2-2L7 13Z" fill="currentColor" opacity="0.22" />
-      <path d="m7 13 4 4-5.5 3.5-2-2L7 13Z" stroke={iconStroke} strokeWidth="1.8" strokeLinejoin="round" />
-      <path d="m15.7 4.3 4 4" stroke={iconStroke} strokeWidth="1.8" strokeLinecap="round" />
     </svg>
   );
 }
@@ -304,11 +294,33 @@ export default function Playlist({
     return `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, "0")}`;
   };
 
-  const getStatusIcon = (song: Song) => {
+  const iconClass = "h-7 w-7";
+  const statusIconMap: Record<string, React.ReactNode> = {
+    pending: <FolderIcon className={iconClass} />,
+    queued: <ClockIcon className={iconClass} />,
+    processing: <SettingsIcon className={iconClass} />,
+    ready: <StatusMicIcon className={iconClass} />,
+    error: <span className="text-red-400 text-sm font-bold">!</span>,
+    cancelled: <span className="text-sm">⏸</span>,
+    cancelling: <RefreshIcon className={iconClass} />,
+  };
+  const stageIconMap: Record<string, React.ReactNode> = {
+    checking_gpu: <SearchIcon className={iconClass} />,
+    gpu_available: <RocketIcon className={iconClass} />,
+    cpu_fallback: <LaptopIcon className={iconClass} />,
+    separating: <StatusMicIcon className={iconClass} />,
+    aligning: <TargetIcon className={iconClass} />,
+    complete: <CheckIcon className={iconClass} />,
+    queued: <ClockIcon className={iconClass} />,
+    cancelling: <RefreshIcon className={iconClass} />,
+    cancelled: <span className="text-sm">⏸</span>,
+    error: <span className="text-red-400 text-sm font-bold">!</span>,
+  };
+  const getStatusIcon = (song: Song): React.ReactNode => {
     if (song.status === "processing") {
-      return song.processingStage ? STAGE_ICONS[song.processingStage as ProcessingStage] : "⚙️";
+      return song.processingStage ? stageIconMap[song.processingStage] : <SettingsIcon className={iconClass} />;
     }
-    return STATUS_ICONS[song.status] || "📄";
+    return statusIconMap[song.status] || <FileIcon className={iconClass} />;
   };
 
   const normalizedSongFolder = (song: Song) => song.playlistFolder?.trim() || DEFAULT_FOLDER;
@@ -525,8 +537,16 @@ export default function Playlist({
     return "";
   };
 
+  const renderSongModelBadge = (song: Song) => {
+    if (song.separationModelId === "high_quality") {
+      return { label: "HQ", className: "border-[rgba(251,146,60,0.35)] bg-[rgba(251,146,60,0.12)] text-[#fb923c]" };
+    }
+    return null;
+  };
+
   const renderSongCard = (song: Song) => {
     const meta = renderSongMeta(song);
+    const modelBadge = renderSongModelBadge(song);
     const active = currentSong?.id === song.id;
     const dimmed = song.status !== "ready" && song.status !== "processing" && song.status !== "error";
 
@@ -572,13 +592,22 @@ export default function Playlist({
               boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)",
             }}
           >
-            {song.status === "ready" ? <MicIcon className="h-7 w-7" /> : getStatusIcon(song)}
+            {getStatusIcon(song)}
           </span>
         )}
-        <div className={viewMode === "list" ? "grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] items-center gap-3" : "min-w-0 flex-1 self-center"}>
+        <div className={viewMode === "list" ? "grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] items-center gap-3" : "relative min-w-0 flex-1 self-center pr-10"}>
           <div className={`${viewMode === "list" ? "text-[13px]" : "text-[15px]"} ui-text-ellipsis min-w-0 font-semibold text-[var(--text-primary)]`} title={song.name}>
             {song.name}
           </div>
+          {viewMode === "cards" && modelBadge && (
+            <div className="absolute right-0 bottom-0">
+              <span
+                className={`inline-flex items-center rounded-[7px] border px-1.5 py-[1px] text-[10px] font-semibold leading-none ${modelBadge.className}`}
+              >
+                {modelBadge.label}
+              </span>
+            </div>
+          )}
           {viewMode === "list" ? (
             <div className="max-w-[82px] truncate text-right text-[13px] text-[var(--text-muted)]">
               {meta}
@@ -837,7 +866,7 @@ export default function Playlist({
                     closeContextMenu();
                   }}
                 >
-                  {navigator.platform.startsWith("Mac") ? "在访达中打开" : "在资源管理器中打开"}
+                  {navigator.platform.startsWith("Mac") ? "在访达中打开伴奏位置" : "在资源管理器中打开伴奏位置"}
                 </ContextMenuItem>
                 {contextMenu.song.status !== "processing" && contextMenu.song.status !== "queued" && contextMenu.song.status !== "cancelling" && (
                   <>

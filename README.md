@@ -18,18 +18,18 @@
 - 桌面壳：Tauri 2.x
 - 后端：Rust
 - 运行时：嵌入式 Python
-- 分离引擎：ONNX Runtime provider / model metadata probe
+- 分离引擎：sherpa-onnx UVR 兼容路径
 - 听写引擎：faster-whisper
 
 ### 分离主线
 
 - 默认模型：`UVR_MDXNET_9482.onnx`
-- 高质量可选模型：`BS_PolarFormer_FP16.onnx`
+- 高质量可选模型：`UVR-MDX-NET-Inst_HQ_5.onnx`
 - Provider 策略：
   - Windows: `DmlExecutionProvider -> CPUExecutionProvider`
   - macOS: `CoreMLExecutionProvider -> CPUExecutionProvider`
   - fallback: `CPUExecutionProvider`
-- 目前实现是探测层，不是完整音频分离执行。
+- 目前实现是完整音频分离执行，不再只是探测层。
 - `RuntimeHealthReport.separationEngine` 记录 `requestedProviders`、`selectedProvider`、`providerFallbackReason`、`defaultModelReady`、`highQualityModelReady`、`onnxruntimeAvailable` 等信息。
 
 ### 听写主线
@@ -47,7 +47,7 @@
   - `soundfile`
 - 听写额外依赖：
   - `faster-whisper`
-- Demucs / CUDA Torch 不再是主分离路线的安装前提
+- Demucs / CUDA 不再是分离路线依赖
 
 ## 目录
 

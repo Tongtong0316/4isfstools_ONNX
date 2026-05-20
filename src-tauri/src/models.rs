@@ -26,6 +26,8 @@ pub struct Song {
     pub processing_stage: Option<String>,
     #[serde(default)]
     pub error_message: Option<String>,
+    #[serde(default)]
+    pub separation_model_id: Option<String>,
     pub added_at: u64,
 }
 
@@ -190,7 +192,7 @@ impl Default for SeparationEngineHealth {
             default_model_output_shape: None,
             default_model_dummy_inference_ok: None,
             default_model_dummy_inference_error: None,
-            high_quality_model_id: Some("bs_polarformer_fp16".to_string()),
+            high_quality_model_id: Some("uvr_mdx_net_inst_hq_5".to_string()),
             high_quality_model_path: String::new(),
             high_quality_model_ready: false,
             high_quality_model_session_load_ok: false,

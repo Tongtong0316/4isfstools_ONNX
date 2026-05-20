@@ -1,4 +1,5 @@
 import { Song, LyricLine, PlayerState } from "../types";
+import { MusicNoteIcon } from "./icons";
 
 interface PlayerProps {
   song: Song | null;
@@ -37,9 +38,9 @@ export default function Player({
           <div className="w-24 h-24 rounded-xl bg-gradient-to-br from-[#6366f1] to-[#a855f7] shadow-lg shadow-purple-500/20 flex items-center justify-center">
             <div className="w-20 h-20 rounded-lg bg-[#0f0f23] flex items-center justify-center">
               {song ? (
-                <div className="text-4xl">🎵</div>
+                <MusicNoteIcon className="w-9 h-9 text-white" />
               ) : (
-                <div className="text-2xl text-[#6366f1]">♪</div>
+                <MusicNoteIcon className="w-7 h-7 text-[#6366f1]" />
               )}
             </div>
           </div>

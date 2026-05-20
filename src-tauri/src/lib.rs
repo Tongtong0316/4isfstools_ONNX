@@ -1480,6 +1480,7 @@ fn host_is_mainland_preferred(url: &str) -> bool {
         || host.contains("tencent")
         || host == "hf-mirror.com"
         || host.ends_with(".hf-mirror.com")
+        || host == "alpha.hf-mirror.com"
         || host == "gh.llkk.cc"
         || host == "ghproxy.net"
         || host == "mirror.ghproxy.com"
@@ -1550,21 +1551,40 @@ fn download_to_file(url: &str, target_file: &Path) -> Result<(), String> {
     let client = reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(300))
+        .redirect(reqwest::redirect::Policy::limited(10))
         .build()
         .map_err(|e| format!("创建下载客户端失败: {}", e))?;
-    let mut response = client
-        .get(url)
-        .send()
-        .map_err(|e| format!("下载失败 {}: {}", url, e))?;
-    if !response.status().is_success() {
-        return Err(format!("下载失败 {}: HTTP {}", url, response.status()));
+    let mut last_err = None;
+    for attempt in 1..=3 {
+        let result = (|| -> Result<(), String> {
+            let mut response = client
+                .get(url)
+                .send()
+                .map_err(|e| format!("下载失败 {}: {}", url, e))?;
+            if !response.status().is_success() {
+                return Err(format!("下载失败 {}: HTTP {}", url, response.status()));
+            }
+            if let Some(parent) = target_file.parent() {
+                fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
+            }
+            let mut file =
+                fs::File::create(target_file).map_err(|e| format!("写入临时文件失败: {}", e))?;
+            io::copy(&mut response, &mut file).map_err(|e| format!("写入下载文件失败: {}", e))?;
+            Ok(())
+        })();
+
+        match result {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                last_err = Some(err);
+                let _ = fs::remove_file(target_file);
+                if attempt < 3 {
+                    std::thread::sleep(Duration::from_millis(500 * attempt as u64));
+                }
+            }
+        }
     }
-    if let Some(parent) = target_file.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
-    }
-    let mut file = fs::File::create(target_file).map_err(|e| format!("写入临时文件失败: {}", e))?;
-    io::copy(&mut response, &mut file).map_err(|e| format!("写入下载文件失败: {}", e))?;
-    Ok(())
+    Err(last_err.unwrap_or_else(|| format!("下载失败 {}", url)))
 }
 
 fn extract_archive(archive_path: &Path, runtime_models: &Path) -> Result<(), String> {
@@ -2054,7 +2074,7 @@ fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
         }
     }
 
-    // 安装可选高级模型 UVR-MDX-NET-Inst_HQ_4
+    // 安装可选高级模型 UVR-MDX-NET-Inst_HQ_5
     let onnx_sources = platform_manifest.models.onnx.clone();
     if !onnx_sources.is_empty() && verify_manifest_targets(&runtime_models, &onnx_sources).is_err()
     {
@@ -2065,13 +2085,13 @@ fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
             &onnx_sources,
         ) {
             Ok(true) => {
-                install_notes.push("UVR-MDX-NET-Inst_HQ_4: 已从大陆优先在线源下载".to_string());
+                install_notes.push("UVR-MDX-NET-Inst_HQ_5: 已从大陆优先在线源下载".to_string());
             }
             Ok(false) => {
-                install_notes.push("UVR-MDX-NET-Inst_HQ_4: 未配置可用在线源".to_string());
+                install_notes.push("UVR-MDX-NET-Inst_HQ_5: 未配置可用在线源".to_string());
             }
             Err(err) => {
-                install_notes.push(format!("UVR-MDX-NET-Inst_HQ_4 下载失败（可选）：{}", err))
+                install_notes.push(format!("UVR-MDX-NET-Inst_HQ_5 下载失败（可选）：{}", err))
             }
         }
     }
@@ -3216,6 +3236,7 @@ mod tests {
             progress: 0,
             processing_stage: None,
             error_message: None,
+            separation_model_id: None,
             added_at: 0,
         };
         let cleaned = clean_song_search_hint(&song);
@@ -3239,6 +3260,7 @@ mod tests {
             progress: 0,
             processing_stage: None,
             error_message: None,
+            separation_model_id: None,
             added_at: 0,
         };
         let intent = build_lyrics_search_intent(&song, None);
@@ -3264,6 +3286,7 @@ mod tests {
             progress: 0,
             processing_stage: None,
             error_message: None,
+            separation_model_id: None,
             added_at: 0,
         };
         let intent = build_lyrics_search_intent(&song, Some("爱你"));
@@ -5016,6 +5039,7 @@ async fn import_songs(_app: AppHandle, paths: Vec<String>) -> Result<Vec<Song>, 
             progress: 0,
             processing_stage: None,
             error_message: None,
+            separation_model_id: None,
             added_at: timestamp,
         };
         new_songs.push(song.clone());
@@ -5064,6 +5088,7 @@ async fn start_process(
                 s.original_mix_path = None;
                 s.error_message = None;
                 s.processing_stage = None;
+                s.separation_model_id = Some(model_id.clone());
             }
         }
     }
@@ -5129,6 +5154,69 @@ fn process_song_with_onnx_skeleton(
         engine_health.onnxruntime_available =
             runtime::capability::python_module_is_available(&python_path, "onnxruntime", 6)
                 .unwrap_or(false);
+    }
+
+    if model_id == "high_quality" {
+        let runtime_models = get_models_dir(&app);
+        let runtime_onnx = runtime_models.join("onnx");
+        let manifest = runtime::manifest::load_runtime_manifest(
+            &app,
+            &get_runtime_dir(),
+            &resolve_project_root(),
+        );
+        let platform_manifest = runtime::manifest::current_platform_manifest(&manifest);
+        let onnx_sources = platform_manifest.models.onnx.clone();
+        if !onnx_sources.is_empty()
+            && verify_manifest_targets(&runtime_models, &onnx_sources).is_err()
+        {
+            let repair_result = bootstrap_model_from_manifest_sources(
+                &runtime_models,
+                "onnx",
+                &runtime_onnx,
+                &onnx_sources,
+            );
+            if let Err(err) = repair_result {
+                let result = serde_json::json!({
+                    "success": false,
+                    "error": format!("high_quality_model_repair_failed: {}", err),
+                    "error_code": "ONNX_ENGINE_NOT_READY",
+                    "stage": "model_repair",
+                    "engine": engine_health.active_engine,
+                    "requested_model_id": model_id,
+                    "high_quality_model_id": engine_health.high_quality_model_id,
+                    "high_quality_model_path": engine_health.high_quality_model_path,
+                    "high_quality_model_ready": engine_health.high_quality_model_ready,
+                });
+                let result_path = output_dir.join("separator_result.json");
+                let _ = fs::write(
+                    &result_path,
+                    serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_string()),
+                );
+                let debug_dir = output_dir.join("debug");
+                let _ = fs::create_dir_all(&debug_dir);
+                let _ = fs::write(
+                    debug_dir.join("separator_result.json"),
+                    serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_string()),
+                );
+                emit_error_for_job(
+                    &app,
+                    &song_id,
+                    &job_token,
+                    "processing",
+                    "[ONNX_ENGINE_NOT_READY] high_quality_model_repair_failed",
+                );
+                update_song_status_for_job(
+                    &song_id,
+                    &job_token,
+                    "error",
+                    0,
+                    Some("model_repair"),
+                    Some("[ONNX_ENGINE_NOT_READY] high_quality_model_repair_failed"),
+                );
+                return;
+            }
+            engine_health = separation::detect_engine_health(&app, &get_models_dir(&app));
+        }
     }
 
     let debug_dir = output_dir.join("debug");
@@ -5254,7 +5342,7 @@ fn process_song_with_onnx_skeleton(
         None,
     );
 
-    let (model_path, effective_model_id) = if model_id == "high_quality" {
+    let model_path = if model_id == "high_quality" {
         if !engine_health.high_quality_model_ready {
             let result = serde_json::json!({
                 "success": false,
@@ -5295,9 +5383,9 @@ fn process_song_with_onnx_skeleton(
             );
             return;
         }
-        (&engine_health.high_quality_model_path, "high_quality")
+        &engine_health.high_quality_model_path
     } else {
-        (&engine_health.default_model_path, "default")
+        &engine_health.default_model_path
     };
     let result = match separation::onnx_engine::run_onnx_separation(
         &app,
@@ -5307,7 +5395,7 @@ fn process_song_with_onnx_skeleton(
         Path::new(model_path),
         &requested_providers,
         &engine_health.selected_provider,
-        effective_model_id,
+        model_id,
     ) {
         Ok(result) => result,
         Err(err) => serde_json::json!({
@@ -5572,6 +5660,7 @@ async fn reprocess_song(
                 s.original_mix_path = None;
                 s.lyrics_path = None;
                 s.error_message = None;
+                s.separation_model_id = Some(model_id.clone());
             }
         }
     }
@@ -6491,7 +6580,7 @@ fn reveal_in_file_manager(path: String) -> Result<(), String> {
 #[tauri::command]
 fn reveal_song_folder(song_id: String) -> Result<(), String> {
     let settings = get_file_storage_settings_snapshot();
-    let dir = resolve_asset_root("vocals", &settings).join(&song_id);
+    let dir = resolve_asset_root("instrumental", &settings).join(&song_id);
     if !dir.exists() {
         let songs = SONGS.lock().unwrap();
         if let Some(ref map) = *songs {
