@@ -6432,6 +6432,7 @@ pub fn run() {
             read_file_bytes,
             get_audio_url,
             reveal_in_file_manager,
+            reveal_song_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -6474,11 +6475,52 @@ fn reveal_in_file_manager(path: String) -> Result<(), String> {
     }
     #[cfg(target_os = "linux")]
     {
-        let target = if is_dir { &path_buf } else { path_buf.parent().unwrap_or(&path_buf) };
+        let target = if is_dir {
+            &path_buf
+        } else {
+            path_buf.parent().unwrap_or(&path_buf)
+        };
         std::process::Command::new("xdg-open")
             .arg(target)
             .spawn()
             .map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+#[tauri::command]
+fn reveal_song_folder(song_id: String) -> Result<(), String> {
+    let settings = get_file_storage_settings_snapshot();
+    let dir = resolve_asset_root("vocals", &settings).join(&song_id);
+    if !dir.exists() {
+        let songs = SONGS.lock().unwrap();
+        if let Some(ref map) = *songs {
+            if let Some(song) = map.get(&song_id) {
+                if let Some(ref vp) = song.vocals_path {
+                    let p = std::path::Path::new(vp);
+                    if let Some(parent) = p.parent() {
+                        let fallback = parent.to_path_buf();
+                        if fallback.exists() {
+                            return reveal_in_file_manager(fallback.to_string_lossy().to_string());
+                        }
+                    }
+                }
+                if let Some(ref ip) = song.instrumental_path {
+                    let p = std::path::Path::new(ip);
+                    if let Some(parent) = p.parent() {
+                        let fallback = parent.to_path_buf();
+                        if fallback.exists() {
+                            return reveal_in_file_manager(fallback.to_string_lossy().to_string());
+                        }
+                    }
+                }
+                let p = std::path::Path::new(&song.original_path);
+                if let Some(parent) = p.parent() {
+                    return reveal_in_file_manager(parent.to_string_lossy().to_string());
+                }
+            }
+        }
+        return Err(format!("找不到歌曲目录: {}", song_id));
+    }
+    reveal_in_file_manager(dir.to_string_lossy().to_string())
 }

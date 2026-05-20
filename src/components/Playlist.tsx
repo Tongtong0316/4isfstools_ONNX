@@ -830,11 +830,7 @@ export default function Playlist({
                   icon={<RevealIcon className="h-5 w-5" />}
                   onClick={async () => {
                     try {
-                      const filePath = contextMenu.song.vocalsPath || contextMenu.song.instrumentalPath || contextMenu.song.originalPath;
-                      // Open the parent directory (song output folder) rather than the file itself
-                      const parts = filePath.replace(/\\/g, "/").split("/");
-                      const dir = parts.slice(0, -1).join("/") || filePath;
-                      await invoke("reveal_in_file_manager", { path: dir });
+                      await invoke("reveal_song_folder", { songId: contextMenu.song.id });
                     } catch (e) {
                       console.error("Failed to reveal in file manager:", e);
                     }
