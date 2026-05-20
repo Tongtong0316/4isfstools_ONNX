@@ -1229,13 +1229,14 @@ function App() {
       ]);
       console.log("HQ model download result:", result);
       setSelectedSeparationModel("high_quality");
+      await handleRefreshRuntimeHealth();
     } catch (error) {
       console.error("Failed to download HQ model:", error);
       setHqDownloadError(true);
     } finally {
       setModelActivity(null);
     }
-  }, [modelActivity, runtimeHealth]);
+  }, [modelActivity, runtimeHealth, handleRefreshRuntimeHealth]);
 
   const handleToggleTranscription = useCallback(async () => {
     if (modelActivity) return;
