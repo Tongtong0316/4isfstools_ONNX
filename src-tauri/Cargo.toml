@@ -1,6 +1,6 @@
 [package]
 name = "forisfstools"
-version = "1.0.2"
+version = "1.0.0"
 description = "4isfstools - 人声分离、歌词转录、同步播放"
 authors = ["suntong"]
 edition = "2021"
