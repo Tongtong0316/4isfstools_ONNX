@@ -25,12 +25,12 @@ fn hidden_separation_tuning(model_id: &str) -> HiddenSeparationTuning {
     match model_id {
         "high_quality" => HiddenSeparationTuning {
             segment_size: 256,
-            overlap_ratio: 0.25,
+            overlap_ratio: 0.5,
             vocals_first: false,
         },
         _ => HiddenSeparationTuning {
             segment_size: 256,
-            overlap_ratio: 0.25,
+            overlap_ratio: 0.5,
             vocals_first: true,
         },
     }
@@ -44,6 +44,7 @@ fn run_onnx_probe_value(
     let script = r#"
 import json
 import sys
+import time
 from pathlib import Path
 
 requested = json.loads(sys.argv[1])
@@ -372,6 +373,7 @@ pub(crate) fn run_onnx_separation(
     let script = r#"
 import json
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -396,6 +398,7 @@ payload = {
     "sampleRate": None,
     "segmentCount": 0,
     "outputSampleCount": None,
+    "timingsMs": {},
 }
 
 def write_payload():
@@ -506,7 +509,10 @@ def make_direct_session(model_path, provider):
         raise
 
 def separate_hq5_mdx(model_path, input_path, vocals_path, instrumental_path, provider):
+    started_at = time.perf_counter()
+    payload["modelBranch"] = "hq5_direct_mdx"
     samples, sample_rate = sf.read(str(input_path), dtype="float32", always_2d=True)
+    audio_loaded_at = time.perf_counter()
     samples = np.transpose(samples)
     original_sample_count = int(samples.shape[1])
     if samples.shape[0] == 1:
@@ -523,7 +529,7 @@ def separate_hq5_mdx(model_path, input_path, vocals_path, instrumental_path, pro
     n_fft = 5120
     dim_f = 2560
     trim = n_fft // 2
-    batch_size = 4
+    batch_size = 1
     chunk_size = max(hop_length * (segment_size - 1), hop_length)
     gen_size = chunk_size - 2 * trim
     if gen_size <= 0:
@@ -546,6 +552,7 @@ def separate_hq5_mdx(model_path, input_path, vocals_path, instrumental_path, pro
     total_segments = max(1, (mixture.shape[-1] + step - 1) // step)
     stft = MDXSTFT(n_fft=n_fft, hop_length=hop_length, dim_f=dim_f)
     session = make_direct_session(model_path, provider)
+    session_ready_at = time.perf_counter()
     input_name = session.get_inputs()[0].name
     output_name = session.get_outputs()[0].name
     progress_path = vocals_path.parent / "separator_progress.json"
@@ -600,6 +607,7 @@ def separate_hq5_mdx(model_path, input_path, vocals_path, instrumental_path, pro
                 json.dump({"percent": pct, "message": f"分离中... ({segment_count}/{total_segments})"}, pf)
 
     flush_pending()
+    infer_done_at = time.perf_counter()
 
     if segment_count == 0:
         payload["error_code"] = "ONNX_SEPARATION_FAILED"
@@ -614,14 +622,24 @@ def separate_hq5_mdx(model_path, input_path, vocals_path, instrumental_path, pro
     secondary_source = (np.transpose(samples, (1, 0)) - (primary_source * compensate)).astype("float32")
     sf.write(str(instrumental_path), primary_source, samplerate=sample_rate)
     sf.write(str(vocals_path), secondary_source, samplerate=sample_rate)
+    write_done_at = time.perf_counter()
     payload["sampleRate"] = int(sample_rate)
     payload["segmentCount"] = int(segment_count)
     payload["outputSampleCount"] = int(primary_source.shape[0])
+    payload["timingsMs"] = {
+        "audioLoadMs": round((audio_loaded_at - started_at) * 1000, 2),
+        "sessionInitMs": round((session_ready_at - audio_loaded_at) * 1000, 2),
+        "inferMs": round((infer_done_at - session_ready_at) * 1000, 2),
+        "writeMs": round((write_done_at - infer_done_at) * 1000, 2),
+        "totalMs": round((write_done_at - started_at) * 1000, 2),
+    }
 
 def separate_via_sherpa(model_path, input_path, vocals_path, instrumental_path, provider):
     import sherpa_onnx
 
     try:
+        started_at = time.perf_counter()
+        payload["modelBranch"] = "sherpa_uvr"
         config = sherpa_onnx.OfflineSourceSeparationConfig(
             model=sherpa_onnx.OfflineSourceSeparationModelConfig(
                 uvr=sherpa_onnx.OfflineSourceSeparationUvrModelConfig(model=str(model_path)),
@@ -635,8 +653,10 @@ def separate_via_sherpa(model_path, input_path, vocals_path, instrumental_path, 
             payload["error"] = "invalid_offline_source_separation_config"
             return
 
+        config_ready_at = time.perf_counter()
         sp = sherpa_onnx.OfflineSourceSeparation(config)
         samples, sample_rate = sf.read(str(input_path), dtype="float32", always_2d=True)
+        audio_loaded_at = time.perf_counter()
         samples = np.transpose(samples)
         if samples.shape[0] == 1:
             samples = np.repeat(samples, 2, axis=0)
@@ -651,6 +671,7 @@ def separate_via_sherpa(model_path, input_path, vocals_path, instrumental_path, 
         vocals_first = bool((model_cfg or {}).get("vocals_first", True))
         if segment_size <= 0:
             output = sp.process(sample_rate=sample_rate, samples=np.ascontiguousarray(samples))
+            process_done_at = time.perf_counter()
             payload["sampleRate"] = int(output.sample_rate)
             if len(output.stems) != 2:
                 payload["error_code"] = "ONNX_SEPARATION_FAILED"
@@ -667,9 +688,17 @@ def separate_via_sherpa(model_path, input_path, vocals_path, instrumental_path, 
             non_vocals = non_vocals[:original_sample_count]
             sf.write(str(vocals_path), vocals, samplerate=output.sample_rate)
             sf.write(str(instrumental_path), non_vocals, samplerate=output.sample_rate)
+            write_done_at = time.perf_counter()
 
             payload["segmentCount"] = 1
             payload["outputSampleCount"] = int(vocals.shape[0])
+            payload["timingsMs"] = {
+                "configMs": round((config_ready_at - started_at) * 1000, 2),
+                "audioLoadMs": round((audio_loaded_at - config_ready_at) * 1000, 2),
+                "processMs": round((process_done_at - audio_loaded_at) * 1000, 2),
+                "writeMs": round((write_done_at - process_done_at) * 1000, 2),
+                "totalMs": round((write_done_at - started_at) * 1000, 2),
+            }
             return
 
         # Hidden tuning: segment_size is interpreted as an internal frame count,
@@ -754,12 +783,21 @@ def separate_via_sherpa(model_path, input_path, vocals_path, instrumental_path, 
         non_vocals = (non_vocals_acc / safe_weight[np.newaxis, :]).T
         vocals = vocals[:total_samples]
         non_vocals = non_vocals[:total_samples]
+        process_done_at = time.perf_counter()
         sf.write(str(vocals_path), vocals, samplerate=sample_rate)
         sf.write(str(instrumental_path), non_vocals, samplerate=sample_rate)
+        write_done_at = time.perf_counter()
 
         payload["sampleRate"] = int(sample_rate)
         payload["segmentCount"] = int(segment_count)
         payload["outputSampleCount"] = int(vocals.shape[0])
+        payload["timingsMs"] = {
+            "configMs": round((config_ready_at - started_at) * 1000, 2),
+            "audioLoadMs": round((audio_loaded_at - config_ready_at) * 1000, 2),
+            "processMs": round((process_done_at - audio_loaded_at) * 1000, 2),
+            "writeMs": round((write_done_at - process_done_at) * 1000, 2),
+            "totalMs": round((write_done_at - started_at) * 1000, 2),
+        }
     except Exception as exc:
         payload["error_code"] = "ONNX_SEPARATION_FAILED"
         payload["error"] = str(exc)
