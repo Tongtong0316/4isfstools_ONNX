@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Song, STAGE_LABELS, ProcessingStage } from "../types";
 import { MicIcon as StatusMicIcon, FileIcon, SettingsIcon, RefreshIcon, RocketIcon, LaptopIcon, TargetIcon, CheckIcon, FolderIcon } from "./icons";
@@ -6,6 +6,7 @@ import { MicIcon as StatusMicIcon, FileIcon, SettingsIcon, RefreshIcon, RocketIc
 interface PlaylistProps {
   songs: Song[];
   currentSong: Song | null;
+  colorTheme?: string;
   onSelectSong: (song: Song) => void;
   onDeleteSong: (id: string) => void;
   onCancelProcess: (song: Song) => void;
@@ -18,8 +19,17 @@ interface PlaylistProps {
   onGenerateLyricsDraft: (song: Song) => Promise<void> | void;
 }
 
+/* 无限主题：每首歌轮换使用不同的宝石色 */
+const STONE_VARS = [
+  'var(--accent)', 'var(--accent2)', 'var(--focus-ring)',
+  'var(--level-peak)', 'var(--level-vocal)',
+  'var(--status-success)',
+];
+
 type SongMenuState = {
   kind: "song";
+  anchorX: number;
+  anchorY: number;
   x: number;
   y: number;
   song: Song;
@@ -27,6 +37,8 @@ type SongMenuState = {
 
 type FolderMenuState = {
   kind: "folder";
+  anchorX: number;
+  anchorY: number;
   x: number;
   y: number;
   folderName: string;
@@ -51,10 +63,8 @@ const DEFAULT_FOLDER = "未分组";
 type PlaylistViewMode = "cards" | "list";
 
 const iconStroke = "currentColor";
-const SONG_CONTEXT_MENU_WIDTH = 240;
-const FOLDER_CONTEXT_MENU_WIDTH = 240;
-const SONG_CONTEXT_MENU_HEIGHT = 300;
-const FOLDER_CONTEXT_MENU_HEIGHT = 152;
+const CONTEXT_MENU_OFFSET = 8;
+const CONTEXT_MENU_PADDING = 12;
 
 function MusicNoteIcon({ className = "" }: { className?: string }) {
   return (
@@ -218,6 +228,7 @@ function ContextMenuItem({
 export default function Playlist({
   songs,
   currentSong,
+  colorTheme,
   onSelectSong,
   onDeleteSong,
   onCancelProcess,
@@ -230,6 +241,7 @@ export default function Playlist({
   onGenerateLyricsDraft,
 }: PlaylistProps) {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [contextMenuReady, setContextMenuReady] = useState(false);
   const [draggedSongId, setDraggedSongId] = useState<string | null>(null);
   const [folderNames, setFolderNames] = useState<string[]>([]);
   const [collapsedFolders, setCollapsedFolders] = useState<Record<string, boolean>>({});
@@ -244,6 +256,7 @@ export default function Playlist({
     }
   });
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     try {
@@ -403,36 +416,97 @@ export default function Playlist({
 
   const closeContextMenu = () => setContextMenu(null);
 
-  const clampMenuPosition = (x: number, y: number, kind: ContextMenuState["kind"]) => {
-    const menuWidth = kind === "folder" ? FOLDER_CONTEXT_MENU_WIDTH : SONG_CONTEXT_MENU_WIDTH;
-    const menuHeight = kind === "folder" ? FOLDER_CONTEXT_MENU_HEIGHT : SONG_CONTEXT_MENU_HEIGHT;
-    const viewportPadding = 12;
-    const pointerOffset = 6;
-    const preferredX = x + pointerOffset;
-    const preferredY = y + pointerOffset;
-    const clampedX = Math.min(Math.max(viewportPadding, preferredX), window.innerWidth - menuWidth - viewportPadding);
-    const clampedY = Math.min(Math.max(viewportPadding, preferredY), window.innerHeight - menuHeight - viewportPadding);
-    return { x: clampedX, y: clampedY };
-  };
+  useLayoutEffect(() => {
+    if (!contextMenu) {
+      setContextMenuReady(false);
+      return;
+    }
+    const menu = contextMenuRef.current;
+    if (!menu) return;
+
+    const rect = menu.getBoundingClientRect();
+    const menuWidth = rect.width;
+    const menuHeight = rect.height;
+    const maxX = Math.max(CONTEXT_MENU_PADDING, window.innerWidth - menuWidth - CONTEXT_MENU_PADDING);
+    const maxY = Math.max(CONTEXT_MENU_PADDING, window.innerHeight - menuHeight - CONTEXT_MENU_PADDING);
+
+    let nextX = contextMenu.anchorX + CONTEXT_MENU_OFFSET;
+    let nextY = contextMenu.anchorY + CONTEXT_MENU_OFFSET;
+
+    if (nextX > maxX) {
+      nextX = contextMenu.anchorX - menuWidth - CONTEXT_MENU_OFFSET;
+    }
+    if (nextY > maxY) {
+      nextY = contextMenu.anchorY - menuHeight - CONTEXT_MENU_OFFSET;
+    }
+
+    nextX = Math.min(Math.max(CONTEXT_MENU_PADDING, nextX), maxX);
+    nextY = Math.min(Math.max(CONTEXT_MENU_PADDING, nextY), maxY);
+
+    setContextMenu((prev) => {
+      if (!prev) return prev;
+      if (Math.abs(prev.x - nextX) < 1 && Math.abs(prev.y - nextY) < 1) {
+        return prev;
+      }
+      return { ...prev, x: nextX, y: nextY };
+    });
+    setContextMenuReady(true);
+  }, [contextMenu]);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+
+    const handlePointerDownCapture = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target && contextMenuRef.current?.contains(target)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      closeContextMenu();
+    };
+
+    const handleContextMenuCapture = (event: MouseEvent) => {
+      event.preventDefault();
+      const target = event.target as Node | null;
+      if (target && contextMenuRef.current?.contains(target)) return;
+      closeContextMenu();
+    };
+
+    document.addEventListener("pointerdown", handlePointerDownCapture, true);
+    document.addEventListener("contextmenu", handleContextMenuCapture, true);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDownCapture, true);
+      document.removeEventListener("contextmenu", handleContextMenuCapture, true);
+    };
+  }, [contextMenu]);
 
   const openSongMenu = (e: React.MouseEvent, song: Song) => {
     e.preventDefault();
-    const pos = clampMenuPosition(e.clientX, e.clientY, "song");
-    setContextMenu({ kind: "song", x: pos.x, y: pos.y, song });
+    e.stopPropagation();
+    setContextMenuReady(false);
+    setContextMenu({ kind: "song", anchorX: e.clientX, anchorY: e.clientY, x: e.clientX + CONTEXT_MENU_OFFSET, y: e.clientY + CONTEXT_MENU_OFFSET, song });
   };
 
   const openSongMenuFromButton = (e: React.MouseEvent, song: Song) => {
     e.preventDefault();
     e.stopPropagation();
     const rect = e.currentTarget.getBoundingClientRect();
-    const pos = clampMenuPosition(rect.right - 8, rect.bottom + 6, "song");
-    setContextMenu({ kind: "song", x: pos.x, y: pos.y, song });
+    setContextMenuReady(false);
+    setContextMenu({
+      kind: "song",
+      anchorX: rect.right - 8,
+      anchorY: rect.bottom + 6,
+      x: rect.right - 8 + CONTEXT_MENU_OFFSET,
+      y: rect.bottom + 6 + CONTEXT_MENU_OFFSET,
+      song,
+    });
   };
 
   const openFolderMenu = (e: React.MouseEvent, folderName: string) => {
     e.preventDefault();
-    const pos = clampMenuPosition(e.clientX, e.clientY, "folder");
-    setContextMenu({ kind: "folder", x: pos.x, y: pos.y, folderName });
+    e.stopPropagation();
+    setContextMenuReady(false);
+    setContextMenu({ kind: "folder", anchorX: e.clientX, anchorY: e.clientY, x: e.clientX + CONTEXT_MENU_OFFSET, y: e.clientY + CONTEXT_MENU_OFFSET, folderName });
   };
 
   const openCreateFolderDialog = useCallback(() => {
@@ -548,11 +622,16 @@ export default function Playlist({
     return null;
   };
 
-  const renderSongCard = (song: Song) => {
+  const renderSongCard = (song: Song, songIndex?: number) => {
     const meta = renderSongMeta(song);
     const modelBadge = renderSongModelBadge(song);
     const active = currentSong?.id === song.id;
     const dimmed = song.status !== "ready" && song.status !== "processing" && song.status !== "error";
+    const handleSongCardMouseDownCapture = (e: React.MouseEvent) => {
+      if (e.button !== 2) return;
+      openSongMenu(e, song);
+    };
+    const isInfinity = colorTheme === "infinity";
 
     return (
       <div
@@ -575,12 +654,14 @@ export default function Playlist({
               ? "linear-gradient(135deg, color-mix(in srgb, var(--bg-card) 92%, var(--accent)), var(--bg-card) 68%)"
               : undefined,
           boxShadow: viewMode === "cards" ? "0 10px 26px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.035)" : "none",
+          ...(isInfinity && songIndex !== undefined ? { '--accent': STONE_VARS[songIndex % STONE_VARS.length] } as Record<string, string> : {}),
         }}
         draggable
         onDragStart={() => setDraggedSongId(song.id)}
         onDragEnd={() => setDraggedSongId(null)}
         onClick={() => handleSongClick(song)}
-        onContextMenu={(e) => openSongMenu(e, song)}
+        onMouseDownCapture={handleSongCardMouseDownCapture}
+        onContextMenuCapture={(e) => openSongMenu(e, song)}
       >
         {active && (
           <div className={`${viewMode === "list" ? "top-2 bottom-2" : "top-3 bottom-3"} absolute left-0 w-[3px] rounded-r-full bg-[var(--accent)]/80`} />
@@ -665,6 +746,11 @@ export default function Playlist({
             className="ml-1 flex shrink-0 items-center justify-center rounded-full text-[var(--text-muted)] opacity-80 transition-colors hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
             style={{ width: 24, height: 24 }}
             onClick={(e) => openSongMenuFromButton(e, song)}
+            onContextMenuCapture={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              openSongMenuFromButton(e, song);
+            }}
           >
             <MoreIcon className="h-5 w-5" />
           </button>
@@ -790,7 +876,7 @@ export default function Playlist({
                           可将歌曲拖到这里创建/整理文件夹
                         </div>
                       ) : (
-                        folderSongs.map(renderSongCard)
+                        folderSongs.map((song, i) => renderSongCard(song, i))
                       )}
                     </div>
                   )}
@@ -803,10 +889,20 @@ export default function Playlist({
 
       {contextMenu && (
         <>
-          <div className="fixed inset-0 z-[80]" onClick={closeContextMenu} />
+          <div className="fixed inset-0 z-[80]" style={{ pointerEvents: "none" }} />
           <div
+            ref={contextMenuRef}
             className="context-menu"
-            style={{ left: contextMenu.x, top: contextMenu.y }}
+            style={{
+              left: contextMenu.x,
+              top: contextMenu.y,
+              maxHeight: "calc(100vh - 24px)",
+              overflowY: "auto",
+              overscrollBehavior: "contain",
+              opacity: contextMenuReady ? 1 : 0,
+              transition: "opacity 80ms ease",
+              pointerEvents: contextMenuReady ? "auto" : "none",
+            }}
           >
             {contextMenu.kind === "song" ? (
               <>

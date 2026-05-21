@@ -269,6 +269,277 @@
   --dangerBorder: rgba(220, 38, 38, 0.25);
 }
 
+:root[data-theme="ironman"] {
+  --bg-primary: #0d0505;
+  --bg-secondary: #3a0a0a;
+  --bg-tertiary: #2a0e05;
+  --bg-card: #3a0a0a;
+  --accent: #FFD700;
+  --accent-hover: #E6C200;
+  --accent2: #D32F2F;
+  --text-primary: #f5f0e0;
+  --text-secondary: #c0b8a0;
+  --text-muted: #807060;
+  --text-dim: #605050;
+  --border: rgba(255, 215, 0, 0.22);
+  --surface-base: #0d0505;
+  --surface-panel: #3a0a0a;
+  --surface-card: #3a0a0a;
+  --surface-elevated: #2a0e05;
+  --surface-muted: #2a0a05;
+  --input-bg: #0d0505;
+  --input-border: rgba(255, 215, 0, 0.30);
+  --border-soft: rgba(255, 215, 0, 0.14);
+  --border-medium: rgba(255, 215, 0, 0.26);
+  --accent-soft: rgba(255, 215, 0, 0.12);
+  --selected-bg: rgba(211, 47, 47, 0.16);
+  --selected-border: rgba(211, 47, 47, 0.40);
+  --primary-button-bg: #FFD700;
+  --primary-button-text: #1a0808;
+  --button-bg: rgba(58, 10, 10, 0.80);
+  --button-hover-bg: rgba(255, 215, 0, 0.18);
+  --chip-bg: rgba(13, 5, 5, 0.56);
+  --chip-border: rgba(255, 215, 0, 0.18);
+  --alert-info-bg: rgba(211, 47, 47, 0.12);
+  --alert-info-border: rgba(211, 47, 47, 0.22);
+  --progress-track: rgba(255, 215, 0, 0.18);
+  --progress-fill: #FFD700;
+  --focus-ring: #FFD700;
+  --panel-border: rgba(255, 215, 0, 0.22);
+  --panel-accent-border: rgba(255, 215, 0, 0.34);
+  --panel-glow: rgba(255, 215, 0, 0.13);
+  --panel-inner-border: rgba(255, 255, 255, 0.035);
+  --level-track: rgba(255, 215, 0, 0.12);
+  --level-instrumental: #FFD700;
+  --level-vocal: #D32F2F;
+  --level-peak: #FFC107;
+  --level-label: #FFD700;
+  --level-border: rgba(255, 215, 0, 0.22);
+  --header-bg: rgba(13, 5, 5, 0.92);
+  --header-border: rgba(255, 215, 0, 0.28);
+  --status-success: #FFD700;
+  --status-neutral: #a09680;
+  --stats-text: #c0b8a0;
+  --waveform-panel-bg: rgba(13, 5, 5, 0.84);
+  --waveform-overlay-bg: rgba(26, 8, 8, 0.72);
+  --waveform-overlay-border: rgba(255, 215, 0, 0.22);
+  --waveform-original: #FFD700;
+  --waveform-playhead: #FFD700;
+  --waveform-playhead-glow: rgba(255, 215, 0, 0.36);
+  --waveform-base: rgba(255, 215, 0, 0.22);
+  --waveform-muted: rgba(255, 215, 0, 0.24);
+  --waveform-text: #FFD700;
+  --waveform-instrumental: #FFD700;
+  --waveform-vocal: #D32F2F;
+  --waveform-shadow: 0 18px 44px rgba(0, 0, 0, 0.46);
+  --dialogBg: rgba(13, 5, 5, 0.96);
+  --dialogBorder: rgba(255, 215, 0, 0.34);
+  --dialogShadow: 0 0 0 1px rgba(255, 255, 255, 0.035), 0 24px 70px rgba(0, 0, 0, 0.42), 0 14px 38px rgba(255, 215, 0, 0.13);
+  --dialogFooterBorder: rgba(255, 215, 0, 0.14);
+  --buttonSecondaryBg: rgba(255, 215, 0, 0.08);
+  --buttonSecondaryHoverBg: rgba(255, 215, 0, 0.14);
+  --danger: #ef4444;
+  --dangerHover: #dc2626;
+  --dangerActive: #b91c1c;
+  --dangerSoft: rgba(239, 68, 68, 0.15);
+  --dangerBorder: rgba(239, 68, 68, 0.3);
+}
+
+:root[data-theme="infinity"] {
+  /* ── 中性底色 & 文字（不参与随机配色）── */
+  --bg-primary: #050712;
+  --bg-secondary: #0D0818;
+  --bg-tertiary: #150D20;
+  --bg-card: #0D0818;
+  --surface-base: #050712;
+  --surface-panel: #0D0818;
+  --surface-card: #0D0818;
+  --surface-elevated: #150D20;
+  --surface-muted: #150D20;
+  --header-bg: rgba(5, 7, 18, 0.92);
+  --waveform-panel-bg: rgba(5, 7, 18, 0.84);
+  --waveform-overlay-bg: rgba(13, 8, 24, 0.72);
+  --dialogBg: rgba(5, 7, 18, 0.96);
+  --input-bg: #050712;
+  --text-primary: #F0E6D0;
+  --text-secondary: #c0b0a0;
+  --text-muted: #807060;
+  --text-dim: #605050;
+  --stats-text: #c0b0a0;
+  --waveform-text: #F0E6D0;
+  --primary-button-text: #050712;
+  --waveform-shadow: 0 18px 44px rgba(0, 0, 0, 0.50);
+  --status-neutral: #a09080;
+
+  /* ── 以下被 JS 随机覆盖，此处仅做占位 ── */
+  --accent: #FFD700;
+  --accent-hover: #E6C200;
+  --accent-soft: rgba(255, 215, 0, 0.10);
+  --accent2: #FF6B9D;
+  --focus-ring: #FFD700;
+  --level-peak: #FFD700;
+  --waveform-original: #FFD700;
+  --panel-glow: rgba(255, 215, 0, 0.10);
+  --button-bg: rgba(255, 215, 0, 0.10);
+  --button-hover-bg: rgba(255, 215, 0, 0.16);
+  --panel-border: rgba(255, 215, 0, 0.18);
+  --level-vocal: #DC143C;
+  --waveform-muted: rgba(255, 215, 0, 0.20);
+  --level-border: rgba(255, 215, 0, 0.18);
+  --buttonSecondaryBg: rgba(255, 215, 0, 0.06);
+  --buttonSecondaryHoverBg: rgba(255, 215, 0, 0.12);
+  --panel-accent-border: rgba(255, 215, 0, 0.30);
+  --chip-bg: rgba(5, 7, 18, 0.56);
+  --chip-border: rgba(255, 215, 0, 0.20);
+  --status-success: #32CD32;
+  --waveform-instrumental: #00BFFF;
+  --border-soft: rgba(255, 215, 0, 0.12);
+  --progress-track: rgba(50, 205, 50, 0.20);
+  --progress-fill: #32CD32;
+  --waveform-vocal: #DC143C;
+  --waveform-playhead: #FFD700;
+  --waveform-playhead-glow: rgba(255, 215, 0, 0.36);
+  --danger: #DC143C;
+  --dangerHover: #B01030;
+  --dangerActive: #900A25;
+  --dangerSoft: rgba(220, 20, 60, 0.15);
+  --dangerBorder: rgba(220, 20, 60, 0.30);
+  --input-border: rgba(255, 215, 0, 0.25);
+  --selected-bg: rgba(255, 215, 0, 0.14);
+  --selected-border: rgba(255, 215, 0, 0.35);
+  --level-instrumental: #00BFFF;
+  --dialogFooterBorder: rgba(255, 215, 0, 0.12);
+  --border-medium: rgba(255, 215, 0, 0.22);
+  --panel-inner-border: rgba(255, 255, 255, 0.035);
+  --level-track: rgba(0, 191, 255, 0.12);
+  --waveform-base: rgba(0, 191, 255, 0.18);
+  --dialogBorder: rgba(255, 215, 0, 0.30);
+  --ghost-button-hover-bg: rgba(255, 215, 0, 0.12);
+  --primary-button-bg: #FFD700;
+  --border: rgba(255, 215, 0, 0.18);
+  --header-border: rgba(255, 215, 0, 0.24);
+  --alert-info-bg: rgba(255, 215, 0, 0.10);
+  --alert-info-border: rgba(255, 215, 0, 0.20);
+  --level-label: #FFD700;
+  --waveform-overlay-border: rgba(255, 215, 0, 0.18);
+  --dialogShadow: 0 0 0 1px rgba(255, 255, 255, 0.035), 0 24px 70px rgba(0, 0, 0, 0.42), 0 14px 38px rgba(255, 215, 0, 0.10);
+
+  /* ── 按钮和设置项轮换宝石色 ── */
+  .transport-controls button:nth-child(1) { --accent: var(--accent);           --primary-button-bg: var(--accent); }
+  .transport-controls button:nth-child(2) { --accent: var(--accent2);          --primary-button-bg: var(--accent2); }
+  .transport-controls button:nth-child(3) { --accent: var(--focus-ring);       --primary-button-bg: var(--focus-ring); }
+  .mode-controls button:nth-child(1)      { --accent: var(--level-peak);       --primary-button-bg: var(--level-peak); }
+  .mode-controls button:nth-child(2)      { --accent: var(--level-vocal);      --primary-button-bg: var(--level-vocal); }
+  .mode-controls button:nth-child(3)      { --accent: var(--status-success);   --primary-button-bg: var(--status-success); }
+  .volume-controls button                 { --accent: var(--accent);           --primary-button-bg: var(--accent); }
+  .settings-nav-item:nth-child(1)         { --accent: var(--accent); }
+  .settings-nav-item:nth-child(2)         { --accent: var(--accent2); }
+  .settings-nav-item:nth-child(3)         { --accent: var(--focus-ring); }
+  .settings-nav-item:nth-child(4)         { --accent: var(--level-peak); }
+  .settings-nav-item:nth-child(5)         { --accent: var(--level-vocal); }
+}
+
+/* ── 奶油拿铁 温暖奶咖主题 ── */
+html[data-theme="heavenly"] {
+  background: linear-gradient(160deg, #F2E6D5 0%, #E8DBC8 100%);
+  background-attachment: fixed;
+}
+
+:root[data-theme="heavenly"] {
+  --bg-primary: #F2E6D5;
+  --bg-secondary: rgba(250, 244, 234, 0.88);
+  --bg-tertiary: rgba(233, 222, 208, 0.76);
+  --bg-card: rgba(250, 244, 234, 0.82);
+  --surface-base: transparent;
+  --surface-panel: rgba(250, 244, 234, 0.88);
+  --surface-card: rgba(250, 244, 234, 0.82);
+  --surface-elevated: rgba(255, 250, 242, 0.60);
+  --surface-muted: rgba(233, 222, 208, 0.60);
+  --accent: #8B6B4F;
+  --accent-hover: #7A5C42;
+  --accent-soft: rgba(139, 107, 79, 0.14);
+  --accent2: #C9A87C;
+  --text-primary: rgba(61, 50, 40, 0.95);
+  --text-secondary: rgba(100, 86, 74, 0.80);
+  --text-muted: rgba(130, 118, 106, 0.60);
+  --text-dim: rgba(150, 140, 130, 0.35);
+  --border: rgba(0, 0, 0, 0.14);
+  --border-soft: rgba(0, 0, 0, 0.08);
+  --border-medium: rgba(0, 0, 0, 0.20);
+  --input-bg: rgba(255, 252, 248, 0.72);
+  --input-border: rgba(0, 0, 0, 0.18);
+  --selected-bg: rgba(139, 107, 79, 0.22);
+  --selected-border: rgba(139, 107, 79, 0.40);
+  --primary-button-bg: #8B6B4F;
+  --primary-button-text: #FFFFFF;
+  --button-bg: rgba(255, 252, 248, 0.55);
+  --button-hover-bg: rgba(255, 252, 248, 0.75);
+  --ghost-button-bg: transparent;
+  --ghost-button-hover-bg: rgba(139, 107, 79, 0.14);
+  --chip-bg: rgba(255, 252, 248, 0.60);
+  --chip-border: rgba(0, 0, 0, 0.10);
+  --alert-info-bg: rgba(201, 168, 124, 0.18);
+  --alert-info-border: rgba(201, 168, 124, 0.30);
+  --progress-track: rgba(0, 0, 0, 0.10);
+  --progress-fill: #8B6B4F;
+  --focus-ring: #8B6B4F;
+  --panel-border: rgba(0, 0, 0, 0.12);
+  --panel-accent-border: rgba(139, 107, 79, 0.28);
+  --panel-glow: rgba(139, 107, 79, 0.08);
+  --panel-inner-border: rgba(255, 255, 255, 0.08);
+  --level-track: rgba(0, 0, 0, 0.10);
+  --level-instrumental: #C9A87C;
+  --level-vocal: #8B6B4F;
+  --level-peak: #A6825E;
+  --level-label: rgba(61, 50, 40, 0.65);
+  --level-border: rgba(0, 0, 0, 0.10);
+  --header-bg: rgba(242, 230, 213, 0.92);
+  --header-border: rgba(0, 0, 0, 0.10);
+  --status-success: #C9A87C;
+  --status-neutral: rgba(130, 118, 106, 0.50);
+  --stats-text: rgba(100, 86, 74, 0.78);
+  --waveform-panel-bg: rgba(250, 244, 234, 0.82);
+  --waveform-overlay-bg: rgba(245, 238, 226, 0.75);
+  --waveform-overlay-border: rgba(0, 0, 0, 0.10);
+  --waveform-original: #8B6B4F;
+  --waveform-playhead: #8B6B4F;
+  --waveform-playhead-glow: rgba(139, 107, 79, 0.35);
+  --waveform-base: rgba(0, 0, 0, 0.08);
+  --waveform-muted: rgba(0, 0, 0, 0.10);
+  --waveform-text: rgba(61, 50, 40, 0.90);
+  --waveform-instrumental: #C9A87C;
+  --waveform-vocal: #8B6B4F;
+  --waveform-shadow: 0 18px 44px rgba(0, 0, 0, 0.10);
+  --dialogBg: rgba(242, 230, 213, 0.96);
+  --dialogBorder: rgba(0, 0, 0, 0.14);
+  --dialogShadow: 0 0 0 1px rgba(255, 255, 255, 0.05), 0 24px 70px rgba(0, 0, 0, 0.16);
+  --dialogFooterBorder: rgba(0, 0, 0, 0.08);
+  --buttonSecondaryBg: rgba(255, 252, 248, 0.45);
+  --buttonSecondaryHoverBg: rgba(255, 252, 248, 0.65);
+  --danger: #C4806A;
+  --dangerHover: #B06A54;
+  --dangerActive: #9C5640;
+  --dangerSoft: rgba(196, 128, 106, 0.16);
+  --dangerBorder: rgba(196, 128, 106, 0.28);
+}
+
+/* 奶油拿铁 毛玻璃面板 */
+:root[data-theme="heavenly"] .theme-aware-surface,
+:root[data-theme="heavenly"] .player-shell,
+:root[data-theme="heavenly"] .player-dock,
+:root[data-theme="heavenly"] .settings-sidebar,
+:root[data-theme="heavenly"] .settings-card,
+:root[data-theme="heavenly"] .app-header {
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+/* 根容器背景渐变 */
+:root[data-theme="heavenly"] .bg-\[var\(--bg-primary\)\] {
+  background: linear-gradient(160deg, #F2E6D5 0%, #E8DBC8 100%) !important;
+  background-attachment: fixed !important;
+}
+
 :root[data-theme="paper"] {
   --bg-primary: #f7f4ef;
   --bg-secondary: #fffaf2;
@@ -651,6 +922,7 @@
 
 :root[data-theme="peach"] .theme-aware-surface,
 :root[data-theme="daylight"] .theme-aware-surface,
+:root[data-theme="heavenly"] .theme-aware-surface,
 :root[data-theme="breeze"] .theme-aware-surface,
 :root[data-theme="paper"] .theme-aware-surface,
 :root[data-theme="passion"] .theme-aware-surface,
@@ -660,6 +932,7 @@
 
 :root[data-theme="peach"] .theme-subtle-surface,
 :root[data-theme="daylight"] .theme-subtle-surface,
+:root[data-theme="heavenly"] .theme-subtle-surface,
 :root[data-theme="breeze"] .theme-subtle-surface,
 :root[data-theme="paper"] .theme-subtle-surface,
 :root[data-theme="passion"] .theme-subtle-surface,
@@ -1642,6 +1915,8 @@ html, body {
   border-radius: 16px;
   background: color-mix(in srgb, var(--surface-elevated) 96%, transparent);
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+  transform: scale(0.85);
+  transform-origin: top left;
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
 }
@@ -1777,6 +2052,7 @@ html, body {
 
 :root[data-theme="peach"] .context-menu,
 :root[data-theme="daylight"] .context-menu,
+:root[data-theme="heavenly"] .context-menu,
 :root[data-theme="breeze"] .context-menu,
 :root[data-theme="paper"] .context-menu,
 :root[data-theme="passion"] .context-menu,
@@ -1833,6 +2109,7 @@ html, body {
 
 :root[data-theme="peach"] .status-badge-ok,
 :root[data-theme="daylight"] .status-badge-ok,
+:root[data-theme="heavenly"] .status-badge-ok,
 :root[data-theme="breeze"] .status-badge-ok,
 :root[data-theme="paper"] .status-badge-ok,
 :root[data-theme="passion"] .status-badge-ok,
@@ -1842,6 +2119,7 @@ html, body {
 
 :root[data-theme="peach"] .status-badge-warning,
 :root[data-theme="daylight"] .status-badge-warning,
+:root[data-theme="heavenly"] .status-badge-warning,
 :root[data-theme="breeze"] .status-badge-warning,
 :root[data-theme="paper"] .status-badge-warning,
 :root[data-theme="passion"] .status-badge-warning,
@@ -1851,6 +2129,7 @@ html, body {
 
 :root[data-theme="peach"] .status-badge-info,
 :root[data-theme="daylight"] .status-badge-info,
+:root[data-theme="heavenly"] .status-badge-info,
 :root[data-theme="breeze"] .status-badge-info,
 :root[data-theme="paper"] .status-badge-info,
 :root[data-theme="passion"] .status-badge-info,
@@ -1860,6 +2139,7 @@ html, body {
 
 :root[data-theme="peach"] .status-badge-error,
 :root[data-theme="daylight"] .status-badge-error,
+:root[data-theme="heavenly"] .status-badge-error,
 :root[data-theme="breeze"] .status-badge-error,
 :root[data-theme="paper"] .status-badge-error,
 :root[data-theme="passion"] .status-badge-error,

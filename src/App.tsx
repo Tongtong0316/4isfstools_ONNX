@@ -7,6 +7,7 @@ import VocalWaveformPreview, { buildWaveformPeaks } from "./components/VocalWave
 import { Song, ProcessingStage, ProcessingStatus } from "./types";
 import LyricsPanel from "./components/lyrics/LyricsPanel";
 import { MicIcon, MusicNoteIcon, ThemeSwatch, CheckIcon } from "./components/icons";
+import infinityIcon from "../icons/Infinity.png";
 import type { LyricDocument } from "./types/lyrics";
 
 const MEDIA_IMPORT_EXTENSIONS = [
@@ -148,7 +149,7 @@ type BootstrapProgress = {
 
 type SettingsPane = "runtime" | "audioOutput" | "paths" | "appearance" | "about";
 
-type ColorThemeId = "peach" | "aurora" | "daylight" | "ghost_bride" | "zero" | "double" | "passion" | "breeze" | "graphite" | "studio" | "midnight" | "paper" | "manifesto";
+type ColorThemeId = "peach" | "aurora" | "daylight" | "ghost_bride" | "zero" | "double" | "passion" | "breeze" | "graphite" | "studio" | "midnight" | "paper" | "heavenly" | "manifesto" | "ironman" | "infinity";
 
 const COLOR_THEMES: Array<{
   id: ColorThemeId;
@@ -157,6 +158,7 @@ const COLOR_THEMES: Array<{
   bg: string;
   card: string;
   accent: string;
+  accent2: string;
   text: string;
 }> = [
   {
@@ -166,6 +168,7 @@ const COLOR_THEMES: Array<{
     bg: "#fdf5f4",
     card: "#ffffff",
     accent: "#efbdc5",
+    accent2: "#97b9c9",
     text: "#3d454a",
   },
   {
@@ -175,6 +178,7 @@ const COLOR_THEMES: Array<{
     bg: "#090b10",
     card: "#1a2230",
     accent: "#14b8a6",
+    accent2: "#5eead4",
     text: "#f8fafc",
   },
   {
@@ -184,6 +188,7 @@ const COLOR_THEMES: Array<{
     bg: "#faf8f5",
     card: "#ffffff",
     accent: "#D4AF37",
+    accent2: "#f0d68a",
     text: "#2d2a24",
   },
   {
@@ -193,6 +198,7 @@ const COLOR_THEMES: Array<{
     bg: "#0a0a0a",
     card: "#1a1515",
     accent: "#dc2626",
+    accent2: "#f87171",
     text: "#e6dcdc",
   },
   {
@@ -202,6 +208,7 @@ const COLOR_THEMES: Array<{
     bg: "#07111f",
     card: "#13233d",
     accent: "#facc15",
+    accent2: "#38bdf8",
     text: "#f8fafc",
   },
   {
@@ -211,6 +218,7 @@ const COLOR_THEMES: Array<{
     bg: "#f3f4f6",
     card: "#ffffff",
     accent: "#64748b",
+    accent2: "#94a3b8",
     text: "#111827",
   },
   {
@@ -220,6 +228,7 @@ const COLOR_THEMES: Array<{
     bg: "#f7eef1",
     card: "#e8eff7",
     accent: "#527396",
+    accent2: "#ddb0b7",
     text: "#1f2937",
   },
   {
@@ -229,6 +238,7 @@ const COLOR_THEMES: Array<{
     bg: "#f4f6fb",
     card: "#ffffff",
     accent: "#2563eb",
+    accent2: "#0284c7",
     text: "#111827",
   },
   {
@@ -238,6 +248,7 @@ const COLOR_THEMES: Array<{
     bg: "#0b0b0d",
     card: "#202026",
     accent: "#8b5cf6",
+    accent2: "#22c55e",
     text: "#fafafa",
   },
   {
@@ -247,6 +258,7 @@ const COLOR_THEMES: Array<{
     bg: "#0d0f12",
     card: "#22262b",
     accent: "#f97316",
+    accent2: "#38bdf8",
     text: "#fff7ed",
   },
   {
@@ -256,6 +268,7 @@ const COLOR_THEMES: Array<{
     bg: "#070b13",
     card: "#172235",
     accent: "#38bdf8",
+    accent2: "#818cf8",
     text: "#f8fafc",
   },
   {
@@ -265,7 +278,18 @@ const COLOR_THEMES: Array<{
     bg: "#f7f4ef",
     card: "#fffaf2",
     accent: "#0f766e",
+    accent2: "#a16207",
     text: "#1f2933",
+  },
+  {
+    id: "heavenly",
+    name: "奶油拿铁",
+    description: "暖cream与咖啡棕交织，如一杯温润的拿铁。",
+    bg: "#F2E6D5",
+    card: "#FBF5EA",
+    accent: "#8B6B4F",
+    accent2: "#C9A87C",
+    text: "#3D3228",
   },
   {
     id: "manifesto",
@@ -274,9 +298,106 @@ const COLOR_THEMES: Array<{
     bg: "#0b0b10",
     card: "#1e1632",
     accent: "#A2DA5A",
+    accent2: "#75409A",
     text: "#f8fafc",
   },
+  {
+    id: "ironman",
+    name: "I Am Iron Man",
+    description: "I LOVE YOU 3000",
+    bg: "#0d0505",
+    card: "#3a0a0a",
+    accent: "#FFD700",
+    accent2: "#D32F2F",
+    text: "#f5f0e0",
+  },
+  {
+    id: "infinity",
+    name: "无限",
+    description: "选择这个主题，歌单的歌会消失一半",
+    bg: "#9333EA",       // Purple
+    card: "#FF8C00",     // Orange
+    accent: "#DC143C",   // Red
+    accent2: "#FFE135",  // Yellow
+    text: "#32CD32",     // Green
+  },
 ];
+
+/* ────────── 无限主题：7 颗宝石色随机分配 ────────── */
+const INFINITY_COLORS: [number, number, number][] = [
+  [147, 51, 234],    // Purple - 力量宝石
+  [0, 191, 255],     // Blue - 空间宝石
+  [220, 20, 60],     // Red - 现实宝石
+  [255, 140, 0],     // Orange - 灵魂宝石
+  [255, 225, 53],    // Yellow - 心灵宝石
+  [50, 205, 50],     // Green - 时间宝石
+];
+
+// CSS variable groups that share a random color
+// [name, opacity/darkenFactor, isDarken?]
+type InfinityVar = [string, number, boolean];
+const INFINITY_VAR_GROUPS: InfinityVar[][] = [
+  [['--accent', 1, false], ['--accent-hover', 0.92, true], ['--accent-soft', 0.10, false]],
+  [['--accent2', 1, false]],
+  [['--focus-ring', 1, false]],
+  [['--level-peak', 1, false]],
+  [['--waveform-original', 1, false]],
+  [['--panel-glow', 0.10, false]],
+  [['--button-bg', 0.15, false], ['--button-hover-bg', 0.24, false]],
+  [['--panel-border', 0.22, false]],
+  [['--level-vocal', 1, false], ['--waveform-vocal', 1, false]],
+  [['--waveform-muted', 0.22, false]],
+  [['--level-border', 0.25, false]],
+  [['--buttonSecondaryBg', 0.10, false], ['--buttonSecondaryHoverBg', 0.18, false]],
+  [['--panel-accent-border', 0.35, false]],
+  [['--chip-bg', 0.18, false], ['--chip-border', 0.30, false]],
+  [['--status-success', 1, false]],
+  [['--waveform-instrumental', 1, false]],
+  [['--border-soft', 0.15, false]],
+  [['--progress-track', 0.20, false], ['--progress-fill', 1, false]],
+  [['--waveform-playhead', 1, false], ['--waveform-playhead-glow', 0.36, false]],
+  [['--danger', 1, false], ['--dangerHover', 0.9, true], ['--dangerActive', 0.8, true], ['--dangerSoft', 0.15, false], ['--dangerBorder', 0.30, false]],
+  [['--input-border', 0.30, false]],
+  [['--selected-bg', 0.18, false], ['--selected-border', 0.40, false]],
+  [['--level-instrumental', 1, false]],
+  [['--dialogFooterBorder', 0.15, false]],
+  [['--border-medium', 0.25, false]],
+  [['--panel-inner-border', 0.10, false]],
+  [['--level-track', 0.15, false]],
+  [['--waveform-base', 0.18, false]],
+  [['--dialogBorder', 0.30, false]],
+  [['--ghost-button-hover-bg', 0.18, false]],
+  [['--primary-button-bg', 1, false]],
+  [['--border', 0.25, false]],
+  [['--header-border', 0.28, false]],
+  [['--alert-info-bg', 0.15, false], ['--alert-info-border', 0.28, false]],
+  [['--level-label', 1, false]],
+  [['--waveform-overlay-border', 0.22, false]],
+];
+
+const INFINITY_VAR_NAMES: string[] = [];
+for (const g of INFINITY_VAR_GROUPS) for (const [name] of g) INFINITY_VAR_NAMES.push(name);
+
+function applyInfinityColors() {
+  const root = document.documentElement;
+  for (const group of INFINITY_VAR_GROUPS) {
+    const [r, g, b] = INFINITY_COLORS[Math.floor(Math.random() * INFINITY_COLORS.length)];
+    for (const [name, val, isDarken] of group) {
+      if (isDarken) {
+        root.style.setProperty(name, `#${[r * val, g * val, b * val].map(v => Math.round(v).toString(16).padStart(2, '0')).join('')}`);
+      } else if (val >= 1) {
+        root.style.setProperty(name, `#${[r, g, b].map(v => Math.round(v).toString(16).padStart(2, '0')).join('')}`);
+      } else {
+        root.style.setProperty(name, `rgba(${r},${g},${b},${val})`);
+      }
+    }
+  }
+}
+
+function clearInfinityColors() {
+  const root = document.documentElement;
+  for (const name of INFINITY_VAR_NAMES) root.style.removeProperty(name);
+}
 
 const APP_VERSION = "1.0.1";
 
@@ -448,6 +569,11 @@ function App() {
       window.localStorage.setItem(themeStorageKey, colorTheme);
     } catch {
       // ignore persistence failures
+    }
+    if (colorTheme === "infinity") {
+      applyInfinityColors();
+    } else {
+      clearInfinityColors();
     }
   }, [colorTheme]);
 
@@ -891,7 +1017,7 @@ function App() {
         instrumental: graphInstrumentalLevel || estimatePlaybackLevel("instrumental"),
         vocals: graphVocalsLevel || estimatePlaybackLevel("vocals"),
       });
-    }, 250);
+    }, 300);
     return () => window.clearInterval(interval);
   }, [estimatePlaybackLevel]);
 
@@ -1915,7 +2041,7 @@ function App() {
             <div className="header-stats">
               <span>已收录</span>
               <span className="font-bold text-[var(--text-primary)]">
-                {readySongCount}
+                {colorTheme === "infinity" ? Math.round(readySongCount / 2) : readySongCount}
               </span>
               <span>首</span>
             </div>
@@ -1953,6 +2079,7 @@ function App() {
             <Playlist
               songs={songs}
               currentSong={currentSong}
+              colorTheme={colorTheme}
               onSelectSong={handleSelectSong}
               onDeleteSong={handleDeleteSong}
               onCancelProcess={handleCancelProcess}
@@ -2007,6 +2134,7 @@ function App() {
                         isPlaying={playerState === "playing"}
                         onSeek={handleSeek}
                         onSaveDocument={handleSaveLyricsDocument}
+                        colorTheme={colorTheme}
                       />
                     ) : (
                       <div className="text-[var(--text-muted)] text-base text-center py-8">
@@ -2422,9 +2550,10 @@ function App() {
                             <div className="flex w-full min-w-0 items-start gap-3 pr-16">
                               <div className="shrink-0">
                                 <ThemeSwatch
-                                  bgColor={theme.card}
+                                  bgColor={theme.id === "infinity" ? "transparent" : theme.card}
                                   accentColor={theme.accent}
                                   className="theme-swatch settings-theme-swatch block h-10 w-10 rounded-[12px] border border-white/10"
+                                  imageUrl={theme.id === "infinity" ? infinityIcon : undefined}
                                 />
                               </div>
                               <div className="min-w-0">
@@ -2437,7 +2566,7 @@ function App() {
                               </div>
                             </div>
                             <div className="mt-4 flex w-full items-center gap-2 pr-[130px]">
-                              {[theme.bg, theme.card, theme.accent, theme.text].map((color) => (
+                              {[theme.bg, theme.card, theme.accent, theme.accent2, theme.text].map((color) => (
                                 <span
                                   key={color}
                                   className="settings-theme-color h-8 min-w-0 flex-1 rounded-[8px] border border-white/10"
@@ -2480,13 +2609,17 @@ function App() {
                         <div className="ui-chip-wrap mt-4">
                           {[
                             "FFmpeg — FFmpeg Developers",
+                            "faster-whisper — SYSTRAN / Guillaume Klein",
                             "Whisper — OpenAI",
                             "SoundFile / python-soundfile — Bastibe and contributors",
                             "NumPy — NumPy Developers",
-                            "SciPy — SciPy Developers",
+                            "ONNX Runtime — Microsoft Corporation",
+                            "PyTorch — Linux Foundation / PyTorch Contributors",
+                            "sherpa-onnx — k2-fsa / Next-gen Kaldi",
                             "Tauri — Tauri Programme within The Commons Conservancy",
                             "React — Meta Platforms, Inc.",
                             "Vite — Evan You and Vite Contributors",
+                            "Tailwind CSS — Tailwind Labs",
                             "163MusicLyrics — jitwxs",
                           ].map((item) => (
                             <div key={item} className="ui-chip flex-[1_1_320px]" title={item}>

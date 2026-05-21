@@ -8,9 +8,16 @@ interface LyricsPanelProps {
   isPlaying: boolean;
   onSeek: (timeMs: number) => void;
   onSaveDocument: (document: LyricDocument) => void;
+  colorTheme?: string;
 }
 
-export default function LyricsPanel({ document, currentTime, isPlaying, onSeek, onSaveDocument }: LyricsPanelProps) {
+const STONE_VARS = [
+  'var(--accent)', 'var(--accent2)', 'var(--focus-ring)',
+  'var(--level-peak)', 'var(--level-vocal)',
+  'var(--status-success)',
+];
+
+export default function LyricsPanel({ document, currentTime, isPlaying, onSeek, onSaveDocument, colorTheme }: LyricsPanelProps) {
   const [editingLineId, setEditingLineId] = useState<string | null>(null);
   const [draftText, setDraftText] = useState("");
   const activeIndex = useMemo(() => {
@@ -234,7 +241,10 @@ export default function LyricsPanel({ document, currentTime, isPlaying, onSeek, 
                 ? "text-[var(--text-secondary)]"
                 : "text-[var(--text-muted)]"
             }`}
-            style={{ opacity: isNear || isActive ? 1 : 0.45 }}
+            style={{
+              opacity: isNear || isActive ? 1 : 0.45,
+              ...(colorTheme === "infinity" ? { '--accent': STONE_VARS[index % STONE_VARS.length] } as Record<string, string> : {}),
+            }}
             onClick={() => onSeek(Math.max(0, line.startMs + document.globalOffsetMs))}
             onDoubleClick={() => {
               setEditingLineId(line.id);
@@ -269,7 +279,8 @@ export default function LyricsPanel({ document, currentTime, isPlaying, onSeek, 
                     {upcomingDots ? (
                       <div className="mb-1 text-[12px] tracking-[0.22em] text-[var(--accent)]">{upcomingDots}</div>
                     ) : null}
-                    <div className={`${isActive ? "text-xl font-semibold" : "text-base"} min-w-0 overflow-hidden text-ellipsis leading-[1.55]`}>
+                    <div className={`${isActive ? "text-xl font-semibold" : "text-base"} min-w-0 overflow-hidden text-ellipsis leading-[1.55]`}
+                      style={colorTheme === "infinity" && isActive ? { color: 'var(--accent)' } : undefined}>
                       {line.text || "· · ·"}
                     </div>
                   </>

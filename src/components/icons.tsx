@@ -86,10 +86,11 @@ type ThemeSwatchProps = {
   bgColor: string;
   accentColor: string;
   className?: string;
+  imageUrl?: string;
 };
 
 let _swatchId = 0;
-export function ThemeSwatch({ bgColor, accentColor, className = "" }: ThemeSwatchProps) {
+export function ThemeSwatch({ bgColor, accentColor, className = "", imageUrl }: ThemeSwatchProps) {
   const clipId = React.useMemo(() => `ts-${++_swatchId}`, []);
   return (
     <span className={className} style={{ overflow: "hidden" }}>
@@ -101,7 +102,11 @@ export function ThemeSwatch({ bgColor, accentColor, className = "" }: ThemeSwatc
         </defs>
         <g clipPath={`url(#${clipId})`}>
           <rect width={64} height={64} fill={bgColor} />
-          <polygon points="64,0 64,64 0,64" fill={accentColor} />
+          {imageUrl ? (
+            <image href={imageUrl} x={4} y={4} width={56} height={56} preserveAspectRatio="xMidYMid meet" />
+          ) : (
+            <polygon points="64,0 64,64 0,64" fill={accentColor} />
+          )}
         </g>
       </svg>
     </span>
