@@ -540,19 +540,19 @@ html[data-theme="heavenly"] {
   background-attachment: fixed !important;
 }
 
-:root[data-theme="paper"] {
-  --bg-primary: #f7f4ef;
-  --bg-secondary: #fffaf2;
-  --bg-tertiary: #efe8dc;
-  --bg-card: #fffdf7;
-  --accent: #0f766e;
-  --accent-hover: #115e59;
-  --accent2: #a16207;
-  --text-primary: #1f2933;
-  --text-secondary: #58616d;
+:root[data-theme="lanting"] {
+  --bg-primary: #f5f1eb;
+  --bg-secondary: #fdfaf3;
+  --bg-tertiary: #ede6d9;
+  --bg-card: #fdfaf3;
+  --accent: #2c4a3e;
+  --accent-hover: #1e3a2f;
+  --accent2: #8b6914;
+  --text-primary: #2d2d2d;
+  --text-secondary: #5a5a5a;
   --text-muted: #7a7066;
   --text-dim: #9a8f83;
-  --border: #ded4c4;
+  --border: #d4c9b8;
   --danger: #dc2626;
   --dangerHover: #b91c1c;
   --dangerActive: #991b1b;
@@ -924,7 +924,7 @@ html[data-theme="heavenly"] {
 :root[data-theme="daylight"] .theme-aware-surface,
 :root[data-theme="heavenly"] .theme-aware-surface,
 :root[data-theme="breeze"] .theme-aware-surface,
-:root[data-theme="paper"] .theme-aware-surface,
+:root[data-theme="lanting"] .theme-aware-surface,
 :root[data-theme="passion"] .theme-aware-surface,
 :root[data-theme="double"] .theme-aware-surface {
   background-color: color-mix(in srgb, var(--bg-secondary) 94%, transparent);
@@ -934,7 +934,7 @@ html[data-theme="heavenly"] {
 :root[data-theme="daylight"] .theme-subtle-surface,
 :root[data-theme="heavenly"] .theme-subtle-surface,
 :root[data-theme="breeze"] .theme-subtle-surface,
-:root[data-theme="paper"] .theme-subtle-surface,
+:root[data-theme="lanting"] .theme-subtle-surface,
 :root[data-theme="passion"] .theme-subtle-surface,
 :root[data-theme="double"] .theme-subtle-surface {
   background-color: color-mix(in srgb, var(--bg-tertiary) 72%, transparent);
@@ -2081,7 +2081,7 @@ html, body {
 :root[data-theme="daylight"] .context-menu,
 :root[data-theme="heavenly"] .context-menu,
 :root[data-theme="breeze"] .context-menu,
-:root[data-theme="paper"] .context-menu,
+:root[data-theme="lanting"] .context-menu,
 :root[data-theme="passion"] .context-menu,
 :root[data-theme="double"] .context-menu {
   background: color-mix(in srgb, var(--surface-panel) 96%, transparent);
@@ -2138,7 +2138,7 @@ html, body {
 :root[data-theme="daylight"] .status-badge-ok,
 :root[data-theme="heavenly"] .status-badge-ok,
 :root[data-theme="breeze"] .status-badge-ok,
-:root[data-theme="paper"] .status-badge-ok,
+:root[data-theme="lanting"] .status-badge-ok,
 :root[data-theme="passion"] .status-badge-ok,
 :root[data-theme="double"] .status-badge-ok {
   color: #047857;
@@ -2148,7 +2148,7 @@ html, body {
 :root[data-theme="daylight"] .status-badge-warning,
 :root[data-theme="heavenly"] .status-badge-warning,
 :root[data-theme="breeze"] .status-badge-warning,
-:root[data-theme="paper"] .status-badge-warning,
+:root[data-theme="lanting"] .status-badge-warning,
 :root[data-theme="passion"] .status-badge-warning,
 :root[data-theme="double"] .status-badge-warning {
   color: #92400e;
@@ -2158,7 +2158,7 @@ html, body {
 :root[data-theme="daylight"] .status-badge-info,
 :root[data-theme="heavenly"] .status-badge-info,
 :root[data-theme="breeze"] .status-badge-info,
-:root[data-theme="paper"] .status-badge-info,
+:root[data-theme="lanting"] .status-badge-info,
 :root[data-theme="passion"] .status-badge-info,
 :root[data-theme="double"] .status-badge-info {
   color: #0369a1;
@@ -2168,7 +2168,7 @@ html, body {
 :root[data-theme="daylight"] .status-badge-error,
 :root[data-theme="heavenly"] .status-badge-error,
 :root[data-theme="breeze"] .status-badge-error,
-:root[data-theme="paper"] .status-badge-error,
+:root[data-theme="lanting"] .status-badge-error,
 :root[data-theme="passion"] .status-badge-error,
 :root[data-theme="double"] .status-badge-error {
   color: #b91c1c;
