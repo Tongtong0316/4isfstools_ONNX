@@ -155,7 +155,7 @@ type BootstrapProgress = {
 
 type SettingsPane = "runtime" | "audioOutput" | "paths" | "appearance" | "about";
 
-type ColorThemeId = "peach" | "aurora" | "daylight" | "ghost_bride" | "zero" | "double" | "passion" | "breeze" | "graphite" | "studio" | "midnight" | "lanting" | "heavenly" | "manifesto" | "ironman" | "infinity";
+type ColorThemeId = "peach" | "aurora" | "daylight" | "ghost_bride" | "lanting" | "zero" | "double" | "passion" | "breeze" | "graphite" | "studio" | "midnight" | "heavenly" | "manifesto" | "ironman" | "infinity";
 
 const COLOR_THEMES: Array<{
   id: ColorThemeId;
@@ -206,6 +206,16 @@ const COLOR_THEMES: Array<{
     accent: "#dc2626",
     accent2: "#f87171",
     text: "#e6dcdc",
+  },
+  {
+    id: "lanting",
+    name: "兰亭序",
+    description: "象牙白底配墨绿点缀，古典雅致的书法意境。",
+    bg: "#f5f1eb",
+    card: "#fdfaf3",
+    accent: "#2c4a3e",
+    accent2: "#8b6914",
+    text: "#2d2d2d",
   },
   {
     id: "zero",
@@ -276,16 +286,6 @@ const COLOR_THEMES: Array<{
     accent: "#38bdf8",
     accent2: "#818cf8",
     text: "#f8fafc",
-  },
-  {
-    id: "lanting",
-    name: "兰亭序",
-    description: "象牙白底配墨绿点缀，古典雅致的书法意境。",
-    bg: "#f5f1eb",
-    card: "#fdfaf3",
-    accent: "#2c4a3e",
-    accent2: "#8b6914",
-    text: "#2d2d2d",
   },
   {
     id: "heavenly",
