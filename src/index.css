@@ -1216,6 +1216,13 @@ html, body {
   white-space: nowrap;
 }
 
+.ui-chip-text-no-ellipsis {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+  line-height: 1.15;
+}
+
 .ui-chip-wrap {
   display: flex;
   min-width: 0;
@@ -1355,7 +1362,7 @@ html, body {
 .status-chip {
   display: inline-flex;
   height: 32px;
-  max-width: 160px;
+  max-width: none;
   flex: 0 1 auto;
   align-items: center;
   gap: 8px;
@@ -1368,6 +1375,11 @@ html, body {
   font-weight: 650;
   line-height: 1;
   white-space: nowrap;
+}
+
+.status-chip-flex {
+  width: fit-content;
+  flex: 0 0 auto;
 }
 
 .status-chip-dot {
@@ -1691,7 +1703,7 @@ html, body {
   }
 
   .status-chip {
-    max-width: 112px;
+    max-width: none;
   }
 
   .header-stats span:first-child,
@@ -1903,6 +1915,21 @@ html, body {
 .runtime-info-card {
   height: 64px !important;
   padding: 0 16px !important;
+}
+
+.runtime-info-card-auto {
+  height: auto !important;
+  min-height: 64px;
+  padding-top: 10px !important;
+  padding-bottom: 10px !important;
+  align-items: center;
+}
+
+.runtime-info-card-value-fit {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
+  font-size: clamp(11px, 1.05vw, 15px);
 }
 
 .context-menu {

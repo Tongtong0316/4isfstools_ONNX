@@ -164,7 +164,8 @@ except Exception as exc:
     print(json.dumps(payload, ensure_ascii=False))
 "#;
 
-    let output = Command::new(python_path)
+    let mut command = Command::new(python_path);
+    command
         .args([
             "-X",
             "utf8",
@@ -174,8 +175,9 @@ except Exception as exc:
             &model_path.to_string_lossy(),
         ])
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output();
+        .stderr(Stdio::piped());
+    crate::process_control::configure_console_visibility(&mut command);
+    let output = command.output();
 
     match output {
         Ok(output) => {
@@ -204,6 +206,10 @@ fn run_onnx_probe(
     requested: &[String],
 ) -> crate::models::OnnxRuntimeProbeResult {
     let json = run_onnx_probe_value(python_path, model_path, requested);
+    runtime_probe_from_json(&json)
+}
+
+fn runtime_probe_from_json(json: &serde_json::Value) -> crate::models::OnnxRuntimeProbeResult {
     crate::models::OnnxRuntimeProbeResult {
         onnxruntime_available: json
             .get("onnxruntimeAvailable")
@@ -257,6 +263,13 @@ fn probe_model_metadata(
     requested: &[String],
 ) -> crate::models::OnnxModelProbeResult {
     let json = run_onnx_probe_value(python_path, model_path, requested);
+    model_probe_from_json(&json, model_path)
+}
+
+fn model_probe_from_json(
+    json: &serde_json::Value,
+    model_path: &Path,
+) -> crate::models::OnnxModelProbeResult {
     let input_shape = json
         .get("inputShape")
         .and_then(|v| v.as_array())
@@ -379,7 +392,6 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 import onnxruntime as ort
-import torch
 
 payload = {
     "success": False,
@@ -469,6 +481,69 @@ class MDXSTFT:
         )
         return istft_result.reshape([*batch_dimensions, 2, -1])
 
+class NumpyMDXSTFT:
+    def __init__(self, n_fft, hop_length, dim_f):
+        self.n_fft = n_fft
+        self.hop_length = hop_length
+        self.dim_f = dim_f
+        self.trim = n_fft // 2
+        # Match torch.hann_window(periodic=True) closely without requiring torch.
+        self.window = np.hanning(n_fft + 1).astype(np.float32)[:-1]
+
+    def __call__(self, input_array):
+        batch_size, channels, time_dim = input_array.shape
+        padded = np.pad(
+            input_array,
+            ((0, 0), (0, 0), (self.trim, self.trim)),
+            mode="reflect" if time_dim > 1 else "constant",
+        )
+        frame_count = 1 + max(0, (padded.shape[-1] - self.n_fft) // self.hop_length)
+        output = np.empty((batch_size, channels * 2, self.dim_f, frame_count), dtype=np.float32)
+        for batch_index in range(batch_size):
+            for channel_index in range(channels):
+                frames = np.empty((self.n_fft, frame_count), dtype=np.float32)
+                for frame_index in range(frame_count):
+                    start = frame_index * self.hop_length
+                    frames[:, frame_index] = (
+                        padded[batch_index, channel_index, start:start + self.n_fft] * self.window
+                    )
+                spectrum = np.fft.rfft(frames, axis=0)[: self.dim_f]
+                base = channel_index * 2
+                output[batch_index, base] = spectrum.real.astype(np.float32, copy=False)
+                output[batch_index, base + 1] = spectrum.imag.astype(np.float32, copy=False)
+        return output
+
+    def inverse(self, input_array):
+        batch_size, channel_dim, freq_dim, frame_count = input_array.shape
+        channels = channel_dim // 2
+        num_freq_bins = self.n_fft // 2 + 1
+        padded_length = self.n_fft + self.hop_length * max(0, frame_count - 1)
+        output = np.zeros((batch_size, channels, padded_length), dtype=np.float32)
+        divider = np.zeros(padded_length, dtype=np.float32)
+        window_square = self.window * self.window
+        for frame_index in range(frame_count):
+            start = frame_index * self.hop_length
+            divider[start:start + self.n_fft] += window_square
+        safe_divider = np.where(divider > 1e-8, divider, 1.0)
+
+        for batch_index in range(batch_size):
+            for channel_index in range(channels):
+                base = channel_index * 2
+                complex_spec = np.zeros((num_freq_bins, frame_count), dtype=np.complex64)
+                complex_spec[:freq_dim] = (
+                    input_array[batch_index, base].astype(np.float32)
+                    + 1j * input_array[batch_index, base + 1].astype(np.float32)
+                )
+                for frame_index in range(frame_count):
+                    start = frame_index * self.hop_length
+                    frame = np.fft.irfft(complex_spec[:, frame_index], n=self.n_fft).astype(np.float32)
+                    output[batch_index, channel_index, start:start + self.n_fft] += frame * self.window
+                output[batch_index, channel_index] /= safe_divider
+
+        if output.shape[-1] > self.trim * 2:
+            output = output[:, :, self.trim:-self.trim]
+        return output
+
 def make_session(model_path, provider):
     available = list(ort.get_available_providers())
     payload["availableProviders"] = available or ["unavailable"]
@@ -509,6 +584,10 @@ def make_direct_session(model_path, provider):
         raise
 
 def separate_hq5_mdx(model_path, input_path, vocals_path, instrumental_path, provider):
+    import torch as _torch
+
+    globals()["torch"] = _torch
+
     started_at = time.perf_counter()
     payload["modelBranch"] = "hq5_direct_mdx"
     samples, sample_rate = sf.read(str(input_path), dtype="float32", always_2d=True)
@@ -622,6 +701,115 @@ def separate_hq5_mdx(model_path, input_path, vocals_path, instrumental_path, pro
     secondary_source = (np.transpose(samples, (1, 0)) - (primary_source * compensate)).astype("float32")
     sf.write(str(instrumental_path), primary_source, samplerate=sample_rate)
     sf.write(str(vocals_path), secondary_source, samplerate=sample_rate)
+    write_done_at = time.perf_counter()
+    payload["sampleRate"] = int(sample_rate)
+    payload["segmentCount"] = int(segment_count)
+    payload["outputSampleCount"] = int(primary_source.shape[0])
+    payload["timingsMs"] = {
+        "audioLoadMs": round((audio_loaded_at - started_at) * 1000, 2),
+        "sessionInitMs": round((session_ready_at - audio_loaded_at) * 1000, 2),
+        "inferMs": round((infer_done_at - session_ready_at) * 1000, 2),
+        "writeMs": round((write_done_at - infer_done_at) * 1000, 2),
+        "totalMs": round((write_done_at - started_at) * 1000, 2),
+    }
+
+def separate_default_mdx_direct(model_path, input_path, vocals_path, instrumental_path, provider):
+    started_at = time.perf_counter()
+    payload["modelBranch"] = "default_direct_mdx"
+    samples, sample_rate = sf.read(str(input_path), dtype="float32", always_2d=True)
+    audio_loaded_at = time.perf_counter()
+    samples = np.transpose(samples)
+    original_sample_count = int(samples.shape[1])
+    if samples.shape[0] == 1:
+        samples = np.repeat(samples, 2, axis=0)
+    if samples.shape[0] != 2:
+        payload["error_code"] = "ONNX_AUDIO_PREP_FAILED"
+        payload["error"] = f"expected_stereo_input:{samples.shape}"
+        return
+
+    segment_size = int((model_cfg or {}).get("segment_size") or 256)
+    overlap_ratio = float((model_cfg or {}).get("overlap_ratio") or 0.5)
+    vocals_first = bool((model_cfg or {}).get("vocals_first", True))
+    compensate = 1.0
+    hop_length = 1024
+    n_fft = 4096
+    dim_f = 2048
+    trim = n_fft // 2
+    chunk_size = max(hop_length * (segment_size - 1), hop_length)
+    gen_size = chunk_size - 2 * trim
+    if gen_size <= 0:
+        payload["error_code"] = "ONNX_AUDIO_PREP_FAILED"
+        payload["error"] = f"invalid_gen_size:{gen_size}"
+        return
+
+    pad = gen_size + trim - (samples.shape[1] % gen_size)
+    mixture = np.concatenate(
+        (
+            np.zeros((2, trim), dtype="float32"),
+            samples,
+            np.zeros((2, pad), dtype="float32"),
+            np.zeros((2, trim), dtype="float32"),
+        ),
+        axis=1,
+    )
+
+    step = max(1, int((1 - overlap_ratio) * chunk_size))
+    total_segments = max(1, (mixture.shape[-1] + step - 1) // step)
+    stft = NumpyMDXSTFT(n_fft=n_fft, hop_length=hop_length, dim_f=dim_f)
+    session = make_direct_session(model_path, provider)
+    session_ready_at = time.perf_counter()
+    input_name = session.get_inputs()[0].name
+    output_name = session.get_outputs()[0].name
+    progress_path = vocals_path.parent / "separator_progress.json"
+    result = np.zeros((1, 2, mixture.shape[-1]), dtype=np.float32)
+    divider = np.zeros((1, 2, mixture.shape[-1]), dtype=np.float32)
+    segment_count = 0
+
+    for start in range(0, mixture.shape[-1], step):
+        end = min(start + chunk_size, mixture.shape[-1])
+        if end <= start:
+            break
+        chunk = mixture[:, start:end]
+        chunk_len = chunk.shape[1]
+        if chunk_len <= 0:
+            continue
+        if end != start + chunk_size:
+            pad_size = (start + chunk_size) - end
+            chunk = np.concatenate((chunk, np.zeros((2, pad_size), dtype="float32")), axis=-1)
+        spek = stft(chunk[np.newaxis, :, :].astype(np.float32, copy=False))
+        spek[:, :, :3, :] *= 0
+        spec_pred = session.run([output_name], {input_name: spek})[0]
+        target = stft.inverse(spec_pred.astype(np.float32, copy=False))[0, :, :chunk_len]
+        if overlap_ratio != 0:
+            window = np.hanning(chunk_len).astype(np.float32)
+            target *= window[np.newaxis, :]
+            divider[0, :, start:start + chunk_len] += window[np.newaxis, :]
+        else:
+            divider[0, :, start:start + chunk_len] += 1
+        result[0, :, start:start + chunk_len] += target
+        segment_count += 1
+        if progress_path:
+            pct = min(int(segment_count / total_segments * 74) + 18, 92)
+            with open(progress_path, 'w') as pf:
+                json.dump({"percent": pct, "message": f"分离中... ({segment_count}/{total_segments})"}, pf)
+
+    infer_done_at = time.perf_counter()
+    if segment_count == 0:
+        payload["error_code"] = "ONNX_SEPARATION_FAILED"
+        payload["error"] = "no_segments_processed"
+        return
+
+    safe_divider = np.where(divider > 1e-8, divider, 1.0)
+    primary_source = (result / safe_divider)[:, :, trim:-trim]
+    primary_source = primary_source[:, :, :original_sample_count]
+    primary_source = np.transpose(primary_source[0], (1, 0)).astype("float32")
+    secondary_source = (np.transpose(samples, (1, 0)) - (primary_source * compensate)).astype("float32")
+    if vocals_first:
+        sf.write(str(vocals_path), primary_source, samplerate=sample_rate)
+        sf.write(str(instrumental_path), secondary_source, samplerate=sample_rate)
+    else:
+        sf.write(str(instrumental_path), primary_source, samplerate=sample_rate)
+        sf.write(str(vocals_path), secondary_source, samplerate=sample_rate)
     write_done_at = time.perf_counter()
     payload["sampleRate"] = int(sample_rate)
     payload["segmentCount"] = int(segment_count)
@@ -833,11 +1021,29 @@ try:
 
     payload["onnxruntimeAvailable"] = True
 
+    def separate_default(provider_name):
+        if provider_name == "DmlExecutionProvider":
+            separate_default_mdx_direct(
+                model_path,
+                input_path,
+                vocals_path,
+                instrumental_path,
+                provider_name,
+            )
+        else:
+            separate_via_sherpa(
+                model_path,
+                input_path,
+                vocals_path,
+                instrumental_path,
+                provider_name,
+            )
+
     try:
         if model_id == "high_quality":
             separate_hq5_mdx(model_path, input_path, vocals_path, instrumental_path, provider)
         else:
-            separate_via_sherpa(model_path, input_path, vocals_path, instrumental_path, provider)
+            separate_default(provider)
     except Exception as first_exc:
         if provider != "CPUExecutionProvider":
             fallback_provider = "CPUExecutionProvider"
@@ -862,13 +1068,7 @@ try:
                         fallback_provider,
                     )
                 else:
-                    separate_via_sherpa(
-                        model_path,
-                        input_path,
-                        vocals_path,
-                        instrumental_path,
-                        fallback_provider,
-                    )
+                    separate_default(fallback_provider)
             except Exception as second_exc:
                 payload["error_code"] = payload["error_code"] or "ONNX_SEPARATION_FAILED"
                 payload["error"] = str(second_exc)
@@ -913,6 +1113,7 @@ except Exception as exc:
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    crate::process_control::configure_console_visibility(&mut command);
     let child = crate::spawn_in_own_process_group(&mut command)
         .map_err(|e| format!("onnx separation spawn failed: {}", e))?;
     crate::register_separator_job(song_id, child.id());
@@ -1004,18 +1205,31 @@ impl OnnxSeparationEngine {
         let default_model_path = self.registry.default_model_path().unwrap_or_default();
         let high_quality_model_path = self.registry.high_quality_model_path().unwrap_or_default();
         let requested = self.provider_strategy.requested_provider_names();
-        let runtime_probe = if python_path.exists() {
-            run_onnx_probe(&python_path, &default_model_path, &requested)
+        let (runtime_probe, default_model_probe) = if python_path.exists() {
+            let default_probe_json =
+                run_onnx_probe_value(&python_path, &default_model_path, &requested);
+            (
+                runtime_probe_from_json(&default_probe_json),
+                model_probe_from_json(&default_probe_json, &default_model_path),
+            )
         } else {
-            crate::models::OnnxRuntimeProbeResult {
-                probe_error: Some("python_runtime_missing".to_string()),
-                ..Default::default()
-            }
+            (
+                crate::models::OnnxRuntimeProbeResult {
+                    probe_error: Some("python_runtime_missing".to_string()),
+                    ..Default::default()
+                },
+                probe_model_metadata(&python_path, &default_model_path, &requested),
+            )
         };
-        let default_model_probe =
-            probe_model_metadata(&python_path, &default_model_path, &requested);
         let high_quality_model_probe =
             probe_model_metadata(&python_path, &high_quality_model_path, &requested);
+        let high_quality_torch_ready = python_path.exists()
+            && crate::runtime::capability::python_module_is_available(&python_path, "torch", 6)
+                .unwrap_or(false);
+        let high_quality_runtime_ready = high_quality_model_probe.model_ready
+            && high_quality_torch_ready
+            && high_quality_model_probe.session_load_ok
+            && high_quality_model_probe.model_metadata_ok;
 
         SeparationEngineHealth {
             active_engine: self.kind().as_str().to_string(),
@@ -1041,6 +1255,9 @@ impl OnnxSeparationEngine {
             high_quality_model_id: Some(HIGH_QUALITY_ONNX_MODEL_ID.to_string()),
             high_quality_model_path: high_quality_model_path.to_string_lossy().to_string(),
             high_quality_model_ready: high_quality_model_probe.model_ready,
+            high_quality_model_file_ready: high_quality_model_probe.model_ready,
+            high_quality_torch_ready,
+            high_quality_runtime_ready,
             high_quality_model_session_load_ok: high_quality_model_probe.session_load_ok,
             high_quality_model_session_load_error: high_quality_model_probe
                 .session_load_error

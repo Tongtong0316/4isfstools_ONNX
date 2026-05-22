@@ -54,14 +54,16 @@ pub fn force_terminate_process_group(pid: u32) {
 
 #[cfg(windows)]
 pub fn terminate_process_group(pid: u32) {
-    let _ = Command::new("taskkill")
-        .args(["/PID", &pid.to_string(), "/T"])
-        .status();
+    let mut cmd = Command::new("taskkill");
+    cmd.args(["/PID", &pid.to_string(), "/T"]);
+    configure_console_visibility(&mut cmd);
+    let _ = cmd.status();
 }
 
 #[cfg(windows)]
 pub fn force_terminate_process_group(pid: u32) {
-    let _ = Command::new("taskkill")
-        .args(["/PID", &pid.to_string(), "/T", "/F"])
-        .status();
+    let mut cmd = Command::new("taskkill");
+    cmd.args(["/PID", &pid.to_string(), "/T", "/F"]);
+    configure_console_visibility(&mut cmd);
+    let _ = cmd.status();
 }

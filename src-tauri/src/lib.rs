@@ -105,21 +105,31 @@ impl JobManager {
         std::thread::sleep(std::time::Duration::from_millis(250));
         terminate_app_processing_processes(true);
 
+        let mut needs_save = false;
         {
             let mut songs = SONGS.lock().unwrap();
             if let Some(ref mut map) = *songs {
                 for song in map.values_mut() {
-                    if song.status == "processing" || song.status == "cancelling" {
+                    if song.status == "queued" && !song_has_live_processing_job(&song.id) {
+                        song.status = "pending".to_string();
+                        song.progress = 0;
+                        song.processing_stage = None;
+                        song.error_message = None;
+                        needs_save = true;
+                    } else if song.status == "processing" || song.status == "cancelling" {
                         clear_active_job_token(&song.id);
                         song.status = "cancelled".to_string();
                         song.progress = 0;
                         song.processing_stage = Some("cancelled".to_string());
                         song.error_message = Some("上次处理被中断".to_string());
+                        needs_save = true;
                     }
                 }
             }
         }
-        save_songs_to_disk();
+        if needs_save {
+            save_songs_to_disk();
+        }
     }
 
     fn cancel_active_jobs(reason: &str) {
@@ -162,22 +172,16 @@ fn get_lyrics_json_path(song_id: &str) -> PathBuf {
 fn command_is_available(program: &str, arg: &str) -> bool {
     if program == "ffmpeg" {
         if let Some(ffmpeg_bin) = resolve_ffmpeg_binary_path() {
-            return Command::new(ffmpeg_bin)
-                .arg(arg)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map(|status| status.success())
-                .unwrap_or(false);
+            let mut cmd = Command::new(ffmpeg_bin);
+            cmd.arg(arg).stdout(Stdio::null()).stderr(Stdio::null());
+            process_control::configure_console_visibility(&mut cmd);
+            return cmd.status().map(|status| status.success()).unwrap_or(false);
         }
     }
-    Command::new(program)
-        .arg(arg)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+    let mut cmd = Command::new(program);
+    cmd.arg(arg).stdout(Stdio::null()).stderr(Stdio::null());
+    process_control::configure_console_visibility(&mut cmd);
+    cmd.status().map(|status| status.success()).unwrap_or(false)
 }
 
 pub(crate) fn resolve_ffmpeg_binary_path() -> Option<PathBuf> {
@@ -203,13 +207,12 @@ pub(crate) fn resolve_ffmpeg_binary_path() -> Option<PathBuf> {
     ]);
 
     for candidate in candidates {
-        let ok = Command::new(&candidate)
-            .arg("-version")
+        let mut cmd = Command::new(&candidate);
+        cmd.arg("-version")
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false);
+            .stderr(Stdio::null());
+        process_control::configure_console_visibility(&mut cmd);
+        let ok = cmd.status().map(|status| status.success()).unwrap_or(false);
         if ok {
             return Some(candidate);
         }
@@ -265,7 +268,8 @@ fn extract_audio_from_video(input_path: &Path, output_path: &Path) -> Result<(),
             .to_string()
     })?;
 
-    let status = Command::new(ffmpeg_bin)
+    let mut status_cmd = Command::new(&ffmpeg_bin);
+    status_cmd
         .arg("-y")
         .arg("-nostdin")
         .arg("-i")
@@ -281,7 +285,9 @@ fn extract_audio_from_video(input_path: &Path, output_path: &Path) -> Result<(),
         .arg("pcm_s16le")
         .arg(output_path)
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    process_control::configure_console_visibility(&mut status_cmd);
+    let status = status_cmd
         .status()
         .map_err(|e| format!("Failed to run ffmpeg for audio extraction: {}", e))?;
 
@@ -371,26 +377,87 @@ fn whisper_model_is_usable(
     Ok(whisper_model_probe(python_path, model_dir, timeout_secs).is_ok())
 }
 
-fn detect_gpu_hardware_name(_selected_provider: &str, gpu_vendor: &str) -> Option<String> {
-    match gpu_vendor {
-        "apple_silicon" => {
-            let output = std::process::Command::new("sysctl")
-                .args(["-n", "machdep.cpu.brand_string"])
-                .output()
-                .ok()?;
-            if output.status.success() {
-                let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if !name.is_empty() {
-                    return Some(name);
-                }
-            }
-            Some("Apple Silicon".to_string())
+#[cfg(target_os = "windows")]
+fn windows_detect_gpu_adapter_name() -> Option<String> {
+    let mut cmd = std::process::Command::new("powershell");
+    cmd.args([
+        "-NoProfile",
+        "-Command",
+        "$names = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | Where-Object { $_.Name -and $_.Name -notmatch 'Microsoft Basic Display Adapter|Microsoft Basic Render Driver' } | Select-Object -ExpandProperty Name; if ($names) { $names | ForEach-Object { $_.Trim() } }",
+    ]);
+    process_control::configure_console_visibility(&mut cmd);
+    let output = cmd.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut names: Vec<String> = stdout
+        .lines()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect();
+    if names.is_empty() {
+        return None;
+    }
+    names.sort_by_key(|name| {
+        let lower = name.to_ascii_lowercase();
+        if lower.contains("nvidia") {
+            0
+        } else if lower.contains("amd") || lower.contains("radeon") || lower.contains("intel") {
+            1
+        } else {
+            2
         }
+    });
+    names.into_iter().next()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn windows_detect_gpu_adapter_name() -> Option<String> {
+    None
+}
+
+fn classify_windows_gpu_vendor(adapter_name: &str) -> &'static str {
+    let lower = adapter_name.to_ascii_lowercase();
+    if lower.contains("nvidia") {
+        "nvidia"
+    } else if lower.contains("amd") || lower.contains("radeon") || lower.contains("ati") {
+        "amd"
+    } else if lower.contains("intel") {
+        "intel"
+    } else {
+        "gpu"
+    }
+}
+
+fn detect_gpu_hardware_name(selected_provider: &str, gpu_vendor: &str) -> Option<String> {
+    if selected_provider.contains("CoreML") {
+        let output = std::process::Command::new("sysctl")
+            .args(["-n", "machdep.cpu.brand_string"])
+            .output()
+            .ok()?;
+        if output.status.success() {
+            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !name.is_empty() {
+                return Some(name);
+            }
+        }
+        return Some("Apple Silicon".to_string());
+    }
+
+    if selected_provider.contains("Dml") || selected_provider.contains("DirectML") {
+        if let Some(adapter_name) = windows_detect_gpu_adapter_name() {
+            return Some(adapter_name);
+        }
+    }
+
+    match gpu_vendor {
         "nvidia" => {
-            let output = std::process::Command::new("nvidia-smi")
-                .args(["--query-gpu=name", "--format=csv,noheader,nounits"])
-                .output()
-                .ok()?;
+            let mut cmd = std::process::Command::new("nvidia-smi");
+            cmd.args(["--query-gpu=name", "--format=csv,noheader,nounits"]);
+            process_control::configure_console_visibility(&mut cmd);
+            let output = cmd.output().ok()?;
             if output.status.success() {
                 let name = String::from_utf8_lossy(&output.stdout)
                     .lines()
@@ -403,7 +470,6 @@ fn detect_gpu_hardware_name(_selected_provider: &str, gpu_vendor: &str) -> Optio
             }
             Some("NVIDIA GPU".to_string())
         }
-        "amd" => Some("AMD GPU".to_string()),
         _ => None,
     }
 }
@@ -412,26 +478,33 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
     let python_path = runtime::python::get_python_path(app);
     let python_exists = python_path.exists();
     let mut separation_engine = separation::detect_engine_health(app, &get_models_dir(app));
-    // Detect GPU vendor based on selected provider
+    let directml_gpu_name = windows_detect_gpu_adapter_name();
+    // Detect GPU vendor based on the actual adapter name when available.
     separation_engine.gpu_vendor = Some(
         match separation_engine.selected_provider.as_str() {
             p if p.contains("CoreML") => "apple_silicon",
-            p if p.contains("Dml") || p.contains("DirectML") => {
-                if command_is_available("nvidia-smi", "--version") {
-                    "nvidia"
-                } else {
-                    "amd"
-                }
-            }
+            _ if directml_gpu_name.is_some() => directml_gpu_name
+                .as_deref()
+                .map(classify_windows_gpu_vendor)
+                .or_else(|| {
+                    if command_is_available("nvidia-smi", "--version") {
+                        Some("nvidia")
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or("gpu"),
             _ => "cpu",
         }
         .to_string(),
     );
     // Detect actual GPU hardware name
-    separation_engine.gpu_name = detect_gpu_hardware_name(
-        &separation_engine.selected_provider,
-        separation_engine.gpu_vendor.as_deref().unwrap_or("cpu"),
-    );
+    separation_engine.gpu_name = directml_gpu_name.or_else(|| {
+        detect_gpu_hardware_name(
+            &separation_engine.selected_provider,
+            separation_engine.gpu_vendor.as_deref().unwrap_or("cpu"),
+        )
+    });
     if python_exists {
         separation_engine.onnxruntime_available =
             runtime::capability::python_module_is_available(&python_path, "onnxruntime", 6)
@@ -443,23 +516,6 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
         }
     }
     let ffmpeg_ready = command_is_available("ffmpeg", "-version");
-    let faster_whisper_ready = if python_exists {
-        runtime::capability::python_module_is_available(&python_path, "faster_whisper", 6)
-            .unwrap_or(false)
-    } else {
-        false
-    };
-    let (whisper_base_ready, _whisper_base_detail) = if python_exists {
-        match resolve_whisper_base_model_dir(app) {
-            Ok(model_dir) => match whisper_model_probe(&python_path, &model_dir, 8) {
-                Ok(()) => (true, "AI 听写草稿".to_string()),
-                Err(err) => (false, format!("AI 听写草稿：{}", err)),
-            },
-            Err(err) => (false, format!("AI 听写草稿：{}", err)),
-        }
-    } else {
-        (false, "AI 听写草稿：Python 未就绪".to_string())
-    };
     let soundfile_ready = if python_exists {
         runtime::capability::python_module_is_available(&python_path, "soundfile", 6)
             .unwrap_or(false)
@@ -474,6 +530,25 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
     let sherpa_ready = if python_exists {
         runtime::capability::python_module_is_available(&python_path, "sherpa_onnx", 6)
             .unwrap_or(false)
+    } else {
+        false
+    };
+    let torch_ready = if python_exists {
+        runtime::capability::python_module_is_available(&python_path, "torch", 6).unwrap_or(false)
+    } else {
+        false
+    };
+    let faster_whisper_ready = if python_exists {
+        runtime::capability::python_module_is_available(&python_path, "faster_whisper", 6)
+            .unwrap_or(false)
+    } else {
+        false
+    };
+    let whisper_base_ready = if python_exists {
+        match resolve_whisper_base_model_dir(app) {
+            Ok(model_dir) => whisper_model_is_usable(&python_path, &model_dir, 8).unwrap_or(false),
+            Err(_) => false,
+        }
     } else {
         false
     };
@@ -566,12 +641,24 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
         },
         RuntimeHealthCheck {
             name: "ONNX 高质量模型".to_string(),
-            ok: separation_engine.high_quality_model_ready,
+            ok: separation_engine.high_quality_model_file_ready,
             severity: "info".to_string(),
-            detail: Some(if separation_engine.high_quality_model_ready {
-                "可选模型已就绪".to_string()
+            detail: Some(if separation_engine.high_quality_runtime_ready {
+                "可选模型与 HQ 运行依赖已就绪".to_string()
+            } else if separation_engine.high_quality_model_file_ready {
+                "模型已在位，等待 HQ 运行依赖".to_string()
             } else {
                 "可选".to_string()
+            }),
+        },
+        RuntimeHealthCheck {
+            name: "Torch（HQ）".to_string(),
+            ok: torch_ready,
+            severity: "info".to_string(),
+            detail: Some(if torch_ready {
+                "HQ5 运行依赖已就绪".to_string()
+            } else {
+                "仅 HQ5 需要".to_string()
             }),
         },
         RuntimeHealthCheck {
@@ -605,15 +692,33 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
             detail: Some("默认 UVR 模型生产执行器".to_string()),
         },
         RuntimeHealthCheck {
+            name: "faster-whisper".to_string(),
+            ok: faster_whisper_ready,
+            severity: "info".to_string(),
+            detail: Some(if faster_whisper_ready {
+                "AI 听写运行时包已就绪".to_string()
+            } else {
+                "AI 听写可选运行时包".to_string()
+            }),
+        },
+        RuntimeHealthCheck {
             name: "AI 听写草稿".to_string(),
             ok: faster_whisper_ready && whisper_base_ready,
             severity: "info".to_string(),
-            detail: Some(if !faster_whisper_ready {
-                "运行时缺失".to_string()
-            } else if !whisper_base_ready {
-                "模型缺失".to_string()
+            detail: Some(if faster_whisper_ready && whisper_base_ready {
+                "听写运行时与模型已就绪".to_string()
             } else {
-                "已就绪".to_string()
+                "可选".to_string()
+            }),
+        },
+        RuntimeHealthCheck {
+            name: "Whisper base".to_string(),
+            ok: whisper_base_ready,
+            severity: "info".to_string(),
+            detail: Some(if whisper_base_ready {
+                "AI 听写模型已就绪".to_string()
+            } else {
+                "仅 AI 听写需要".to_string()
             }),
         },
     ];
@@ -771,14 +876,6 @@ fn resolve_asset_root(kind: &str, settings: &FileStorageSettings) -> PathBuf {
         _ => get_default_asset_root(kind),
     };
     base
-}
-
-fn song_file_stem(song: &Song) -> String {
-    Path::new(&song.original_path)
-        .file_stem()
-        .and_then(|n| n.to_str())
-        .unwrap_or("Unknown")
-        .to_string()
 }
 
 fn legacy_song_workspace_dir(song_id: &str) -> PathBuf {
@@ -1109,7 +1206,8 @@ fn build_original_mix(vocals_path: &str, instrumental_path: &str) -> Result<Stri
             .to_string()
     })?;
 
-    let status = Command::new(ffmpeg_bin)
+    let mut status_cmd = Command::new(ffmpeg_bin);
+    status_cmd
         .arg("-y")
         .arg("-nostdin")
         .arg("-i")
@@ -1122,7 +1220,9 @@ fn build_original_mix(vocals_path: &str, instrumental_path: &str) -> Result<Stri
         .arg("pcm_s16le")
         .arg(&mix_path)
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    process_control::configure_console_visibility(&mut status_cmd);
+    let status = status_cmd
         .status()
         .map_err(|e| format!("Failed to run ffmpeg for mix: {}", e))?;
 
@@ -1498,8 +1598,10 @@ fn normalize_sha256(value: &str) -> String {
 fn file_sha256(path: &Path) -> Result<String, String> {
     #[cfg(windows)]
     {
-        let output = Command::new("certutil")
-            .args(["-hashfile", &path.to_string_lossy(), "SHA256"])
+        let mut cmd = Command::new("certutil");
+        cmd.args(["-hashfile", &path.to_string_lossy(), "SHA256"]);
+        process_control::configure_console_visibility(&mut cmd);
+        let output = cmd
             .output()
             .map_err(|e| format!("计算 SHA256 失败(certutil): {}", e))?;
         if !output.status.success() {
@@ -1687,6 +1789,7 @@ fn get_python_runtime_urls() -> Vec<String> {
     ]
 }
 
+#[allow(dead_code)]
 fn get_macos_python_runtime_urls() -> Vec<String> {
     let base = "astral-sh/python-build-standalone/releases/download/20260508";
     let arch = if cfg!(target_arch = "aarch64") {
@@ -1951,11 +2054,12 @@ fn verify_manifest_targets(
 }
 
 fn bootstrap_install_whisper_model(app: &AppHandle) -> Result<(), String> {
-    let runtime_models = get_runtime_dir().join("models");
+    let runtime_dir = get_runtime_dir();
+    let project_root = resolve_project_root();
+    let runtime_models = runtime_dir.join("models");
     let runtime_whisper = runtime_models.join("whisper");
     let python_path = runtime::python::get_python_path(app);
-    let manifest =
-        runtime::manifest::load_runtime_manifest(app, &get_runtime_dir(), &resolve_project_root());
+    let manifest = runtime::manifest::load_runtime_manifest(app, &runtime_dir, &project_root);
     let platform_manifest = runtime::manifest::current_platform_manifest(&manifest);
     let whisper_sources = if platform_manifest.models.whisper_base.is_empty() {
         runtime::manifest::fallback_model_artifacts(&manifest, "whisper")
@@ -1998,10 +2102,42 @@ fn bootstrap_install_whisper_model(app: &AppHandle) -> Result<(), String> {
     }
 }
 
-fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
-    let runtime_models = get_runtime_dir().join("models");
+fn bootstrap_install_default_onnx_model(app: &AppHandle) -> Result<(), String> {
+    let runtime_dir = get_runtime_dir();
+    let runtime_models = runtime_dir.join("models");
     let runtime_onnx = runtime_models.join("onnx");
-    let runtime_whisper = runtime_models.join("whisper");
+    let runtime_default_model =
+        runtime_onnx.join(separation::model_registry::DEFAULT_ONNX_MODEL_FILENAME);
+    if runtime_default_model.exists() {
+        return Ok(());
+    }
+
+    let project_root = resolve_project_root();
+    let resource_dir = app.path().resource_dir().unwrap_or_default();
+    let candidate_sources = [
+        project_root.join("src-tauri").join("models").join("onnx"),
+        resource_dir.join("python").join("models").join("onnx"),
+        resource_dir.join("models").join("onnx"),
+    ];
+
+    if let Some(src) = candidate_sources.iter().find(|path| path.exists()) {
+        fs::create_dir_all(&runtime_onnx)
+            .map_err(|e| format!("Failed to create runtime ONNX dir: {}", e))?;
+        copy_dir_recursive(src, &runtime_onnx)?;
+    }
+
+    if runtime_default_model.exists() {
+        Ok(())
+    } else {
+        Err("默认 ONNX 模型未能补齐".to_string())
+    }
+}
+
+fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
+    let runtime_dir = get_runtime_dir();
+    let project_root = resolve_project_root();
+    let runtime_models = runtime_dir.join("models");
+    let runtime_onnx = runtime_models.join("onnx");
     let python_path = runtime::python::get_python_path(app);
     let onnx_ready_initial = if python_path.exists() {
         let engine = separation::detect_engine_health(app, &runtime_models);
@@ -2011,20 +2147,11 @@ fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
     } else {
         false
     };
-    let whisper_ready_initial = if python_path.exists() {
-        match resolve_whisper_base_model_dir(app) {
-            Ok(model_dir) => whisper_model_probe(&python_path, &model_dir, 8).is_ok(),
-            Err(_) => false,
-        }
-    } else {
-        false
-    };
-    if onnx_ready_initial && whisper_ready_initial {
+    if onnx_ready_initial {
         return Ok(());
     }
-    let has_whisper = runtime_whisper.exists();
 
-    let project_models = resolve_project_root().join("python").join("models");
+    let project_models = project_root.join("python").join("models");
     fs::create_dir_all(&runtime_models)
         .map_err(|e| format!("Failed to create runtime models dir: {}", e))?;
     let mut install_notes: Vec<String> = Vec::new();
@@ -2036,37 +2163,14 @@ fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
             install_notes.push("onnx default: 本地离线模型已复制".to_string());
         }
     }
-    if !has_whisper && project_models.exists() {
-        let src = project_models.join("whisper");
-        if src.exists() {
-            copy_dir_recursive(&src, &runtime_whisper)?;
-            install_notes.push("whisper: 本地离线模型已复制".to_string());
-        }
-    }
-
-    let manifest =
-        runtime::manifest::load_runtime_manifest(app, &get_runtime_dir(), &resolve_project_root());
-    let platform_manifest = runtime::manifest::current_platform_manifest(&manifest);
-    let whisper_sources = if platform_manifest.models.whisper_base.is_empty() {
-        runtime::manifest::fallback_model_artifacts(&manifest, "whisper")
-    } else {
-        platform_manifest.models.whisper_base
-    };
     if !onnx_ready_initial {
+        let resource_dir = app.path().resource_dir().unwrap_or_default();
         let candidate_sources = [
+            project_root.join("src-tauri").join("models").join("onnx"),
             project_models.join("onnx"),
-            app.path()
-                .resource_dir()
-                .unwrap_or_default()
-                .join("python")
-                .join("models")
-                .join("onnx"),
+            resource_dir.join("python").join("models").join("onnx"),
             // tauri.conf.json bundle.resources 路径: models/onnx/UVR_MDXNET_9482.onnx
-            app.path()
-                .resource_dir()
-                .unwrap_or_default()
-                .join("models")
-                .join("onnx"),
+            resource_dir.join("models").join("onnx"),
         ];
         if let Some(src) = candidate_sources.iter().find(|path| path.exists()) {
             copy_dir_recursive(src, &runtime_onnx)?;
@@ -2074,72 +2178,17 @@ fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
         }
     }
 
-    // 安装可选高级模型 UVR-MDX-NET-Inst_HQ_5
-    let onnx_sources = platform_manifest.models.onnx.clone();
-    if !onnx_sources.is_empty() && verify_manifest_targets(&runtime_models, &onnx_sources).is_err()
+    if runtime_onnx
+        .join(separation::model_registry::HIGH_QUALITY_ONNX_MODEL_FILENAME)
+        .exists()
     {
-        match bootstrap_model_from_manifest_sources(
-            &runtime_models,
-            "onnx",
-            &runtime_onnx,
-            &onnx_sources,
-        ) {
-            Ok(true) => {
-                install_notes.push("UVR-MDX-NET-Inst_HQ_5: 已从大陆优先在线源下载".to_string());
-            }
-            Ok(false) => {
-                install_notes.push("UVR-MDX-NET-Inst_HQ_5: 未配置可用在线源".to_string());
-            }
-            Err(err) => {
-                install_notes.push(format!("UVR-MDX-NET-Inst_HQ_5 下载失败（可选）：{}", err))
-            }
-        }
-    }
-
-    if !runtime_whisper.exists() {
-        match bootstrap_model_from_manifest_sources(
-            &runtime_models,
-            "whisper",
-            &runtime_whisper,
-            &whisper_sources,
-        ) {
-            Ok(true) => install_notes.push("whisper base: 已从大陆优先在线源下载".to_string()),
-            Ok(false) => install_notes.push("whisper base: 未配置可用在线源".to_string()),
-            Err(err) => install_notes.push(err),
-        }
-    }
-
-    // Whisper runtime folder may exist but be unusable (e.g. empty snapshot, corrupted model.bin).
-    if runtime_whisper.exists() {
-        let python_path = runtime::python::get_python_path(app);
-        if python_path.exists() {
-            let whisper_usable = resolve_whisper_base_model_dir(app)
-                .ok()
-                .and_then(|model_dir| whisper_model_is_usable(&python_path, &model_dir, 8).ok())
-                .unwrap_or(false);
-            if !whisper_usable {
-                let _ = fs::remove_dir_all(&runtime_whisper);
-                match bootstrap_model_from_manifest_sources(
-                    &runtime_models,
-                    "whisper",
-                    &runtime_whisper,
-                    &whisper_sources,
-                ) {
-                    Ok(true) => install_notes.push("whisper base: 检测到损坏后已重装".to_string()),
-                    Ok(false) => install_notes
-                        .push("whisper base: 检测到损坏，但未配置可用在线源".to_string()),
-                    Err(err) => install_notes.push(format!("whisper base 重装失败: {}", err)),
-                }
-            }
-        }
+        install_notes.push("UVR-MDX-NET-Inst_HQ_5: 已就绪".to_string());
+    } else {
+        install_notes.push("UVR-MDX-NET-Inst_HQ_5: 可选，未纳入一键部署".to_string());
     }
 
     let mut still_missing = Vec::new();
-    let onnx_health = if python_path.exists() {
-        separation::detect_engine_health(app, &runtime_models)
-    } else {
-        separation::detect_engine_health(app, &runtime_models)
-    };
+    let onnx_health = separation::detect_engine_health(app, &runtime_models);
     if !onnx_health.default_model_ready {
         still_missing.push("onnx default model");
     }
@@ -2150,35 +2199,12 @@ fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
         still_missing.push("onnx metadata");
     }
 
-    let python_path = runtime::python::get_python_path(app);
-    let whisper_ready = if python_path.exists() {
-        match resolve_whisper_base_model_dir(app) {
-            Ok(model_dir) => match whisper_model_probe(&python_path, &model_dir, 8) {
-                Ok(()) => true,
-                Err(err) => {
-                    install_notes.push(format!("whisper base 自检失败: {}", err));
-                    false
-                }
-            },
-            Err(err) => {
-                install_notes.push(format!("whisper base 目录异常: {}", err));
-                false
-            }
-        }
-    } else {
-        false
-    };
-    if !whisper_ready {
-        still_missing.push("whisper base 模型");
-    }
-
     if still_missing.is_empty() {
         Ok(())
     } else {
         let onnx_missing = still_missing.iter().any(|s| {
             s.contains("onnx default") || s.contains("onnx session") || s.contains("onnx metadata")
         });
-        let whisper_missing = still_missing.iter().any(|s| s.contains("whisper base"));
         if onnx_missing {
             Err(format!(
                 "安装包缺少默认 ONNX 模型或模型校验失败，请重新安装完整版本。UVR_MDXNET_9482.onnx 必须随安装包发布，不支持远端自动补齐。细节：{}",
@@ -2188,13 +2214,9 @@ fn bootstrap_install_models(app: &AppHandle) -> Result<(), String> {
                     install_notes.join(" | ")
                 }
             ))
-        } else if whisper_missing {
-            // Whisper 可选，降级为成功但记录警告
-            Ok(())
         } else if !still_missing.is_empty() {
-            // 未知模型缺失不得静默 OK
             Err(format!(
-                "模型安装失败：{}。仅 Whisper base 缺失可降级，其他模型缺失必须解决。细节：{}",
+                "模型安装失败：{}。细节：{}",
                 still_missing.join("、"),
                 if install_notes.is_empty() {
                     "无安装日志".to_string()
@@ -2438,38 +2460,6 @@ fn read_log_tail_for_error(path: &Path, max_lines: usize) -> Option<String> {
     Some(lines.into_iter().rev().collect::<Vec<_>>().join(" | "))
 }
 
-fn timestamp_millis() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0)
-}
-
-fn append_text_log(path: &Path, text: &str) {
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    let mut content = String::new();
-    if let Ok(existing) = fs::read_to_string(path) {
-        content.push_str(&existing);
-        if !existing.ends_with('\n') {
-            content.push('\n');
-        }
-    }
-    content.push_str(text);
-    let _ = fs::write(path, content);
-}
-
-fn format_log_block(title: &str, lines: &[(&str, String)]) -> String {
-    let mut out = String::new();
-    out.push_str(&format!("[{}] {}\n", timestamp_millis(), title));
-    for (key, value) in lines {
-        out.push_str(&format!("{}={}\n", key, value));
-    }
-    out.push('\n');
-    out
-}
-
 #[allow(dead_code)]
 fn required_onnx_runtime_packages() -> Vec<&'static str> {
     if cfg!(windows) {
@@ -2477,6 +2467,93 @@ fn required_onnx_runtime_packages() -> Vec<&'static str> {
     } else {
         vec!["onnxruntime", "numpy", "soundfile", "sherpa-onnx"]
     }
+}
+
+#[allow(dead_code)]
+fn python_onnxruntime_providers(python_path: &Path) -> Result<Vec<String>, String> {
+    let script = r#"
+import json
+import onnxruntime as ort
+print(json.dumps(list(ort.get_available_providers())))
+"#;
+    let mut command = Command::new(python_path);
+    command
+        .args(["-c", script])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    process_control::configure_console_visibility(&mut command);
+    let output = command
+        .output()
+        .map_err(|e| format!("Failed to query ONNX Runtime providers: {}", e))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Failed to query ONNX Runtime providers: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let providers = serde_json::from_str::<Vec<String>>(&stdout)
+        .map_err(|e| format!("Failed to parse ONNX Runtime providers: {} [{}]", e, stdout))?;
+    Ok(providers)
+}
+
+#[cfg(target_os = "windows")]
+fn repair_windows_onnxruntime_directml(
+    app: &AppHandle,
+    python_path: &Path,
+    deadline: Instant,
+) -> Result<(), String> {
+    let providers = python_onnxruntime_providers(python_path).unwrap_or_default();
+    if providers
+        .iter()
+        .any(|provider| provider == "DmlExecutionProvider")
+    {
+        return Ok(());
+    }
+
+    emit_bootstrap_progress(
+        app,
+        "onnxruntime_directml_repair",
+        49,
+        "正在修复 ONNX Runtime DirectML 运行时...",
+    );
+
+    let mut uninstall_cmd = Command::new(python_path);
+    uninstall_cmd.args(["-m", "pip", "uninstall", "-y", "onnxruntime"]);
+    let _ = run_hidden_command_with_timeout(
+        &mut uninstall_cmd,
+        remaining_bootstrap_timeout(deadline, PYTHON_PACKAGES_TIMEOUT)?,
+        "ONNX Runtime 卸载",
+        Some(app),
+        "onnxruntime_directml_repair",
+        50,
+        "正在清理 CPU 版 ONNX Runtime...",
+    )?;
+
+    install_python_packages_with_fallbacks(app, python_path, &["onnxruntime-directml"], deadline)
+        .map_err(|e| format!("ONNX Runtime DirectML 安装失败: {}", e))?;
+
+    let repaired = python_onnxruntime_providers(python_path).unwrap_or_default();
+    if repaired
+        .iter()
+        .any(|provider| provider == "DmlExecutionProvider")
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "DirectML provider 仍不可用，当前 providers: {:?}",
+            repaired
+        ))
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn repair_windows_onnxruntime_directml(
+    _app: &AppHandle,
+    _python_path: &Path,
+    _deadline: Instant,
+) -> Result<(), String> {
+    Ok(())
 }
 
 fn ensure_onnx_runtime_modules(app: &AppHandle, deadline: Instant) -> Result<(), String> {
@@ -2515,26 +2592,27 @@ fn ensure_onnx_runtime_modules(app: &AppHandle, deadline: Instant) -> Result<(),
         ));
     }
 
-    // AI 听写仍依赖 faster-whisper，但它不是 ONNX 分离主线的阻断项。
-    if !runtime::capability::python_module_is_available(&python_path, "faster_whisper", 6)
-        .unwrap_or(false)
-    {
-        let _ = install_python_packages_with_fallbacks(
-            app,
-            &python_path,
-            &["faster-whisper"],
-            deadline,
-        )
-        .map_err(|e| {
-            eprintln!(
-                "[forisfstools] faster-whisper optional install failed: {}",
-                e
-            );
-            e
-        });
-    }
+    repair_windows_onnxruntime_directml(app, &python_path, deadline)?;
 
     Ok(())
+}
+
+fn ensure_hq_torch_runtime_modules(app: &AppHandle, deadline: Instant) -> Result<(), String> {
+    let python_path = runtime::python::get_python_path(app);
+    if !python_path.exists() {
+        return Err("未检测到 Python 运行时".to_string());
+    }
+
+    if !runtime::capability::python_module_is_available(&python_path, "torch", 6).unwrap_or(false) {
+        install_python_packages_with_fallbacks(app, &python_path, &["torch"], deadline)
+            .map_err(|e| format!("HQ Torch 安装失败: {}", e))?;
+    }
+
+    if runtime::capability::python_module_is_available(&python_path, "torch", 6).unwrap_or(false) {
+        Ok(())
+    } else {
+        Err("HQ Torch 安装后仍不可用".to_string())
+    }
 }
 
 fn detect_bootstrap_status(app: &AppHandle) -> BootstrapStatus {
@@ -5187,17 +5265,13 @@ fn process_song_with_onnx_skeleton(
                     "high_quality_model_path": engine_health.high_quality_model_path,
                     "high_quality_model_ready": engine_health.high_quality_model_ready,
                 });
+                let result_json =
+                    serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_string());
                 let result_path = output_dir.join("separator_result.json");
-                let _ = fs::write(
-                    &result_path,
-                    serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_string()),
-                );
+                let _ = fs::write(&result_path, &result_json);
                 let debug_dir = output_dir.join("debug");
                 let _ = fs::create_dir_all(&debug_dir);
-                let _ = fs::write(
-                    debug_dir.join("separator_result.json"),
-                    serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_string()),
-                );
+                let _ = fs::write(debug_dir.join("separator_result.json"), result_json);
                 emit_error_for_job(
                     &app,
                     &song_id,
@@ -5355,17 +5429,13 @@ fn process_song_with_onnx_skeleton(
                 "high_quality_model_path": engine_health.high_quality_model_path,
                 "high_quality_model_ready": engine_health.high_quality_model_ready,
             });
+            let result_json =
+                serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_string());
             let result_path = output_dir.join("separator_result.json");
-            let _ = fs::write(
-                &result_path,
-                serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_string()),
-            );
+            let _ = fs::write(&result_path, &result_json);
             let debug_dir = output_dir.join("debug");
             let _ = fs::create_dir_all(&debug_dir);
-            let _ = fs::write(
-                debug_dir.join("separator_result.json"),
-                serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_string()),
-            );
+            let _ = fs::write(debug_dir.join("separator_result.json"), result_json);
             emit_error_for_job(
                 &app,
                 &song_id,
@@ -5519,6 +5589,8 @@ fn process_song_with_onnx_skeleton(
         if let Some(song) = completed_song {
             let _ = app.emit("processing-complete", serde_json::json!({ "song": song }));
         }
+        clear_separator_job(&song_id);
+        clear_active_job_token(&song_id);
         return;
     }
 
@@ -5544,6 +5616,8 @@ fn process_song_with_onnx_skeleton(
         Some("processing"),
         Some(&error_message),
     );
+    clear_separator_job(&song_id);
+    clear_active_job_token(&song_id);
     return;
 }
 
@@ -5597,6 +5671,7 @@ async fn delete_song(id: String) -> Result<(), String> {
     if let Some(job) = get_job(&id) {
         terminate_known_job(&job, true);
     }
+    let _ = separation_queue::cancel_task(&id);
     clear_active_job_token(&id);
     clear_cancel_flag(&id);
     remove_job(&id);
@@ -5897,6 +5972,9 @@ async fn rename_playlist_folder(old_name: String, new_name: String) -> Result<()
 async fn download_hq_model(app: AppHandle) -> Result<String, String> {
     let runtime_models = get_runtime_dir().join("models");
     let runtime_onnx = runtime_models.join("onnx");
+    let deadline = Instant::now() + PYTHON_PACKAGES_TIMEOUT;
+    ensure_hq_torch_runtime_modules(&app, deadline)?;
+
     let manifest =
         runtime::manifest::load_runtime_manifest(&app, &get_runtime_dir(), &resolve_project_root());
     let platform_manifest = runtime::manifest::current_platform_manifest(&manifest);
@@ -5912,37 +5990,87 @@ async fn download_hq_model(app: AppHandle) -> Result<String, String> {
     } else {
         onnx_sources
     };
-    if verify_manifest_targets(&runtime_models, &sources).is_ok() {
+    let current_health = separation::detect_engine_health(&app, &runtime_models);
+    if current_health.high_quality_runtime_ready {
         return Ok("高质量模型已就绪".to_string());
     }
-    fs::create_dir_all(&runtime_onnx).map_err(|e| format!("创建目录失败: {}", e))?;
-    // Run blocking HTTP downloads on a dedicated thread to avoid tokio runtime conflict with reqwest::blocking
-    let runtime_models_clone = runtime_models.clone();
-    let runtime_onnx_clone = runtime_onnx.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        bootstrap_model_from_manifest_sources(
-            &runtime_models_clone,
-            "onnx",
-            &runtime_onnx_clone,
-            &sources,
-        )
-    })
-    .await
-    .map_err(|e| format!("下载线程崩溃: {}", e))?;
-    match result {
-        Ok(true) => Ok("高质量模型下载完成".to_string()),
-        Ok(false) => Err("未配置可用在线源".to_string()),
-        Err(err) => Err(format!("下载失败: {}", err)),
+
+    if verify_manifest_targets(&runtime_models, &sources).is_err() {
+        fs::create_dir_all(&runtime_onnx).map_err(|e| format!("创建目录失败: {}", e))?;
+        // Run blocking HTTP downloads on a dedicated thread to avoid tokio runtime conflict with reqwest::blocking
+        let runtime_models_clone = runtime_models.clone();
+        let runtime_onnx_clone = runtime_onnx.clone();
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            bootstrap_model_from_manifest_sources(
+                &runtime_models_clone,
+                "onnx",
+                &runtime_onnx_clone,
+                &sources,
+            )
+        })
+        .await
+        .map_err(|e| format!("下载线程崩溃: {}", e))?;
+        match result {
+            Ok(true) => {}
+            Ok(false) => return Err("未配置可用在线源".to_string()),
+            Err(err) => return Err(format!("下载失败: {}", err)),
+        }
+    }
+
+    let health = separation::detect_engine_health(&app, &runtime_models);
+    if health.high_quality_runtime_ready {
+        Ok("高质量模型与 Torch 已就绪".to_string())
+    } else if !health.high_quality_model_file_ready {
+        Err("高质量模型下载后仍未就绪".to_string())
+    } else if !health.high_quality_torch_ready {
+        Err("高质量模型已下载，但 Torch 仍未就绪".to_string())
+    } else if !health.high_quality_model_session_load_ok {
+        Err(format!(
+            "高质量模型已下载，但 Session 校验失败：{}",
+            health
+                .high_quality_model_session_load_error
+                .unwrap_or_else(|| "未知错误".to_string())
+        ))
+    } else if !health.high_quality_model_metadata_ok {
+        Err(format!(
+            "高质量模型已下载，但 Metadata 校验失败：{}",
+            health
+                .high_quality_model_metadata_error
+                .unwrap_or_else(|| "未知错误".to_string())
+        ))
+    } else {
+        Err("高质量模型下载后运行状态仍未就绪".to_string())
     }
 }
 
 #[tauri::command]
 async fn download_whisper_model(app: AppHandle) -> Result<String, String> {
     let app_clone = app.clone();
-    tauri::async_runtime::spawn_blocking(move || bootstrap_install_whisper_model(&app_clone))
+    tauri::async_runtime::spawn_blocking(move || ensure_whisper_runtime_ready(&app_clone))
         .await
         .map_err(|e| format!("下载线程崩溃: {}", e))?
-        .map(|_| "听写模型下载完成".to_string())
+        .map(|_| "听写运行时与模型下载完成".to_string())?;
+
+    let health = detect_runtime_health(&app);
+    let faster_whisper_ready = health
+        .checks
+        .iter()
+        .find(|check| check.name == "faster-whisper")
+        .map(|check| check.ok)
+        .unwrap_or(false);
+    let whisper_base_ready = health
+        .checks
+        .iter()
+        .find(|check| check.name == "Whisper base")
+        .map(|check| check.ok)
+        .unwrap_or(false);
+    if faster_whisper_ready && whisper_base_ready {
+        Ok("听写运行时与模型已就绪".to_string())
+    } else if !faster_whisper_ready {
+        Err("faster-whisper 安装后仍不可用".to_string())
+    } else {
+        Err("Whisper base 下载后仍不可用".to_string())
+    }
 }
 
 #[tauri::command]
@@ -5979,9 +6107,8 @@ async fn bootstrap_install_minimal(
     );
     ensure_onnx_runtime_modules(&app, deadline)
         .map_err(|e| format!("运行依赖安装失败（ONNX 路线）：{}", e))?;
-    emit_bootstrap_progress(&app, "models", 74, "正在检查 ONNX 模型...");
-    bootstrap_install_models(&app)
-        .map_err(|e| format!("模型安装失败（ONNX/whisper base）：{}", e))?;
+    emit_bootstrap_progress(&app, "models", 74, "正在检查默认 ONNX 模型...");
+    bootstrap_install_models(&app).map_err(|e| format!("模型安装失败（ONNX）：{}", e))?;
     emit_bootstrap_progress(&app, "verify", 92, "正在做最终环境验证...");
     let status = detect_bootstrap_status(&app);
     if status.can_run_core {
@@ -6481,11 +6608,15 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .setup(|_app| {
+        .setup(|app| {
             let songs_dir = get_songs_dir();
             let _ = ensure_dir(&songs_dir);
             let data_dir = get_data_dir();
             let _ = ensure_dir(&data_dir);
+            let app_handle = app.handle().clone();
+            let _ = tauri::async_runtime::spawn_blocking(move || {
+                let _ = bootstrap_install_default_onnx_model(&app_handle);
+            });
             Ok(())
         })
         .on_window_event(|_window, event| {

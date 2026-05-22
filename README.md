@@ -2,13 +2,12 @@
 
 本地音频处理桌面应用。核心能力是人声分离、AI 听写草稿、歌词搜索/导入、播放与歌词编辑。
 
-当前仓库的单一文档入口只有本文件，其他 `.md` 已移除。文档必须跟随当前代码状态，不保留过期的 Demucs / CUDA 主线描述。
+当前仓库的单一文档入口只有本文件，其他 `.md` 已移除。文档必须跟随当前代码状态，不保留过期的旧分离路线描述。
 
 ## 当前状态
 
-- 分离主线已切到 ONNX Runtime 探测层，默认路径不会执行 `python -m demucs`。
-- Demucs 仅保留显式 legacy fallback，只有设置 `MACARON_USE_LEGACY_DEMUCS=1` 才会进入。
-- 旧 `separator.py` / `demucs_wrapper.py` 动态主链路不再是默认实现。
+- 分离主线已切到 ONNX Runtime。
+- 旧动态脚本分离链路已移除。
 - AI 听写保持独立，仍依赖 `faster-whisper`，默认 CPU-only。
 - Windows 是当前主开发线；macOS 仍作为冻结参考线。
 
@@ -47,7 +46,7 @@
   - `soundfile`
 - 听写额外依赖：
   - `faster-whisper`
-- Demucs / CUDA 不再是分离路线依赖
+- 旧分离路线 / CUDA 不再是分离路线依赖
 
 ## 目录
 
