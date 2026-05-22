@@ -258,7 +258,7 @@ type BootstrapProgress = {
 
 type SettingsPane = "runtime" | "audioOutput" | "paths" | "appearance" | "about";
 
-type ColorThemeId = "peach" | "aurora" | "daylight" | "ghost_bride" | "zero" | "double" | "passion" | "breeze" | "graphite" | "studio" | "midnight" | "lanting" | "heavenly" | "manifesto" | "ironman" | "infinity";
+type ColorThemeId = "peach" | "aurora" | "daylight" | "ghost_bride" | "lanting" | "zero" | "double" | "passion" | "breeze" | "graphite" | "studio" | "midnight" | "heavenly" | "manifesto" | "ironman" | "infinity";
 
 const COLOR_THEMES: Array<{
   id: ColorThemeId;
@@ -309,6 +309,16 @@ const COLOR_THEMES: Array<{
     accent: "#dc2626",
     accent2: "#f87171",
     text: "#e6dcdc",
+  },
+  {
+    id: "lanting",
+    name: "兰亭序",
+    description: "象牙白底配墨绿点缀，古典雅致的书法意境。",
+    bg: "#f5f1eb",
+    card: "#fdfaf3",
+    accent: "#2c4a3e",
+    accent2: "#8b6914",
+    text: "#2d2d2d",
   },
   {
     id: "zero",
@@ -379,46 +389,6 @@ const COLOR_THEMES: Array<{
     accent: "#38bdf8",
     accent2: "#818cf8",
     text: "#f8fafc",
-  },
-  {
-    id: "lanting",
-    name: "兰亭序",
-    description: "象牙白底配墨绿点缀，古典雅致的书法意境。",
-    bg: "#f5f1eb",
-    card: "#fdfaf3",
-    accent: "#2c4a3e",
-    accent2: "#8b6914",
-    text: "#2d2d2d",
-  },
-  {
-    id: "heavenly",
-    name: "奶油拿铁",
-    description: "暖cream与咖啡棕交织，如一杯温润的拿铁。",
-    bg: "#F2E6D5",
-    card: "#FBF5EA",
-    accent: "#8B6B4F",
-    accent2: "#C9A87C",
-    text: "#3D3228",
-  },
-  {
-    id: "manifesto",
-    name: "高级纲领",
-    description: "逃げちゃダメだ　逃げちゃダメだ　逃げちゃダメだ",
-    bg: "#0b0b10",
-    card: "#1e1632",
-    accent: "#A2DA5A",
-    accent2: "#75409A",
-    text: "#f8fafc",
-  },
-  {
-    id: "ironman",
-    name: "I Am Iron Man",
-    description: "I LOVE YOU 3000",
-    bg: "#0d0505",
-    card: "#3a0a0a",
-    accent: "#FFD700",
-    accent2: "#D32F2F",
-    text: "#f5f0e0",
   },
   {
     id: "infinity",
