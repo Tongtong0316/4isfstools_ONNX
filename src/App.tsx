@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -50,6 +50,109 @@ function AppSearchIcon({ className = "" }: { className?: string }) {
     <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
       <path d="m17.2 17.2 3.3 3.3M10.8 18a7.2 7.2 0 1 1 0-14.4 7.2 7.2 0 0 1 0 14.4Z" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
     </svg>
+  );
+}
+
+function AutoFitText({
+  text,
+  title,
+  className = "",
+  minFontSize = 11,
+  maxFontSize = 15,
+  trailingGapEm = 0.4,
+}: {
+  text: string;
+  title?: string;
+  className?: string;
+  minFontSize?: number;
+  maxFontSize?: number;
+  trailingGapEm?: number;
+}) {
+  const measureRef = useRef<HTMLSpanElement | null>(null);
+  const [fontSize, setFontSize] = useState(maxFontSize);
+
+  useLayoutEffect(() => {
+    const node = measureRef.current;
+    const container = node?.parentElement;
+    if (!node || !container || typeof ResizeObserver === "undefined") {
+      setFontSize(maxFontSize);
+      return;
+    }
+
+    const fitText = () => {
+      const availableWidth = container.clientWidth;
+      if (!availableWidth) {
+        return;
+      }
+
+      const computedStyle = window.getComputedStyle(node);
+      const fontFamily = computedStyle.fontFamily;
+      const fontWeight = computedStyle.fontWeight;
+      const letterSpacing = Number.parseFloat(computedStyle.letterSpacing || "0") || 0;
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("2d");
+
+      if (!context) {
+        setFontSize(maxFontSize);
+        return;
+      }
+
+      let low = minFontSize;
+      let high = maxFontSize;
+      let best = minFontSize;
+
+      const measureAt = (size: number) => {
+        context.font = `${fontWeight} ${size}px ${fontFamily}`;
+        const rawWidth = context.measureText(text).width;
+        const gapWidth = size * trailingGapEm;
+        return rawWidth + gapWidth + letterSpacing * Math.max(0, text.length - 1);
+      };
+
+      if (measureAt(maxFontSize) <= availableWidth) {
+        setFontSize(maxFontSize);
+        return;
+      }
+
+      while (high - low > 0.1) {
+        const mid = (low + high) / 2;
+        if (measureAt(mid) <= availableWidth) {
+          best = mid;
+          low = mid;
+        } else {
+          high = mid;
+        }
+      }
+
+      setFontSize(Math.max(minFontSize, Math.min(maxFontSize, best)));
+    };
+
+    const observer = new ResizeObserver(() => {
+      requestAnimationFrame(fitText);
+    });
+
+    observer.observe(container);
+    fitText();
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [text, minFontSize, maxFontSize, trailingGapEm]);
+
+  return (
+    <span
+      ref={measureRef}
+      className={className}
+      title={title}
+      style={{
+        fontSize: `${fontSize}px`,
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "clip",
+        lineHeight: 1.15,
+      }}
+    >
+      {text}
+    </span>
   );
 }
 
@@ -155,7 +258,7 @@ type BootstrapProgress = {
 
 type SettingsPane = "runtime" | "audioOutput" | "paths" | "appearance" | "about";
 
-type ColorThemeId = "peach" | "aurora" | "daylight" | "ghost_bride" | "zero" | "double" | "passion" | "breeze" | "graphite" | "studio" | "midnight" | "paper" | "heavenly" | "manifesto" | "ironman" | "infinity";
+type ColorThemeId = "peach" | "aurora" | "daylight" | "ghost_bride" | "zero" | "double" | "passion" | "breeze" | "graphite" | "studio" | "midnight" | "lanting" | "heavenly" | "manifesto" | "ironman" | "infinity";
 
 const COLOR_THEMES: Array<{
   id: ColorThemeId;
@@ -278,14 +381,14 @@ const COLOR_THEMES: Array<{
     text: "#f8fafc",
   },
   {
-    id: "paper",
-    name: "纸面暖白",
-    description: "柔和浅色，减少白底刺眼感。",
-    bg: "#f7f4ef",
-    card: "#fffaf2",
-    accent: "#0f766e",
-    accent2: "#a16207",
-    text: "#1f2933",
+    id: "lanting",
+    name: "兰亭序",
+    description: "象牙白底配墨绿点缀，古典雅致的书法意境。",
+    bg: "#f5f1eb",
+    card: "#fdfaf3",
+    accent: "#2c4a3e",
+    accent2: "#8b6914",
+    text: "#2d2d2d",
   },
   {
     id: "heavenly",
@@ -2777,7 +2880,11 @@ function App() {
                           />
                           <div className="min-w-0 flex-1">
                             <div className="truncate text-[12px] font-semibold text-[var(--text-muted)]">算力硬件</div>
-                            <div className="runtime-info-card-value-fit mt-1 font-bold leading-tight text-[var(--text-primary)]" title={runtimeProviderLabel}>{runtimeProviderLabel}</div>
+                            <AutoFitText
+                              text={runtimeProviderLabel}
+                              title={runtimeProviderTitle}
+                              className="runtime-info-card-value-fit mt-1 block font-bold text-[var(--text-primary)]"
+                            />
                           </div>
                         </div>
                         <div className="runtime-info-card runtime-info-card-auto flex min-w-0 items-center gap-3 rounded-[12px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] px-4">
@@ -2794,7 +2901,11 @@ function App() {
                           />
                           <div className="min-w-0 flex-1">
                             <div className="truncate text-[12px] font-semibold text-[var(--text-muted)]">运行模式</div>
-                            <div className="runtime-info-card-value-fit mt-1 font-bold leading-tight text-[var(--text-primary)]" title={runtimeModeLabel}>{runtimeModeLabel}</div>
+                            <AutoFitText
+                              text={runtimeModeLabel}
+                              title={runtimeModeLabel}
+                              className="runtime-info-card-value-fit mt-1 block font-bold text-[var(--text-primary)]"
+                            />
                           </div>
                         </div>
                         {/* Static info cards */}
