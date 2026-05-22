@@ -16,6 +16,15 @@ pub(crate) struct SeparationTask {
 static QUEUE: Mutex<VecDeque<SeparationTask>> = Mutex::new(VecDeque::new());
 static WORKER_RUNNING: Mutex<bool> = Mutex::new(false);
 
+struct WorkerRunningGuard;
+
+impl Drop for WorkerRunningGuard {
+    fn drop(&mut self) {
+        let mut running = WORKER_RUNNING.lock().unwrap();
+        *running = false;
+    }
+}
+
 pub(crate) fn submit_task(task: SeparationTask) {
     {
         let mut queue = QUEUE.lock().unwrap();
@@ -48,6 +57,7 @@ fn try_start_worker() {
 }
 
 fn worker_loop() {
+    let _guard = WorkerRunningGuard;
     loop {
         let task = {
             let mut queue = QUEUE.lock().unwrap();
@@ -69,8 +79,6 @@ fn worker_loop() {
                 );
             }
             None => {
-                let mut running = WORKER_RUNNING.lock().unwrap();
-                *running = false;
                 break;
             }
         }

@@ -103,7 +103,7 @@ export function ThemeSwatch({ bgColor, accentColor, className = "", imageUrl }: 
         <g clipPath={`url(#${clipId})`}>
           <rect width={64} height={64} fill={bgColor} />
           {imageUrl ? (
-            <image href={imageUrl} x={4} y={4} width={56} height={56} preserveAspectRatio="xMidYMid meet" />
+            <image href={imageUrl} x={0} y={0} width={64} height={64} preserveAspectRatio="xMidYMid meet" />
           ) : (
             <polygon points="64,0 64,64 0,64" fill={accentColor} />
           )}

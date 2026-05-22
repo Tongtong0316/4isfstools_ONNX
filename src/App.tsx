@@ -8,6 +8,9 @@ import { Song, ProcessingStage, ProcessingStatus } from "./types";
 import LyricsPanel from "./components/lyrics/LyricsPanel";
 import { MicIcon, MusicNoteIcon, ThemeSwatch, CheckIcon } from "./components/icons";
 import infinityIcon from "../icons/Infinity.png";
+import numpyIcon from "../icons/numpy.png";
+import fasterWhisperIcon from "../icons/faster-whisper.png";
+import torchIcon from "../icons/tor.png";
 import type { LyricDocument } from "./types/lyrics";
 
 const MEDIA_IMPORT_EXTENSIONS = [
@@ -101,6 +104,9 @@ type SeparationEngineHealth = {
   highQualityModelId: string | null;
   highQualityModelPath: string;
   highQualityModelReady: boolean;
+  highQualityModelFileReady: boolean;
+  highQualityTorchReady: boolean;
+  highQualityRuntimeReady: boolean;
   highQualityModelSessionLoadOk: boolean;
   highQualityModelSessionLoadError: string | null;
   highQualityModelMetadataOk: boolean;
@@ -399,7 +405,7 @@ function clearInfinityColors() {
   for (const name of INFINITY_VAR_NAMES) root.style.removeProperty(name);
 }
 
-const APP_VERSION = "1.0.1";
+const APP_VERSION = "1.0";
 
 const SETTINGS_NAV_ITEMS: Array<{
   pane: SettingsPane;
@@ -417,7 +423,7 @@ const SETTINGS_NAV_ITEMS: Array<{
 const SETTINGS_PAGE_COPY: Record<SettingsPane, { title: string; description: string }> = {
   runtime: {
     title: "运行环境",
-    description: "检测依赖、模型与 GPU 状态，确保核心功能可以正常运行。\n默认模型稳，HQ5 更强但更慢，可在两者间切换。",
+    description: "检测依赖、模型与 GPU 状态，确保核心功能可以正常运行。\n默认模型独立可用，HQ5 额外绑定 Torch，并在下载时自动补齐。",
   },
   audioOutput: {
     title: "音频输出",
@@ -444,11 +450,14 @@ const RUNTIME_CHECK_NAMES = [
   "ONNX 默认模型",
   "ONNX Session",
   "ONNX Metadata",
-  "ONNX 高质量模型",
   "SoundFile",
   "NumPy",
   "Sherpa ONNX",
+  "ONNX 高质量模型",
+  "Torch（HQ）",
+  "faster-whisper",
   "AI 听写草稿",
+  "Whisper base",
 ];
 
 type TrackGraph = {
@@ -503,6 +512,7 @@ function App() {
   const [bootstrapMessage, setBootstrapMessage] = useState<string | null>(null);
   const [bootstrapProgress, setBootstrapProgress] = useState<BootstrapProgress | null>(null);
   const [bootstrapStartedAt, setBootstrapStartedAt] = useState<number | null>(null);
+  const [runtimeHealthRefreshing, setRuntimeHealthRefreshing] = useState(false);
   const [selectedSeparationModel, setSelectedSeparationModel] = useState<"default" | "high_quality">(() => {
     if (typeof window === "undefined") return "default";
     return (localStorage.getItem("4isfstools.separation_model") as "default" | "high_quality") || "default";
@@ -592,6 +602,7 @@ function App() {
   const currentSongRef = useRef<Song | null>(null);
   const lyricsLoadSeqRef = useRef(0);
   const waveformLoadSeqRef = useRef(0);
+  const waveformPeaksCacheRef = useRef<Map<string, number[]>>(new Map());
   const playbackOpRef = useRef(0);
   const audioAnalyserContextRef = useRef<AudioContext | null>(null);
   const audioGraphRef = useRef<{
@@ -905,6 +916,15 @@ function App() {
       return;
     }
 
+    const cacheKey = `${song.id}:${song.vocalsPath}`;
+    const cachedPeaks = waveformPeaksCacheRef.current.get(cacheKey);
+    if (cachedPeaks) {
+      setVocalWaveformPeaks(cachedPeaks);
+      setVocalWaveformLoading(false);
+      setVocalWaveformError(null);
+      return;
+    }
+
     setVocalWaveformLoading(true);
     setVocalWaveformError(null);
 
@@ -924,6 +944,13 @@ function App() {
       try {
         const audioBuffer = await context.decodeAudioData(arrayBuffer.slice(0));
         const peaks = buildWaveformPeaks(audioBuffer);
+        waveformPeaksCacheRef.current.set(cacheKey, peaks);
+        if (waveformPeaksCacheRef.current.size > 5) {
+          const oldestKey = waveformPeaksCacheRef.current.keys().next().value;
+          if (oldestKey) {
+            waveformPeaksCacheRef.current.delete(oldestKey);
+          }
+        }
         if (waveformLoadSeqRef.current === seq) {
           setVocalWaveformPeaks(peaks);
         }
@@ -1211,8 +1238,13 @@ function App() {
   }, [currentSong]);
 
   useEffect(() => {
+    if (!vocalWaveformEnabled) {
+      waveformLoadSeqRef.current += 1;
+      setVocalWaveformLoading(false);
+      return;
+    }
     void loadVocalWaveform(currentSong);
-  }, [currentSong?.id, currentSong?.vocalsPath, loadVocalWaveform]);
+  }, [currentSong?.id, currentSong?.vocalsPath, vocalWaveformEnabled, loadVocalWaveform]);
 
   useEffect(() => {
     if (!isDesktopRuntime) return;
@@ -1270,6 +1302,9 @@ function App() {
               highQualityModelId: "bs_polarformer_fp16",
               highQualityModelPath: "",
               highQualityModelReady: false,
+              highQualityModelFileReady: false,
+              highQualityTorchReady: false,
+              highQualityRuntimeReady: false,
               highQualityModelSessionLoadOk: false,
               highQualityModelSessionLoadError: "runtime health probe unavailable",
               highQualityModelMetadataOk: false,
@@ -1298,15 +1333,20 @@ function App() {
     };
   }, [isDesktopRuntime]);
 
-  const handleRefreshRuntimeHealth = useCallback(async () => {
-    if (!isDesktopRuntime) return;
+  const handleRefreshRuntimeHealth = useCallback(async (): Promise<RuntimeHealthReport | null> => {
+    if (!isDesktopRuntime) return null;
+    setRuntimeHealthRefreshing(true);
     try {
       const health = await invoke<RuntimeHealthReport>("get_runtime_health");
       const bootstrap = await invoke<BootstrapStatus>("get_bootstrap_status");
       setRuntimeHealth(health);
       setBootstrapStatus(bootstrap);
+      return health;
     } catch (error) {
       console.error("Failed to refresh runtime health:", error);
+      return null;
+    } finally {
+      setRuntimeHealthRefreshing(false);
     }
   }, [isDesktopRuntime]);
 
@@ -1345,10 +1385,10 @@ function App() {
 
   // Sync transcript readiness from runtime health
   useEffect(() => {
-    if (bootstrapStatus?.whisperBaseReady) {
-      setTranscriptionReady(true);
-    }
-  }, [bootstrapStatus]);
+    const fasterWhisperReady = runtimeHealth?.checks.some((check) => check.name === "faster-whisper" && check.ok) ?? false;
+    const whisperBaseReady = runtimeHealth?.checks.some((check) => check.name === "Whisper base" && check.ok) ?? false;
+    setTranscriptionReady(fasterWhisperReady && whisperBaseReady);
+  }, [runtimeHealth]);
 
   const handleSelectDefaultModel = useCallback(() => {
     if (modelActivity) return;
@@ -1357,7 +1397,7 @@ function App() {
 
   const handleSelectHighQualityModel = useCallback(async () => {
     if (modelActivity) return;
-    const isReady = runtimeHealth?.separationEngine?.highQualityModelReady;
+    const isReady = runtimeHealth?.separationEngine?.highQualityRuntimeReady;
     if (isReady) {
       setSelectedSeparationModel("high_quality");
       return;
@@ -1372,11 +1412,17 @@ function App() {
         ),
       ]);
       console.log("HQ model download result:", result);
-      setSelectedSeparationModel("high_quality");
-      await handleRefreshRuntimeHealth();
+      const health = await handleRefreshRuntimeHealth();
+      if (health?.separationEngine?.highQualityRuntimeReady) {
+        setSelectedSeparationModel("high_quality");
+      } else {
+        setSelectedSeparationModel("default");
+        setHqDownloadError(true);
+      }
     } catch (error) {
       console.error("Failed to download HQ model:", error);
       setHqDownloadError(true);
+      setSelectedSeparationModel("default");
     } finally {
       setModelActivity(null);
     }
@@ -1389,14 +1435,23 @@ function App() {
     setModelActivity({ target: "whisper", phase: "downloading" });
     try {
       await invoke("download_whisper_model");
-      setTranscriptionReady(true);
+      const health = await handleRefreshRuntimeHealth();
+      const fasterWhisperReady = health?.checks.some((check) => check.name === "faster-whisper" && check.ok) ?? false;
+      const whisperBaseReady = health?.checks.some((check) => check.name === "Whisper base" && check.ok) ?? false;
+      if (fasterWhisperReady && whisperBaseReady) {
+        setTranscriptionReady(true);
+      } else {
+        setTranscriptionReady(false);
+        setWhisperDownloadError(true);
+      }
     } catch (error) {
       console.error("Failed to download whisper model:", error);
       setWhisperDownloadError(true);
+      setTranscriptionReady(false);
     } finally {
       setModelActivity(null);
     }
-  }, [modelActivity, transcriptionReady]);
+  }, [modelActivity, transcriptionReady, handleRefreshRuntimeHealth]);
 
   useEffect(() => {
     if (!isDesktopRuntime) {
@@ -2030,11 +2085,11 @@ function App() {
               </span>
             </button>
             <div
-              className="status-chip"
+              className="status-chip status-chip-flex"
               title={runtimeProviderTitle}
             >
               <span className="status-chip-dot status-chip-dot-success" />
-              <span className="ui-chip-text">{runtimeProviderLabel}</span>
+              <span className="ui-chip-text ui-chip-text-no-ellipsis">{runtimeProviderLabel}</span>
             </div>
           </div>
           <div className="app-header-right">
@@ -2552,7 +2607,7 @@ function App() {
                                 <ThemeSwatch
                                   bgColor={theme.id === "infinity" ? "transparent" : theme.card}
                                   accentColor={theme.accent}
-                                  className="theme-swatch settings-theme-swatch block h-10 w-10 rounded-[12px] border border-white/10"
+                                  className={`theme-swatch settings-theme-swatch block h-10 w-10 rounded-[12px] ${theme.id === "infinity" ? "" : "border border-white/10"}`}
                                   imageUrl={theme.id === "infinity" ? infinityIcon : undefined}
                                 />
                               </div>
@@ -2611,6 +2666,7 @@ function App() {
                             "FFmpeg — FFmpeg Developers",
                             "faster-whisper — SYSTRAN / Guillaume Klein",
                             "Whisper — OpenAI",
+                            "UVR5 (Ultimate Vocal Remover) — Anjok07, aufr33",
                             "SoundFile / python-soundfile — Bastibe and contributors",
                             "NumPy — NumPy Developers",
                             "ONNX Runtime — Microsoft Corporation",
@@ -2631,7 +2687,7 @@ function App() {
                       <div className="settings-card rounded-[16px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] px-7 py-6">
                         <div className="text-[17px] font-bold text-[var(--text-primary)]">鸣谢</div>
                         <div className="ui-chip-wrap mt-3">
-                          {["零度天堂（BUID：448187）", "达宝Doublemint（BUID：5854007）", "杠杠（BUID：3493291207166696）"].map((name) => (
+                          {["零度天堂（BUID：448187）", "达宝Doublemint（BUID：5854007）", "杠杠（BUID：3493291207166696）", "阿怡吖咿哟（BUID：2041058727）"].map((name) => (
                             <span key={name} className="ui-chip" title={name}><span>{name}</span></span>
                           ))}
                         </div>
@@ -2665,10 +2721,12 @@ function App() {
                           <div className="flex shrink-0 items-center gap-3">
                             <button
                               type="button"
-                              className="inline-flex h-10 items-center justify-center whitespace-nowrap rounded-[12px] border border-[rgba(148,163,184,0.16)] px-4 text-[13px] font-semibold text-[var(--text-secondary)] transition-colors hover:bg-[rgba(148,163,184,0.08)] focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
+                              className="inline-flex h-10 items-center justify-center whitespace-nowrap rounded-[12px] border border-[rgba(148,163,184,0.16)] px-4 text-[13px] font-semibold text-[var(--text-secondary)] transition-colors hover:bg-[rgba(148,163,184,0.08)] focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-60"
                               onClick={() => void handleRefreshRuntimeHealth()}
+                              disabled={runtimeHealthRefreshing}
+                              aria-busy={runtimeHealthRefreshing}
                             >
-                              重新检测
+                              {runtimeHealthRefreshing ? "检测中..." : "重新检测"}
                             </button>
                             <button
                               type="button"
@@ -2703,7 +2761,7 @@ function App() {
                       </div>
 
                       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                        <div className="runtime-info-card flex h-16 min-w-0 items-center gap-3 rounded-[12px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] px-4">
+                        <div className="runtime-info-card runtime-info-card-auto flex min-w-0 items-center gap-3 rounded-[12px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] px-4">
                           <img
                             src={
                               runtimeHealth?.separationEngine?.gpuVendor === "apple_silicon"
@@ -2717,12 +2775,12 @@ function App() {
                             className="h-10 w-10 shrink-0 object-contain"
                             alt=""
                           />
-                          <div className="min-w-0">
+                          <div className="min-w-0 flex-1">
                             <div className="truncate text-[12px] font-semibold text-[var(--text-muted)]">算力硬件</div>
-                            <div className="mt-1 truncate text-sm font-bold text-[var(--text-primary)]" title={runtimeProviderLabel}>{runtimeProviderLabel}</div>
+                            <div className="runtime-info-card-value-fit mt-1 font-bold leading-tight text-[var(--text-primary)]" title={runtimeProviderLabel}>{runtimeProviderLabel}</div>
                           </div>
                         </div>
-                        <div className="runtime-info-card flex h-16 min-w-0 items-center gap-3 rounded-[12px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] px-4">
+                        <div className="runtime-info-card runtime-info-card-auto flex min-w-0 items-center gap-3 rounded-[12px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] px-4">
                           <img
                             src={
                               runtimeSelectedProvider === "DmlExecutionProvider"
@@ -2734,9 +2792,9 @@ function App() {
                             className="h-10 w-10 shrink-0 object-contain"
                             alt=""
                           />
-                          <div className="min-w-0">
+                          <div className="min-w-0 flex-1">
                             <div className="truncate text-[12px] font-semibold text-[var(--text-muted)]">运行模式</div>
-                            <div className="mt-1 truncate text-sm font-bold text-[var(--text-primary)]" title={runtimeModeLabel}>{runtimeModeLabel}</div>
+                            <div className="runtime-info-card-value-fit mt-1 font-bold leading-tight text-[var(--text-primary)]" title={runtimeModeLabel}>{runtimeModeLabel}</div>
                           </div>
                         </div>
                         {/* Static info cards */}
@@ -2745,12 +2803,15 @@ function App() {
                           { label: "Python", value: runtimeHealth?.checks.find((c) => c.name === "Python")?.ok ? "已就绪" : "未就绪", icon: "/pyth.png" },
                           { label: "FFmpeg", value: runtimeHealth?.checks.find((c) => c.name === "FFmpeg")?.ok ? "已就绪" : "未就绪", icon: "/ff.png" },
                           { label: "SoundFile", value: runtimeHealth?.checks.find((c) => c.name === "SoundFile")?.ok ? "已就绪" : "未就绪", icon: "/sf.png" },
+                          { label: "NumPy", value: runtimeHealth?.checks.find((c) => c.name === "NumPy")?.ok ? "已就绪" : "未就绪", icon: numpyIcon },
+                          { label: "Torch", value: runtimeHealth?.separationEngine?.highQualityTorchReady ? "HQ 已就绪" : "仅 HQ5 需要", icon: torchIcon },
+                          { label: "faster-whisper", value: runtimeHealth?.checks.find((c) => c.name === "faster-whisper")?.ok ? "已就绪" : "仅 AI 听写需要", icon: fasterWhisperIcon },
                         ].map(({ label, value, icon }) => (
-                          <div key={label} className="runtime-info-card flex h-16 min-w-0 items-center gap-3 rounded-[12px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] px-4">
+                          <div key={label} className="runtime-info-card runtime-info-card-auto flex min-w-0 items-center gap-3 rounded-[12px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] px-4">
                             <img src={icon} className="h-10 w-10 shrink-0 object-contain" alt="" />
-                            <div className="min-w-0">
+                            <div className="min-w-0 flex-1">
                               <div className="truncate text-[12px] font-semibold text-[var(--text-muted)]">{label}</div>
-                              <div className="mt-1 truncate text-sm font-bold text-[var(--text-primary)]" title={value}>{value}</div>
+                              <div className="mt-1 whitespace-nowrap text-sm font-bold leading-tight text-[var(--text-primary)]" title={value}>{value}</div>
                             </div>
                           </div>
                         ))}
@@ -2794,7 +2855,7 @@ function App() {
                               style={{
                                 color: hqDownloadError
                                   ? "#fb923c"
-                                  : selectedSeparationModel === "high_quality" || runtimeHealth?.separationEngine?.highQualityModelReady
+                                  : selectedSeparationModel === "high_quality" || runtimeHealth?.separationEngine?.highQualityRuntimeReady
                                     ? "var(--text-primary)"
                                     : "var(--text-muted)",
                               }}
@@ -2803,12 +2864,16 @@ function App() {
                                 ? "下载中..."
                                 : modelActivity?.target === "hq" && modelActivity.phase === "preparing"
                                   ? "准备中..."
-                                  : hqDownloadError
+                                : hqDownloadError
                                     ? "下载失败，点击重试"
-                                    : selectedSeparationModel === "high_quality"
+                                    : selectedSeparationModel === "high_quality" && runtimeHealth?.separationEngine?.highQualityRuntimeReady
                                       ? "使用中 · Inst_HQ_5"
-                                      : runtimeHealth?.separationEngine?.highQualityModelReady
+                                    : runtimeHealth?.separationEngine?.highQualityRuntimeReady
                                         ? "Inst_HQ_5"
+                                        : runtimeHealth?.separationEngine?.highQualityModelFileReady
+                                          ? runtimeHealth?.separationEngine?.highQualityTorchReady
+                                            ? "模型已在位，等待运行校验"
+                                            : "模型已就绪，Torch 待补齐"
                                         : "可选下载"
                               }
                             </div>
@@ -2892,8 +2957,8 @@ function App() {
 
                       <div className="flex items-center justify-between gap-4">
                         <div className="text-[16px] font-bold text-[var(--text-primary)]">检测项目</div>
-                        <div className="ui-chip text-[12px]" title="当前已返回项目数 / 预期检测项目数">
-                          <span>{runtimeCheckCountLabel}</span>
+                        <div className="ui-chip min-w-[76px] justify-center px-3 text-[12px] tabular-nums" title="当前已返回项目数 / 预期检测项目数">
+                          <span className="font-mono leading-none">{runtimeCheckCountLabel}</span>
                         </div>
                       </div>
 

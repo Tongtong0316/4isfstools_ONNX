@@ -33,7 +33,8 @@ pub(crate) fn normalize_source_audio(input_path: &Path, output_path: &Path) -> R
             .to_string()
     })?;
 
-    let status = Command::new(ffmpeg_bin)
+    let mut status_cmd = Command::new(ffmpeg_bin);
+    status_cmd
         .arg("-y")
         .arg("-nostdin")
         .arg("-i")
@@ -47,7 +48,9 @@ pub(crate) fn normalize_source_audio(input_path: &Path, output_path: &Path) -> R
         .arg("pcm_s16le")
         .arg(output_path)
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    crate::process_control::configure_console_visibility(&mut status_cmd);
+    let status = status_cmd
         .status()
         .map_err(|e| format!("Failed to run ffmpeg for audio normalization: {}", e))?;
 

@@ -4,7 +4,7 @@ use std::process::{Command, Stdio};
 
 use tauri::{AppHandle, Manager};
 
-use crate::{get_data_dir, is_isolated_runtime_mode};
+use crate::{get_data_dir, is_isolated_runtime_mode, process_control};
 
 pub fn get_python_path(app: &AppHandle) -> PathBuf {
     let runtime_dir = get_data_dir().join("runtime");
@@ -95,13 +95,15 @@ pub fn get_python_path(app: &AppHandle) -> PathBuf {
 
 #[allow(dead_code)]
 pub fn python_site_packages_dir(python_path: &Path) -> Result<PathBuf, String> {
-    let output = Command::new(python_path)
-        .args([
-            "-c",
-            "import sysconfig, site; p = sysconfig.get_paths().get('purelib') or sysconfig.get_paths().get('platlib') or ''; print(p.strip())",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+    let mut cmd = Command::new(python_path);
+    cmd.args([
+        "-c",
+        "import sysconfig, site; p = sysconfig.get_paths().get('purelib') or sysconfig.get_paths().get('platlib') or ''; print(p.strip())",
+    ])
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
+    process_control::configure_console_visibility(&mut cmd);
+    let output = cmd
         .output()
         .map_err(|e| format!("Failed to resolve Python site-packages dir: {}", e))?;
     if !output.status.success() {
@@ -119,16 +121,18 @@ pub fn python_site_packages_dir(python_path: &Path) -> Result<PathBuf, String> {
 
 #[allow(dead_code)]
 pub fn python_file_compiles(python_path: &Path, file_path: &Path) -> Result<bool, String> {
-    let output = Command::new(python_path)
-        .args([
-            "-c",
-            &format!(
-                "import py_compile; py_compile.compile({}, doraise=True)",
-                format!("{:?}", file_path.to_string_lossy())
-            ),
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+    let mut cmd = Command::new(python_path);
+    cmd.args([
+        "-c",
+        &format!(
+            "import py_compile; py_compile.compile({}, doraise=True)",
+            format!("{:?}", file_path.to_string_lossy())
+        ),
+    ])
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
+    process_control::configure_console_visibility(&mut cmd);
+    let output = cmd
         .output()
         .map_err(|e| format!("Failed to compile-check Python file: {}", e))?;
     if output.status.success() {

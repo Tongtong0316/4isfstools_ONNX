@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 interface VocalWaveformPreviewProps {
   peaks: number[] | null;
@@ -55,10 +55,15 @@ export default function VocalWaveformPreview({
   error = null,
 }: VocalWaveformPreviewProps) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const canvasLayerRef = useRef<HTMLDivElement | null>(null);
+  const playheadRef = useRef<HTMLDivElement | null>(null);
   const [viewportWidth, setViewportWidth] = useState(0);
-  const [displayTime, setDisplayTime] = useState(currentTime);
+  const [footerTime, setFooterTime] = useState(currentTime);
   const animationRef = useRef<number | null>(null);
-  const playheadRef = useRef({
+  const footerUpdateRef = useRef(0);
+  const playbackTimeRef = useRef(currentTime);
+  const playbackCursorRef = useRef({
     targetTime: currentTime,
     startedAt: performance.now(),
     startedTime: currentTime,
@@ -82,11 +87,104 @@ export default function VocalWaveformPreview({
   }, []);
 
   useEffect(() => {
-    playheadRef.current.targetTime = currentTime;
-    playheadRef.current.startedTime = currentTime;
-    playheadRef.current.startedAt = performance.now();
-    setDisplayTime(currentTime);
+    playbackCursorRef.current.targetTime = currentTime;
+    playbackCursorRef.current.startedTime = currentTime;
+    playbackCursorRef.current.startedAt = performance.now();
+    playbackTimeRef.current = currentTime;
+    setFooterTime(currentTime);
   }, [currentTime, isPlaying, peaks]);
+
+  const barWidth = 1.25;
+  const gap = 0.55;
+  const step = barWidth + gap;
+  const totalPeaks = peaks?.length ?? 0;
+  const waveformHeight = 120;
+  const centerY = waveformHeight / 2;
+  const waveformWidth = Math.max(step * Math.max(totalPeaks, 1), viewportWidth);
+  const visible = totalPeaks > 0;
+
+  const getPlaybackLayout = (time: number) => {
+    const ratio = duration > 0 ? Math.max(0, Math.min(1, time / duration)) : 0;
+    const playheadX = waveformWidth * ratio;
+    const maxScroll = Math.max(0, waveformWidth - viewportWidth);
+    const offset = waveformWidth <= viewportWidth
+      ? (viewportWidth - waveformWidth) / 2
+      : Math.min(0, Math.max(-maxScroll, (viewportWidth / 2) - playheadX));
+    const playheadViewportX = Math.max(0, Math.min(viewportWidth, playheadX + offset));
+    return { offset, playheadViewportX };
+  };
+
+  const applyCanvasOffset = (time: number) => {
+    const layer = canvasLayerRef.current;
+    const playhead = playheadRef.current;
+    if (!layer || duration <= 0) return;
+    const { offset, playheadViewportX } = getPlaybackLayout(time);
+    layer.style.transform = `translateX(${offset}px)`;
+    if (playhead) {
+      playhead.style.left = `${playheadViewportX}px`;
+    }
+  };
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !peaks || peaks.length === 0 || viewportWidth <= 0) return;
+
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    canvas.width = Math.max(1, Math.ceil(waveformWidth * dpr));
+    canvas.height = Math.max(1, Math.ceil(waveformHeight * dpr));
+    canvas.style.width = `${waveformWidth}px`;
+    canvas.style.height = `${waveformHeight}px`;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, waveformWidth, waveformHeight);
+
+    const styles = getComputedStyle(document.documentElement);
+    const waveformColor = styles.getPropertyValue("--waveform-original").trim() || "#60a5fa";
+    const gradient = ctx.createLinearGradient(0, 0, 0, waveformHeight);
+    gradient.addColorStop(0, waveformColor);
+    gradient.addColorStop(1, waveformColor);
+    ctx.fillStyle = gradient;
+    ctx.globalAlpha = 0.78;
+
+    for (let index = 0; index < peaks.length; index += 1) {
+      const peak = peaks[index];
+      const height = Math.max(1.6, peak * 44);
+      const x = index * step;
+      const y = centerY - height;
+      ctx.fillRect(x, y, barWidth, height * 2);
+    }
+    ctx.globalAlpha = 1;
+    applyCanvasOffset(playbackTimeRef.current);
+  }, [barWidth, centerY, peaks, step, viewportWidth, waveformHeight, waveformWidth]);
+
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      if (!ctx || !peaks || peaks.length === 0) return;
+      const dpr = Math.max(1, window.devicePixelRatio || 1);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, waveformWidth, waveformHeight);
+      const styles = getComputedStyle(document.documentElement);
+      ctx.fillStyle = styles.getPropertyValue("--waveform-original").trim() || "#60a5fa";
+      ctx.globalAlpha = 0.78;
+      for (let index = 0; index < peaks.length; index += 1) {
+        const peak = peaks[index];
+        const height = Math.max(1.6, peak * 44);
+        ctx.fillRect(index * step, centerY - height, barWidth, height * 2);
+      }
+      ctx.globalAlpha = 1;
+    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => observer.disconnect();
+  }, [barWidth, centerY, peaks, step, waveformHeight, waveformWidth]);
+
+  useEffect(() => {
+    applyCanvasOffset(currentTime);
+  }, [currentTime, duration, viewportWidth, waveformWidth]);
 
   useEffect(() => {
     if (!isPlaying || !peaks || peaks.length === 0 || duration <= 0) {
@@ -99,9 +197,14 @@ export default function VocalWaveformPreview({
 
     const tick = () => {
       const now = performance.now();
-      const elapsed = now - playheadRef.current.startedAt;
-      const nextTime = Math.min(duration, playheadRef.current.startedTime + elapsed);
-      setDisplayTime(nextTime);
+      const elapsed = now - playbackCursorRef.current.startedAt;
+      const nextTime = Math.min(duration, playbackCursorRef.current.startedTime + elapsed);
+      playbackTimeRef.current = nextTime;
+      applyCanvasOffset(nextTime);
+      if (now - footerUpdateRef.current > 250) {
+        footerUpdateRef.current = now;
+        setFooterTime(nextTime);
+      }
       animationRef.current = requestAnimationFrame(tick);
     };
 
@@ -112,31 +215,10 @@ export default function VocalWaveformPreview({
         animationRef.current = null;
       }
     };
-  }, [duration, isPlaying, peaks]);
-
-  const barWidth = 1.25;
-  const gap = 0.55;
-  const step = barWidth + gap;
-  const totalPeaks = peaks?.length ?? 0;
-  const currentIndex = useMemo(() => {
-    if (!peaks || peaks.length === 0 || duration <= 0) return 0;
-    const ratio = Math.max(0, Math.min(1, displayTime / duration));
-    return Math.max(0, Math.min(peaks.length - 1, Math.floor(ratio * (peaks.length - 1))));
-  }, [displayTime, duration, peaks]);
-
-  const waveformHeight = 120;
-  const centerY = waveformHeight / 2;
-  const waveformWidth = Math.max(step * Math.max(totalPeaks, 1), viewportWidth);
-  const visible = totalPeaks > 0;
-  const displayRatio = duration > 0 ? Math.max(0, Math.min(1, displayTime / duration)) : 0;
-  const playheadX = waveformWidth * displayRatio;
-  const rawOffset = viewportWidth > 0 ? (viewportWidth / 2) - playheadX : 0;
-  const centerOffset = waveformWidth <= viewportWidth
-    ? (viewportWidth - waveformWidth) / 2
-    : Math.min(0, Math.max(viewportWidth - waveformWidth, rawOffset));
+  }, [duration, isPlaying, peaks, viewportWidth, waveformWidth]);
 
   const playbackLabel = duration > 0
-    ? `${formatTime(displayTime)} / ${formatTime(duration)}`
+    ? `${formatTime(footerTime)} / ${formatTime(duration)}`
     : "0:00 / 0:00";
 
   return (
@@ -153,10 +235,15 @@ export default function VocalWaveformPreview({
       <div className="vocal-waveform-viewport-shell relative">
         <div
           ref={viewportRef}
-          className="relative h-[120px] overflow-hidden"
+          className="relative h-[120px] overflow-hidden select-none"
+          onPointerDown={(event) => event.preventDefault()}
+          onDragStart={(event) => event.preventDefault()}
         >
           <div className="vocal-waveform-centerline pointer-events-none absolute inset-x-0 top-1/2 z-10 h-px -translate-y-1/2" />
-          <div className="vocal-waveform-playhead pointer-events-none absolute left-1/2 top-2 z-20 h-[calc(100%-1rem)] w-[2px] -translate-x-1/2" />
+          <div
+            ref={playheadRef}
+            className="vocal-waveform-playhead pointer-events-none absolute top-2 z-20 h-[calc(100%-1rem)] w-[2px] -translate-x-1/2"
+          />
 
           {!visible && !loading && !error && (
             <div className="vocal-waveform-empty flex h-full items-center justify-center px-4 text-[12px]">
@@ -177,54 +264,21 @@ export default function VocalWaveformPreview({
           )}
 
           {visible && !loading && !error && (
-            <svg
-              className="absolute top-0 h-full"
-              width={waveformWidth}
-              height={waveformHeight}
+            <div
+              ref={canvasLayerRef}
+              className="absolute top-0 h-full will-change-transform"
               style={{
                 left: 0,
-                transform: `translateX(${centerOffset}px)`,
+                width: waveformWidth,
               }}
-              viewBox={`0 0 ${waveformWidth} ${waveformHeight}`}
-              preserveAspectRatio="none"
               aria-hidden="true"
             >
-              <defs>
-                <linearGradient id="vocal-waveform-fill" x1="0%" y1="0%" x2="0%" y2="100%">
-                  <stop offset="0%" stopColor="var(--waveform-original)" stopOpacity="0.58" />
-                  <stop offset="100%" stopColor="var(--waveform-original)" stopOpacity="0.26" />
-                </linearGradient>
-              </defs>
-
-              {peaks?.map((peak, index) => {
-                const height = Math.max(1.6, peak * 44);
-                const x = index * step;
-                const y = centerY - height;
-                const highlight = index === currentIndex;
-                return (
-                  <rect
-                    key={`${index}-${peak.toFixed(3)}`}
-                    x={x}
-                    y={y}
-                    width={barWidth}
-                    height={height * 2}
-                  rx={0}
-                  fill="url(#vocal-waveform-fill)"
-                  opacity={highlight ? 1 : 0.92}
-                  />
-                );
-              })}
-
-              {currentIndex >= 0 && currentIndex < peaks!.length && (
-                <rect
-                  x={currentIndex * step}
-                  y={Math.max(2, centerY - Math.max(1.6, peaks![currentIndex] * 46))}
-                  width={barWidth}
-                  height={Math.max(3.2, Math.max(1.6, peaks![currentIndex] * 46) * 2)}
-                  fill="var(--waveform-playhead)"
-                />
-              )}
-            </svg>
+              <canvas
+                ref={canvasRef}
+                className="block h-full"
+                draggable={false}
+              />
+            </div>
           )}
         </div>
 
