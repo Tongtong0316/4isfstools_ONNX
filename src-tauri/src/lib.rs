@@ -1,4 +1,3 @@
-#[cfg(unix)]
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
@@ -2542,6 +2541,8 @@ fn python_onnxruntime_providers(python_path: &Path) -> Result<Vec<String>, Strin
     let script = r#"
 import json
 import onnxruntime as ort
+if not getattr(ort, "__file__", None) or not hasattr(ort, "get_available_providers"):
+    raise RuntimeError(f"onnxruntime package is incomplete: file={getattr(ort, '__file__', None)}")
 print(json.dumps(list(ort.get_available_providers())))
 "#;
     let mut command = Command::new(python_path);
@@ -2566,17 +2567,90 @@ print(json.dumps(list(ort.get_available_providers())))
 }
 
 #[cfg(target_os = "windows")]
+fn purge_windows_onnxruntime_packages(
+    app: &AppHandle,
+    python_path: &Path,
+    deadline: Instant,
+) -> Result<(), String> {
+    let mut uninstall_cmd = Command::new(python_path);
+    uninstall_cmd.args([
+        "-m",
+        "pip",
+        "uninstall",
+        "-y",
+        "onnxruntime",
+        "onnxruntime-directml",
+        "onnxruntime-gpu",
+    ]);
+    let _ = run_hidden_command_with_timeout(
+        &mut uninstall_cmd,
+        remaining_bootstrap_timeout(deadline, PYTHON_PACKAGES_TIMEOUT)?,
+        "ONNX Runtime 卸载",
+        Some(app),
+        "onnxruntime_directml_repair",
+        50,
+        "正在清理 ONNX Runtime 残留...",
+    )?;
+
+    let cleanup_script = r#"
+import shutil
+import site
+import sysconfig
+from pathlib import Path
+
+roots = set(site.getsitepackages())
+for key in ("purelib", "platlib"):
+    value = sysconfig.get_paths().get(key)
+    if value:
+        roots.add(value)
+
+for root in roots:
+    path = Path(root)
+    if not path.exists():
+        continue
+    for item in path.glob("onnxruntime*"):
+        if item.is_dir():
+            shutil.rmtree(item, ignore_errors=True)
+        else:
+            try:
+                item.unlink()
+            except FileNotFoundError:
+                pass
+"#;
+    let mut cleanup_cmd = Command::new(python_path);
+    cleanup_cmd.args(["-c", cleanup_script]);
+    let output = run_hidden_command_with_timeout(
+        &mut cleanup_cmd,
+        remaining_bootstrap_timeout(deadline, PYTHON_PACKAGES_TIMEOUT)?,
+        "ONNX Runtime 残留清理",
+        Some(app),
+        "onnxruntime_directml_repair",
+        51,
+        "正在删除残留 ONNX Runtime 文件...",
+    )?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "ONNX Runtime 残留清理失败: {}",
+            summarize_separator_failure_output(&String::from_utf8_lossy(&output.stdout), &String::from_utf8_lossy(&output.stderr), &output.status)
+        ))
+    }
+}
+
+#[cfg(target_os = "windows")]
 fn repair_windows_onnxruntime_directml(
     app: &AppHandle,
     python_path: &Path,
     deadline: Instant,
 ) -> Result<(), String> {
-    let providers = python_onnxruntime_providers(python_path).unwrap_or_default();
-    if providers
-        .iter()
-        .any(|provider| provider == "DmlExecutionProvider")
-    {
-        return Ok(());
+    if let Ok(providers) = python_onnxruntime_providers(python_path) {
+        if providers
+            .iter()
+            .any(|provider| provider == "DmlExecutionProvider")
+        {
+            return Ok(());
+        }
     }
 
     emit_bootstrap_progress(
@@ -2586,22 +2660,13 @@ fn repair_windows_onnxruntime_directml(
         "正在修复 ONNX Runtime DirectML 运行时...",
     );
 
-    let mut uninstall_cmd = Command::new(python_path);
-    uninstall_cmd.args(["-m", "pip", "uninstall", "-y", "onnxruntime"]);
-    let _ = run_hidden_command_with_timeout(
-        &mut uninstall_cmd,
-        remaining_bootstrap_timeout(deadline, PYTHON_PACKAGES_TIMEOUT)?,
-        "ONNX Runtime 卸载",
-        Some(app),
-        "onnxruntime_directml_repair",
-        50,
-        "正在清理 CPU 版 ONNX Runtime...",
-    )?;
+    purge_windows_onnxruntime_packages(app, python_path, deadline)?;
 
     install_python_packages_with_fallbacks(app, python_path, &["onnxruntime-directml"], deadline)
         .map_err(|e| format!("ONNX Runtime DirectML 安装失败: {}", e))?;
 
-    let repaired = python_onnxruntime_providers(python_path).unwrap_or_default();
+    let repaired = python_onnxruntime_providers(python_path)
+        .map_err(|e| format!("DirectML provider 校验失败: {}", e))?;
     if repaired
         .iter()
         .any(|provider| provider == "DmlExecutionProvider")

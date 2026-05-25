@@ -1616,7 +1616,7 @@ function App() {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setBootstrapProgress({ stage: "failed", progress: bootstrapProgressValue, message: `安装失败：${message}` });
+      setBootstrapProgress(null);
       setBootstrapMessage(`安装失败：${message}`);
     } finally {
       bootstrapInstallingRef.current = false;
@@ -3522,7 +3522,7 @@ function App() {
                                 </span>
                               )}
                             </div>
-                            {(bootstrapInstalling || bootstrapProgress) && (
+                            {(bootstrapInstalling || bootstrapProgress?.stage === "complete") && (
                               <div className="mt-2 h-2 overflow-hidden rounded-full bg-[var(--progress-track)]">
                                 <div
                                   className="h-full rounded-full bg-[var(--progress-fill)] transition-all"
