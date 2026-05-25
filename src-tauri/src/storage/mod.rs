@@ -35,6 +35,10 @@ pub(crate) fn get_default_asset_root(kind: &str) -> PathBuf {
     get_data_dir().join("assets").join(kind)
 }
 
+pub(crate) fn get_default_online_download_root() -> PathBuf {
+    get_data_dir().join("online-downloads")
+}
+
 pub(crate) fn ensure_dir(path: &PathBuf) -> std::io::Result<()> {
     if !path.exists() {
         fs::create_dir_all(path)?;
@@ -62,5 +66,9 @@ pub(crate) fn normalize_file_storage_settings(
         normalize_storage_root(&settings.vocals_root, get_default_asset_root("vocals"));
     settings.lyrics_root =
         normalize_storage_root(&settings.lyrics_root, get_default_asset_root("lyrics"));
+    settings.online_download_root = normalize_storage_root(
+        &settings.online_download_root,
+        get_default_online_download_root(),
+    );
     settings
 }

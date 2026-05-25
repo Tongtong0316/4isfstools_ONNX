@@ -1,6 +1,6 @@
 [package]
 name = "forisfstools"
-version = "1.0.0"
+version = "1.0.2"
 description = "4isfstools - 人声分离、歌词转录、同步播放"
 authors = ["suntong"]
 edition = "2021"
@@ -24,3 +24,4 @@ tokio = { version = "1", features = ["full"] }
 dirs = "5"
 libc = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+ferrous-opencc = "0.4"

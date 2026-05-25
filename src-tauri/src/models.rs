@@ -10,6 +10,14 @@ pub struct Song {
     pub name: String,
     pub original_path: String,
     #[serde(default)]
+    pub source_kind: Option<String>,
+    #[serde(default)]
+    pub source_url: Option<String>,
+    #[serde(default)]
+    pub source_id: Option<String>,
+    #[serde(default)]
+    pub original_managed: bool,
+    #[serde(default)]
     pub playlist_folder: Option<String>,
     #[serde(default)]
     pub vocals_path: Option<String>,

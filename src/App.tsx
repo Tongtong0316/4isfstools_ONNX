@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -11,6 +12,7 @@ import infinityIcon from "../icons/Infinity.png";
 import numpyIcon from "../icons/numpy.png";
 import fasterWhisperIcon from "../icons/faster-whisper.png";
 import torchIcon from "../icons/tor.png";
+import ytImportIcon from "../icons/yt.png";
 import type { LyricDocument } from "./types/lyrics";
 
 const MEDIA_IMPORT_EXTENSIONS = [
@@ -75,6 +77,42 @@ type FileStorageSettings = {
   instrumentalRoot: string;
   vocalsRoot: string;
   lyricsRoot: string;
+  onlineDownloadRoot: string;
+};
+
+type OnlineImportStatus = {
+  pythonReady: boolean;
+  pythonPath: string;
+  ffmpegReady: boolean;
+  ffmpegPath: string | null;
+  ytdlpReady: boolean;
+  ytdlpVersion: string | null;
+  downloadRoot: string;
+  canDownload: boolean;
+  detail: string;
+};
+
+type OnlineImportProgress = {
+  stage: string;
+  progress: number;
+  message: string;
+  path: string | null;
+};
+
+type OnlineDownloadResult = {
+  path: string;
+  filename: string;
+  sourceId?: string | null;
+  sourceUrl?: string | null;
+  sourceTitle?: string | null;
+};
+
+type OnlineMediaProbe = {
+  sourceId?: string | null;
+  sourceUrl?: string | null;
+  title?: string | null;
+  hasVideo: boolean;
+  videoHeights: number[];
 };
 
 type RuntimeHealthCheck = {
@@ -405,7 +443,7 @@ function clearInfinityColors() {
   for (const name of INFINITY_VAR_NAMES) root.style.removeProperty(name);
 }
 
-const APP_VERSION = "1.0";
+const APP_VERSION = "1.0.2";
 
 const SETTINGS_NAV_ITEMS: Array<{
   pane: SettingsPane;
@@ -450,14 +488,16 @@ const RUNTIME_CHECK_NAMES = [
   "ONNX 默认模型",
   "ONNX Session",
   "ONNX Metadata",
-  "SoundFile",
   "NumPy",
+  "SoundFile",
   "Sherpa ONNX",
+  "在线导入",
+  "yt-dlp",
   "ONNX 高质量模型",
   "Torch（HQ）",
   "faster-whisper",
-  "AI 听写草稿",
   "Whisper base",
+  "AI 听写草稿",
 ];
 
 type TrackGraph = {
@@ -506,6 +546,24 @@ function App() {
   const [settingsPane, setSettingsPane] = useState<SettingsPane>("runtime");
   const [fileStorageSettingsSaving, setFileStorageSettingsSaving] = useState(false);
   const [fileStorageSettingsMessage, setFileStorageSettingsMessage] = useState<string | null>(null);
+  const [openSourceListOpen, setOpenSourceListOpen] = useState(false);
+  const [importMenuOpen, setImportMenuOpen] = useState(false);
+  const [importMenuPosition, setImportMenuPosition] = useState<{ top: number; right: number } | null>(null);
+  const importMenuRef = useRef<HTMLDivElement | null>(null);
+  const importMenuButtonRef = useRef<HTMLButtonElement | null>(null);
+  const [onlineImportOpen, setOnlineImportOpen] = useState(false);
+  const [onlineImportUrl, setOnlineImportUrl] = useState("");
+  const [onlineImportStatus, setOnlineImportStatus] = useState<OnlineImportStatus | null>(null);
+  const [onlineMediaProbe, setOnlineMediaProbe] = useState<OnlineMediaProbe | null>(null);
+  const [onlineMediaProbeLoading, setOnlineMediaProbeLoading] = useState(false);
+  const [onlineMediaProbeError, setOnlineMediaProbeError] = useState<string | null>(null);
+  const [onlineDownloadKind, setOnlineDownloadKind] = useState<"audio" | "video">("audio");
+  const [onlineDownloadVideoHeight, setOnlineDownloadVideoHeight] = useState<string>("");
+  const [onlineDownloadOptionsOpen, setOnlineDownloadOptionsOpen] = useState(false);
+  const [onlineImportProgress, setOnlineImportProgress] = useState<OnlineImportProgress | null>(null);
+  const [onlineImportBusy, setOnlineImportBusy] = useState(false);
+  const [onlineImportInstalling, setOnlineImportInstalling] = useState(false);
+  const [onlineImportError, setOnlineImportError] = useState<string | null>(null);
   const [runtimeHealth, setRuntimeHealth] = useState<RuntimeHealthReport | null>(null);
   const [bootstrapStatus, setBootstrapStatus] = useState<BootstrapStatus | null>(null);
   const [bootstrapInstalling, setBootstrapInstalling] = useState(false);
@@ -1151,6 +1209,140 @@ function App() {
     loadSongs();
   }, [isDesktopRuntime]);
 
+  const refreshOnlineImportStatus = useCallback(async (settingsOverride?: FileStorageSettings | null) => {
+    if (!isDesktopRuntime) return null;
+    try {
+      const status = await invoke<OnlineImportStatus>("get_online_import_status", {
+        settings: settingsOverride ?? fileStorageSettings,
+      });
+      setOnlineImportStatus(status);
+      return status;
+    } catch (error) {
+      console.error("Failed to load online import status:", error);
+      return null;
+    }
+  }, [fileStorageSettings, isDesktopRuntime]);
+
+  useEffect(() => {
+    if (!isDesktopRuntime) return;
+    void refreshOnlineImportStatus();
+  }, [isDesktopRuntime, refreshOnlineImportStatus]);
+
+  useEffect(() => {
+    if (!onlineImportOpen) {
+      setOnlineMediaProbe(null);
+      setOnlineMediaProbeLoading(false);
+      setOnlineMediaProbeError(null);
+      setOnlineDownloadKind("audio");
+      setOnlineDownloadVideoHeight("");
+      setOnlineDownloadOptionsOpen(false);
+      return;
+    }
+    const url = onlineImportUrl.trim();
+    if (!url || !onlineImportStatus?.ytdlpReady) {
+      setOnlineMediaProbe(null);
+      setOnlineMediaProbeLoading(false);
+      setOnlineMediaProbeError(null);
+      return;
+    }
+    let active = true;
+    setOnlineMediaProbeLoading(true);
+    setOnlineMediaProbeError(null);
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const probe = await invoke<OnlineMediaProbe>("probe_online_media", { url });
+          if (!active) return;
+          setOnlineMediaProbe(probe);
+          if (probe.hasVideo) {
+            setOnlineDownloadKind((current) => current === "video" ? "video" : "audio");
+            const defaultHeight = probe.videoHeights[0];
+            if (defaultHeight) {
+              setOnlineDownloadVideoHeight((current) => current && probe.videoHeights.includes(Number(current)) ? current : String(defaultHeight));
+            } else {
+              setOnlineDownloadVideoHeight("");
+            }
+          } else {
+            setOnlineDownloadKind("audio");
+            setOnlineDownloadVideoHeight("");
+          }
+        } catch (error) {
+          if (!active) return;
+          setOnlineMediaProbe(null);
+          setOnlineMediaProbeError(error instanceof Error ? error.message : String(error));
+        } finally {
+          if (active) setOnlineMediaProbeLoading(false);
+        }
+      })();
+    }, 500);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [onlineImportOpen, onlineImportStatus?.ytdlpReady, onlineImportUrl]);
+
+  useEffect(() => {
+    if (!onlineDownloadOptionsOpen) {
+      return;
+    }
+    if (onlineMediaProbe?.hasVideo) {
+      setOnlineDownloadKind((current) => current === "video" ? "video" : "audio");
+      if (!onlineDownloadVideoHeight || !onlineMediaProbe.videoHeights.includes(Number(onlineDownloadVideoHeight))) {
+        setOnlineDownloadVideoHeight(onlineMediaProbe.videoHeights[0] ? String(onlineMediaProbe.videoHeights[0]) : "");
+      }
+    } else {
+      setOnlineDownloadKind("audio");
+      setOnlineDownloadVideoHeight("");
+    }
+  }, [onlineDownloadOptionsOpen, onlineMediaProbe, onlineDownloadVideoHeight]);
+
+  useEffect(() => {
+    if (!isDesktopRuntime) return;
+    let unlisten: (() => void) | undefined;
+    void listen<OnlineImportProgress>("online-import-progress", (event) => {
+      setOnlineImportProgress(event.payload);
+    }).then((dispose) => {
+      unlisten = dispose;
+    });
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, [isDesktopRuntime]);
+
+  useEffect(() => {
+    if (!importMenuOpen) return;
+
+    const handlePointerDownCapture = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (
+        (target && importMenuRef.current?.contains(target)) ||
+        (target && importMenuButtonRef.current?.contains(target))
+      ) {
+        return;
+      }
+      setImportMenuOpen(false);
+    };
+
+    const handleContextMenuCapture = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (
+        (target && importMenuRef.current?.contains(target)) ||
+        (target && importMenuButtonRef.current?.contains(target))
+      ) {
+        return;
+      }
+      setImportMenuOpen(false);
+    };
+
+    document.addEventListener("pointerdown", handlePointerDownCapture, true);
+    document.addEventListener("contextmenu", handleContextMenuCapture, true);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDownCapture, true);
+      document.removeEventListener("contextmenu", handleContextMenuCapture, true);
+    };
+  }, [importMenuOpen]);
+
   // Parse LRC lyrics
   const parseLRC = useCallback((lrcContent: string): Array<{ time: number; text: string }> => {
     const lines: Array<{ time: number; text: string }> = [];
@@ -1626,6 +1818,39 @@ function App() {
     }
   }, [selectedSeparationModel]);
 
+  const handleChooseLocalImport = useCallback(async () => {
+    const selected = await open({
+      multiple: true,
+      filters: [{ name: "Audio / Video", extensions: MEDIA_IMPORT_EXTENSIONS }]
+    });
+    if (selected) {
+      const paths = Array.isArray(selected) ? selected : [selected];
+      if (paths.length > 0) handleFilesSelected(paths);
+    }
+  }, [handleFilesSelected]);
+
+  const handleInstallOnlineImport = useCallback(async () => {
+    setOnlineImportInstalling(true);
+    setOnlineImportError(null);
+    try {
+      const status = await invoke<OnlineImportStatus>("install_or_update_ytdlp");
+      setOnlineImportStatus(status);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setOnlineImportError(message);
+    } finally {
+      setOnlineImportInstalling(false);
+    }
+  }, []);
+
+  const handleCancelOnlineDownload = useCallback(async () => {
+    try {
+      await invoke("cancel_online_download");
+    } catch (error) {
+      console.error("Failed to cancel online download:", error);
+    }
+  }, []);
+
   const handleSaveStorageSettings = useCallback(async (settingsOverride?: FileStorageSettings) => {
     const settingsToSave = settingsOverride ?? fileStorageSettings;
     if (!settingsToSave) return;
@@ -1663,6 +1888,7 @@ function App() {
         instrumentalRoot: fileStorageSettings?.instrumentalRoot || "",
         vocalsRoot: fileStorageSettings?.vocalsRoot || "",
         lyricsRoot: fileStorageSettings?.lyricsRoot || "",
+        onlineDownloadRoot: fileStorageSettings?.onlineDownloadRoot || "",
         [field]: selected,
       } as FileStorageSettings;
       setFileStorageSettings(nextSettings);
@@ -1675,11 +1901,119 @@ function App() {
       instrumentalRoot: "",
       vocalsRoot: "",
       lyricsRoot: "",
+      onlineDownloadRoot: "",
     };
     setFileStorageSettings(nextSettings);
     setFileStorageSettingsMessage("已恢复为默认目录，保存后自动迁移。");
     void handleSaveStorageSettings(nextSettings);
   }, [handleSaveStorageSettings]);
+
+  const saveOnlineDownloadRoot = useCallback(async (downloadRoot: string) => {
+    const nextSettings = {
+      instrumentalRoot: fileStorageSettings?.instrumentalRoot || "",
+      vocalsRoot: fileStorageSettings?.vocalsRoot || "",
+      lyricsRoot: fileStorageSettings?.lyricsRoot || "",
+      onlineDownloadRoot: downloadRoot,
+    };
+    setFileStorageSettings(nextSettings);
+    await handleSaveStorageSettings(nextSettings);
+    await refreshOnlineImportStatus(nextSettings);
+    return nextSettings;
+  }, [fileStorageSettings, handleSaveStorageSettings, refreshOnlineImportStatus]);
+
+  const handleOpenDownloadOnlyOptions = useCallback(() => {
+    if (onlineMediaProbeLoading || !onlineImportStatus?.canDownload) {
+      return;
+    }
+    setOnlineImportError(null);
+    setOnlineDownloadKind("audio");
+    setOnlineDownloadVideoHeight(onlineMediaProbe?.videoHeights[0] ? String(onlineMediaProbe.videoHeights[0]) : "");
+    setOnlineDownloadOptionsOpen(true);
+  }, [onlineImportStatus?.canDownload, onlineMediaProbe, onlineMediaProbeLoading]);
+
+  const handleOnlineDownload = useCallback(async (mode: "process" | "downloadOnly") => {
+    const url = onlineImportUrl.trim();
+    if (!url) {
+      setOnlineImportError("请输入视频链接");
+      return;
+    }
+    setOnlineImportBusy(true);
+    setOnlineImportError(null);
+    try {
+      let downloadRoot = fileStorageSettings?.onlineDownloadRoot || onlineImportStatus?.downloadRoot || "";
+      if (mode === "downloadOnly") {
+        const selected = await open({
+          directory: true,
+          multiple: false,
+          defaultPath: downloadRoot.trim() || undefined,
+        });
+        if (typeof selected !== "string" || !selected.trim()) {
+          return;
+        }
+        downloadRoot = selected;
+        await saveOnlineDownloadRoot(selected);
+      }
+      const result = await invoke<OnlineDownloadResult>("download_online_audio", {
+        url,
+        outputDir: downloadRoot,
+        checkDuplicate: mode === "process",
+        downloadKind: mode === "downloadOnly" ? onlineDownloadKind : "audio",
+        videoHeight:
+          mode === "downloadOnly" && onlineDownloadKind === "video" && onlineDownloadVideoHeight
+            ? Number(onlineDownloadVideoHeight)
+            : null,
+      });
+      if (mode === "process") {
+        const song = await invoke<Song>("import_online_song", {
+          path: result.path,
+          sourceUrl: result.sourceUrl || url,
+          sourceId: result.sourceId || null,
+          sourceTitle: result.sourceTitle || result.filename,
+        });
+        setSongs((prev) => [...prev, song]);
+        try {
+          await invoke("start_process", { songId: song.id, preferOnnxProvider: true, modelId: selectedSeparationModel });
+          setSongs((prev) => prev.map((item) =>
+            item.id === song.id && item.status !== "processing" && item.status !== "cancelling"
+              ? { ...item, status: "queued" as const, progress: 0, processingStage: "queued" as ProcessingStage, error_message: undefined }
+              : item
+          ));
+        } catch (error) {
+          console.error(`Failed to auto-start process for ${song.name}:`, error);
+          const message = error instanceof Error ? error.message : String(error);
+          setOnlineImportError(`下载已完成，但启动处理失败：${message}`);
+          return;
+        }
+        setOnlineDownloadOptionsOpen(false);
+        setOnlineImportOpen(false);
+        setOnlineImportUrl("");
+      } else {
+        setOnlineDownloadOptionsOpen(false);
+        setOnlineImportOpen(false);
+        setOnlineImportUrl("");
+        try {
+          await invoke("reveal_in_file_manager", { path: result.path });
+        } catch (revealError) {
+          console.error("Failed to reveal downloaded folder:", revealError);
+        }
+      }
+      await refreshOnlineImportStatus();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setOnlineImportError(message);
+    } finally {
+      setOnlineImportBusy(false);
+    }
+  }, [
+    fileStorageSettings?.onlineDownloadRoot,
+    onlineImportStatus?.downloadRoot,
+    onlineImportUrl,
+    onlineDownloadKind,
+    onlineDownloadVideoHeight,
+    refreshOnlineImportStatus,
+    saveOnlineDownloadRoot,
+    selectedSeparationModel,
+  ]);
 
   // Cancel processing
   const handleCancelProcess = useCallback(async (song: Song) => {
@@ -2109,21 +2443,24 @@ function App() {
             >
               偏好设置
             </button>
-            <button
-              onClick={async () => {
-                const selected = await open({
-                  multiple: true,
-                  filters: [{ name: "Audio / Video", extensions: MEDIA_IMPORT_EXTENSIONS }]
-                });
-                if (selected) {
-                  const paths = Array.isArray(selected) ? selected : [selected];
-                  if (paths.length > 0) handleFilesSelected(paths);
-                }
-              }}
-              className="ui-button ui-button-primary primary-action-button text-[13px] font-bold transition-colors hover:bg-[var(--accent-hover)]"
-            >
-              导入歌曲
-            </button>
+            <div className="relative">
+              <button
+                ref={importMenuButtonRef}
+                onClick={(event) => {
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  setImportMenuPosition({
+                    top: rect.bottom + 8,
+                    right: Math.max(16, window.innerWidth - rect.right),
+                  });
+                  setImportMenuOpen((open) => !open);
+                }}
+                className="ui-button ui-button-primary primary-action-button text-[13px] font-bold transition-colors hover:bg-[var(--accent-hover)]"
+                aria-haspopup="menu"
+                aria-expanded={importMenuOpen}
+              >
+                导入歌曲
+              </button>
+            </div>
           </div>
         </header>
 
@@ -2362,6 +2699,305 @@ function App() {
         </div>
       </div>
 
+      {importMenuOpen && typeof document !== "undefined" && createPortal(
+        <div
+          ref={importMenuRef}
+          className="import-menu"
+          style={{
+            top: importMenuPosition?.top ?? 72,
+            right: importMenuPosition?.right ?? 24,
+          }}
+        >
+          <button
+            type="button"
+            className="context-menu-item"
+            onClick={() => {
+              setImportMenuOpen(false);
+              void handleChooseLocalImport();
+            }}
+          >
+            本地导入
+          </button>
+          <button
+            type="button"
+            className="context-menu-item"
+            onClick={() => {
+              setImportMenuOpen(false);
+              setOnlineImportOpen(true);
+              setOnlineImportError(null);
+              void refreshOnlineImportStatus();
+            }}
+          >
+            导入/获取线上内容
+          </button>
+        </div>,
+        document.body
+      )}
+
+      {onlineImportOpen && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-6">
+          <div
+            className="absolute inset-0 bg-black/55 backdrop-blur-[2px]"
+            onClick={() => {
+              if (!onlineImportBusy && !onlineImportInstalling) setOnlineImportOpen(false);
+            }}
+          />
+          <div className="modal-shell online-import-modal relative">
+            <div className="dialog-content online-import-dialog-content">
+              <div className="online-import-inner">
+                <div className="online-import-header">
+                  <div className="min-w-0 pr-2">
+                    <div className="text-[20px] font-bold leading-tight text-[var(--text-primary)]">在线导入</div>
+                    <div className="modal-copy mt-2 text-sm">
+                      输入链接，下载后可直接进入处理流程。
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="ui-button ghost-button online-import-close shrink-0 text-sm font-semibold"
+                    onClick={() => setOnlineImportOpen(false)}
+                      disabled={onlineImportBusy || onlineImportInstalling || onlineMediaProbeLoading}
+                  >
+                    关闭
+                  </button>
+                </div>
+
+                <div className="online-import-status">
+                  <div className="online-import-status-content text-[13px] text-[var(--text-secondary)]">
+                    <div className="online-import-status-line">
+                      <span className={`status-chip-dot ${onlineImportStatus?.canDownload ? "status-chip-dot-success" : "status-chip-dot-warning"}`} />
+                      <span className="ui-text-ellipsis">{onlineImportStatus?.detail || "正在检测在线导入组件..."}</span>
+                      {onlineImportStatus?.ytdlpVersion && <span>yt-dlp {onlineImportStatus.ytdlpVersion}</span>}
+                    </div>
+                  </div>
+                </div>
+
+                <input
+                  type="url"
+                  value={onlineImportUrl}
+                  onChange={(event) => setOnlineImportUrl(event.target.value)}
+                  placeholder="粘贴 YouTube / BiliBili 等平台的媒体链接"
+                  className="online-import-input border bg-[var(--theme-surface)] text-sm text-[var(--theme-text)] outline-none transition-colors placeholder:text-[var(--theme-text-muted)] focus:border-[var(--theme-primary)] focus-visible:ring-1 focus-visible:ring-[var(--theme-primary)]"
+                  disabled={onlineImportBusy || onlineImportInstalling}
+                />
+
+                {onlineMediaProbeLoading && (
+                  <div className="online-import-loading-pill" role="status" aria-live="polite">
+                    <span className="online-import-spinner" aria-hidden="true" />
+                    <span>正在探测媒体类型与可用清晰度</span>
+                  </div>
+                )}
+
+                {onlineMediaProbeError && (
+                  <div className="online-import-media-hint online-import-media-hint-error">
+                    {onlineMediaProbeError}
+                  </div>
+                )}
+
+                <div className="online-import-media-hint">
+                  仅下载先选类型；处理流程默认只下音频。
+                </div>
+
+                <div className="online-import-warning border text-sm">
+                  非歌曲内容，例如：播客、访谈、课程、会议、直播切片等内容，请只使用“仅下载”，不要使其进入伴奏剥离流程。
+                </div>
+
+                {onlineImportError && (
+                  <div className="online-import-error rounded-[14px] border px-4 py-3 text-sm">
+                    {onlineImportError}
+                  </div>
+                )}
+
+                {onlineImportBusy && onlineImportProgress?.stage !== "installing" && (
+                  <div className="online-import-progress">
+                    <div className="mb-2 flex items-center justify-between gap-4 text-xs text-[var(--text-secondary)]">
+                      <span className="ui-text-ellipsis">{onlineImportProgress?.message || "正在下载..."}</span>
+                      <span className="font-mono text-[var(--accent)]">{onlineImportProgress?.progress ?? 0}%</span>
+                    </div>
+                    <div className="ui-progress-track">
+                      <div className="ui-progress-fill" style={{ width: `${onlineImportProgress?.progress ?? 0}%` }} />
+                    </div>
+                  </div>
+                )}
+
+                <div
+                  className={`online-import-actions ${
+                    onlineImportBusy
+                      ? "is-busy"
+                      : onlineImportStatus?.canDownload
+                        ? "is-ready"
+                        : "is-install"
+                  }`}
+                >
+                  {!onlineImportStatus?.canDownload && (
+                    <button
+                      type="button"
+                      className="ui-button ui-button-primary online-import-action-install text-sm font-bold"
+                      onClick={() => void handleInstallOnlineImport()}
+                      disabled={onlineImportInstalling || !onlineImportStatus?.pythonReady}
+                    >
+                      {onlineImportInstalling ? "安装中..." : "安装/更新 yt-dlp"}
+                    </button>
+                  )}
+                  {onlineImportBusy ? (
+                    <button
+                      type="button"
+                      className="ui-button ghost-button online-import-action-only text-sm font-semibold"
+                      onClick={() => void handleCancelOnlineDownload()}
+                    >
+                      取消下载
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        className="ui-button ghost-button online-import-action-only text-sm font-semibold"
+                        onClick={handleOpenDownloadOnlyOptions}
+                        disabled={!onlineImportStatus?.canDownload || onlineImportInstalling || onlineMediaProbeLoading || !onlineMediaProbe}
+                      >
+                        仅下载
+                      </button>
+                      <button
+                        type="button"
+                        className="ui-button ui-button-primary online-import-action-process text-sm font-bold"
+                        onClick={() => void handleOnlineDownload("process")}
+                        disabled={!onlineImportStatus?.canDownload || onlineImportInstalling || onlineMediaProbeLoading}
+                      >
+                        下载歌曲并处理
+                      </button>
+                    </>
+                  )}
+                </div>
+                <div className="online-import-note text-xs leading-6 text-[var(--text-muted)]">
+                  下载完成后会自动关闭并打开文件夹。
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {onlineDownloadOptionsOpen && (
+        <div className="fixed inset-0 z-[75] flex items-center justify-center p-6">
+          <div
+            className="absolute inset-0 bg-black/55 backdrop-blur-[2px]"
+            onClick={() => {
+              if (!onlineImportBusy && !onlineImportInstalling) setOnlineDownloadOptionsOpen(false);
+            }}
+          />
+          <div className="modal-shell online-download-options-modal relative">
+            <div className="dialog-content online-download-options-content">
+              <div className="online-import-inner">
+                <div className="online-import-header">
+                  <div className="min-w-0 pr-2">
+                    <div className="text-[20px] font-bold leading-tight text-[var(--text-primary)]">仅下载</div>
+                    <div className="modal-copy mt-2 text-sm">
+                      先选类型，再选保存目录。
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="ui-button ghost-button online-import-close shrink-0 text-sm font-semibold"
+                    onClick={() => setOnlineDownloadOptionsOpen(false)}
+                    disabled={onlineImportBusy || onlineImportInstalling}
+                  >
+                    关闭
+                  </button>
+                </div>
+
+                <div className="online-import-status">
+                  <div className="online-import-status-content text-[13px] text-[var(--text-secondary)]">
+                    <div className="online-import-status-line">
+                      <span className="status-chip-dot status-chip-dot-success" />
+                      <span className="ui-text-ellipsis">
+                        {onlineMediaProbe?.title || onlineImportUrl || "当前链接"}
+                      </span>
+                    </div>
+                    <div className="online-import-status-path ui-text-ellipsis">
+                      {onlineMediaProbe?.hasVideo
+                        ? "音频为最佳格式；视频可选清晰度。"
+                        : "未探测到视频流，将按音频最佳格式下载。"}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="online-import-format-panel">
+                  <div className="online-import-format-head">
+                    <span>下载类型</span>
+                    <span className="online-import-media-hint">处理流程默认只下音频。</span>
+                  </div>
+                  <div className="online-import-format-row">
+                    <button
+                      type="button"
+                      className={`online-import-pick ${onlineDownloadKind === "audio" ? "is-active" : ""}`}
+                      onClick={() => setOnlineDownloadKind("audio")}
+                      disabled={onlineImportBusy || onlineImportInstalling}
+                    >
+                      音频
+                    </button>
+                    <button
+                      type="button"
+                      className={`online-import-pick ${onlineDownloadKind === "video" ? "is-active" : ""}`}
+                      onClick={() => {
+                        setOnlineDownloadKind("video");
+                        if (!onlineDownloadVideoHeight && onlineMediaProbe?.videoHeights[0]) {
+                          setOnlineDownloadVideoHeight(String(onlineMediaProbe.videoHeights[0]));
+                        }
+                      }}
+                      disabled={onlineImportBusy || onlineImportInstalling || !onlineMediaProbe?.hasVideo}
+                    >
+                      视频
+                    </button>
+                    {onlineDownloadKind === "video" && onlineMediaProbe?.hasVideo && (
+                      <label className="online-import-quality">
+                        <span>清晰度</span>
+                        <select
+                          value={onlineDownloadVideoHeight}
+                          onChange={(event) => setOnlineDownloadVideoHeight(event.target.value)}
+                          disabled={onlineImportBusy || onlineImportInstalling}
+                        >
+                          {onlineMediaProbe.videoHeights.map((height) => (
+                            <option key={height} value={String(height)}>
+                              {height}p
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                  </div>
+                </div>
+
+                <div className="online-import-warning border text-sm">
+                  视频下载完成后也会自动关闭并打开文件夹。
+                </div>
+
+                <div className="online-import-actions online-download-options-actions is-ready">
+                  <button
+                    type="button"
+                    className="ui-button ghost-button online-import-action-only text-sm font-semibold"
+                    onClick={() => setOnlineDownloadOptionsOpen(false)}
+                    disabled={onlineImportBusy || onlineImportInstalling}
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    className="ui-button ui-button-primary online-import-action-process text-sm font-bold"
+                    onClick={() => {
+                      setOnlineDownloadOptionsOpen(false);
+                      void handleOnlineDownload("downloadOnly");
+                    }}
+                    disabled={onlineImportBusy || onlineImportInstalling}
+                  >
+                    选择文件夹并开始下载
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {fileStorageSettingsOpen && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-6">
           <div
@@ -2448,6 +3084,7 @@ function App() {
                           ["伴奏目录", "instrumentalRoot", "自动保存分离后的伴奏文件", "♪"],
                           ["人声目录", "vocalsRoot", "自动保存分离后的人声文件", "●"],
                           ["歌词目录", "lyricsRoot", "自动保存歌词 JSON / LRC 文件", "▤"],
+                          ["在线下载目录", "onlineDownloadRoot", "保存从视频链接下载的音频文件", "↓"],
                         ] as Array<[string, keyof FileStorageSettings, string, string]>).map(([label, field, hint, icon]) => (
                           <div
                             key={field}
@@ -2659,29 +3296,59 @@ function App() {
                       <div className="settings-card rounded-[16px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] px-7 py-6">
                         <div className="text-[17px] font-bold text-[var(--text-primary)]">开源声明</div>
                         <p className="ui-copy mt-3 text-[14px] text-[var(--text-secondary)]">
-                          本软件使用了以下开源项目，相关版权归原作者或贡献者所有，并遵循其对应的开源许可证：
+                          本软件当前使用的开源项目如下，相关版权归原作者或贡献者所有，并遵循其对应的开源许可证。
                         </p>
-                        <div className="ui-chip-wrap mt-4">
-                          {[
-                            "FFmpeg — FFmpeg Developers",
-                            "faster-whisper — SYSTRAN / Guillaume Klein",
-                            "Whisper — OpenAI",
-                            "UVR5 (Ultimate Vocal Remover) — Anjok07, aufr33",
-                            "SoundFile / python-soundfile — Bastibe and contributors",
-                            "NumPy — NumPy Developers",
-                            "ONNX Runtime — Microsoft Corporation",
-                            "PyTorch — Linux Foundation / PyTorch Contributors",
-                            "sherpa-onnx — k2-fsa / Next-gen Kaldi",
-                            "Tauri — Tauri Programme within The Commons Conservancy",
-                            "React — Meta Platforms, Inc.",
-                            "Vite — Evan You and Vite Contributors",
-                            "Tailwind CSS — Tailwind Labs",
-                            "163MusicLyrics — jitwxs",
-                          ].map((item) => (
-                            <div key={item} className="ui-chip flex-[1_1_320px]" title={item}>
-                              <span>{item}</span>
+                        <div className="mt-4">
+                          <div
+                            className={`relative overflow-hidden transition-[max-height] duration-300 ease-out ${
+                              openSourceListOpen ? "max-h-[1200px]" : "max-h-[118px]"
+                            }`}
+                          >
+                            <div className="ui-chip-wrap pr-1">
+                              {[
+                                "FFmpeg — FFmpeg Developers",
+                                "faster-whisper — SYSTRAN / Guillaume Klein",
+                                "SoundFile / python-soundfile — Bastibe and contributors",
+                                "NumPy — NumPy Developers",
+                                "ONNX Runtime — Microsoft Corporation",
+                                "PyTorch — Linux Foundation / PyTorch Contributors",
+                                "sherpa-onnx — k2-fsa / Next-gen Kaldi",
+                                "UVR5 (Ultimate Vocal Remover) — Anjok07, aufr33",
+                                "yt-dlp — yt-dlp contributors",
+                                "163MusicLyrics — jitwxs",
+                                "@tauri-apps/api — Tauri Programme within The Commons Conservancy",
+                                "@tauri-apps/plugin-dialog — Tauri Programme within The Commons Conservancy",
+                                "@tauri-apps/plugin-fs — Tauri Programme within The Commons Conservancy",
+                                "@tauri-apps/plugin-opener — Tauri Programme within The Commons Conservancy",
+                                "serde / serde_json — Serde Developers",
+                                "tokio — Tokio Contributors",
+                                "reqwest — Reqwest Contributors",
+                                "dirs — dirs-rs contributors",
+                                "libc — The Rust Project Developers",
+                                "Tauri — Tauri Programme within The Commons Conservancy",
+                                "React — Meta Platforms, Inc.",
+                                "Vite — Evan You and Vite Contributors",
+                                "Tailwind CSS — Tailwind Labs",
+                              ].map((item) => (
+                                <div key={item} className="ui-chip flex-[1_1_320px]" title={item}>
+                                  <span>{item}</span>
+                                </div>
+                              ))}
                             </div>
-                          ))}
+                            {!openSourceListOpen && (
+                              <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-b from-transparent via-[color-mix(in_srgb,var(--bg-card)_18%,transparent)] to-[var(--bg-card)]" />
+                            )}
+                          </div>
+                          <div className="mt-4 flex justify-end">
+                            <button
+                              type="button"
+                              className="inline-flex h-10 items-center justify-center rounded-[12px] border border-[rgba(148,163,184,0.16)] px-4 text-[13px] font-semibold text-[var(--text-secondary)] transition-colors hover:bg-[rgba(148,163,184,0.08)] focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
+                              onClick={() => setOpenSourceListOpen((open) => !open)}
+                              aria-expanded={openSourceListOpen}
+                            >
+                              {openSourceListOpen ? "收起" : "展开"}
+                            </button>
+                          </div>
                         </div>
                       </div>
                       <div className="settings-card rounded-[16px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] px-7 py-6">
@@ -2802,7 +3469,6 @@ function App() {
                           { label: "ONNX Runtime", value: runtimeHealth?.separationEngine?.onnxruntimeAvailable ? "可用" : "不可用", icon: "/ONNX.png" },
                           { label: "Python", value: runtimeHealth?.checks.find((c) => c.name === "Python")?.ok ? "已就绪" : "未就绪", icon: "/pyth.png" },
                           { label: "FFmpeg", value: runtimeHealth?.checks.find((c) => c.name === "FFmpeg")?.ok ? "已就绪" : "未就绪", icon: "/ff.png" },
-                          { label: "SoundFile", value: runtimeHealth?.checks.find((c) => c.name === "SoundFile")?.ok ? "已就绪" : "未就绪", icon: "/sf.png" },
                           { label: "NumPy", value: runtimeHealth?.checks.find((c) => c.name === "NumPy")?.ok ? "已就绪" : "未就绪", icon: numpyIcon },
                           { label: "Torch", value: runtimeHealth?.separationEngine?.highQualityTorchReady ? "HQ 已就绪" : "仅 HQ5 需要", icon: torchIcon },
                           { label: "faster-whisper", value: runtimeHealth?.checks.find((c) => c.name === "faster-whisper")?.ok ? "已就绪" : "仅 AI 听写需要", icon: fasterWhisperIcon },
@@ -2815,6 +3481,59 @@ function App() {
                             </div>
                           </div>
                         ))}
+                        <div
+                          onClick={() => void handleInstallOnlineImport()}
+                          className="runtime-info-card flex h-16 min-w-0 cursor-pointer items-center gap-3 rounded-[12px] border border-[rgba(148,163,184,0.16)] bg-[var(--bg-card)] px-4"
+                          title={
+                            onlineImportStatus?.ytdlpReady
+                              ? `yt-dlp ${onlineImportStatus.ytdlpVersion || ""}，点击手动更新`
+                              : "可选组件，点击安装 yt-dlp"
+                          }
+                        >
+                          <img src={ytImportIcon} className="h-10 w-10 shrink-0 object-contain" alt="" />
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-[12px] font-semibold text-[var(--text-muted)]">在线导入</div>
+                            <div
+                              className="mt-0.5 truncate text-[13px] font-semibold"
+                              style={{
+                                color: onlineImportInstalling
+                                  ? "var(--text-primary)"
+                                  : onlineImportStatus?.ytdlpReady
+                                    ? "var(--text-primary)"
+                                    : "var(--text-muted)",
+                              }}
+                            >
+                              {onlineImportInstalling
+                                ? "下载中..."
+                                : onlineImportStatus?.ytdlpReady
+                                  ? "已就绪"
+                                  : "可选"}
+                            </div>
+                            <div className="mt-0.5 truncate text-[11px] font-semibold text-[var(--text-muted)]">
+                              {onlineImportInstalling
+                                ? "正在安装或更新 yt-dlp"
+                                : onlineImportStatus?.ytdlpReady
+                                  ? `yt-dlp ${onlineImportStatus.ytdlpVersion || ""}`.trim()
+                                  : "点击安装在线导入组件"}
+                            </div>
+                          </div>
+                          {onlineImportInstalling ? (
+                            <div className="h-[10px] w-[10px] shrink-0 rounded-full border-[1.5px] border-transparent border-t-[var(--accent)] animate-spin" style={{ animationDuration: "0.8s" }} />
+                          ) : (
+                            <div
+                              style={{
+                                width: "10px",
+                                height: "10px",
+                                borderRadius: "50%",
+                                border: onlineImportStatus?.ytdlpReady
+                                  ? "1.5px solid var(--accent)"
+                                  : "1.5px solid rgba(148,163,184,0.3)",
+                                background: onlineImportStatus?.ytdlpReady ? "var(--accent)" : "transparent",
+                                flexShrink: 0,
+                              }}
+                            />
+                          )}
+                        </div>
                         {/* 默认模型 — 互斥组 · 内置必需 */}
                         <div
                           onClick={handleSelectDefaultModel}
@@ -3083,11 +3802,8 @@ function App() {
                       <div className="mt-2 text-[14px] leading-[1.55] text-[var(--text-secondary)] line-clamp-4 overflow-wrap-anywhere" style={{ overflowWrap: "anywhere", wordBreak: "break-word" }}>
                         {candidate.preview || "（无预览）"}
                       </div>
-                      <div className="mt-3 text-[12px] text-[var(--text-muted)]">
-                        点击采用此候选
-                      </div>
                     </div>
-                    {/* MetaColumn */}
+                    {/* Actions */}
                     <div className="flex flex-col items-end gap-2 pt-1" style={{ minWidth: "84px", maxWidth: "128px" }}>
                       <span className="h-[28px] max-w-[112px] overflow-hidden text-ellipsis whitespace-nowrap rounded-[999px] border border-[var(--chip-border)] bg-[var(--chip-bg)] px-[10px] text-[12px] font-bold leading-[28px] text-[var(--text-secondary)]" title={candidate.sourceLabel}>
                         {candidate.sourceLabel}
