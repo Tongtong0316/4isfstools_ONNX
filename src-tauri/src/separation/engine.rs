@@ -98,7 +98,6 @@ mod tests {
         assert_eq!(strategy.fallback_provider, ExecutionProvider::Cpu);
         assert!(strategy
             .requested_providers
-            .iter()
-            .any(|provider| *provider == ExecutionProvider::Cpu));
+            .contains(&ExecutionProvider::Cpu));
     }
 }

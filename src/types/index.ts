@@ -2,6 +2,10 @@ export interface Song {
   id: string;
   name: string;
   originalPath: string;
+  sourceKind?: string | null;
+  sourceUrl?: string | null;
+  sourceId?: string | null;
+  originalManaged?: boolean;
   playlistFolder?: string | null;
   vocalsPath: string | null;
   instrumentalPath: string | null;

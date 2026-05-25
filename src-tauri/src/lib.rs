@@ -1,6 +1,5 @@
-#[cfg(unix)]
-use libc;
 use serde::{Deserialize, Serialize};
+use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, Read};
@@ -10,9 +9,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
+use ferrous_opencc::{config::BuiltinConfig, OpenCC};
 
 mod events;
 mod models;
+mod online_import;
 mod process_control;
 mod runtime;
 mod separation;
@@ -36,7 +37,7 @@ static LYRICS_SEARCH_CACHE: Mutex<Option<HashMap<String, CachedLyricsCandidateBu
     Mutex::new(None);
 static FILE_STORAGE_SETTINGS: Mutex<Option<FileStorageSettings>> = Mutex::new(None);
 static JOB_TOKEN_COUNTER: AtomicU64 = AtomicU64::new(1);
-const LYRICS_SEARCH_CACHE_VERSION: &str = "lyrics-search-v3";
+const LYRICS_SEARCH_CACHE_VERSION: &str = "lyrics-search-v4";
 const PIP_NETWORK_TIMEOUT_SECONDS: &str = "120";
 const PIP_RETRIES: &str = "3";
 const BOOTSTRAP_TOTAL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -61,6 +62,8 @@ pub(crate) struct FileStorageSettings {
     instrumental_root: String,
     vocals_root: String,
     lyrics_root: String,
+    #[serde(default)]
+    online_download_root: String,
 }
 
 impl Default for FileStorageSettings {
@@ -73,6 +76,9 @@ impl Default for FileStorageSettings {
                 .to_string_lossy()
                 .to_string(),
             lyrics_root: get_default_asset_root("lyrics")
+                .to_string_lossy()
+                .to_string(),
+            online_download_root: storage::get_default_online_download_root()
                 .to_string_lossy()
                 .to_string(),
         }
@@ -544,6 +550,12 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
     } else {
         false
     };
+    let ytdlp_ready = if python_exists {
+        runtime::capability::python_module_is_available(&python_path, "yt_dlp", 6).unwrap_or(false)
+    } else {
+        false
+    };
+    let online_import_ready = python_exists && ffmpeg_ready && ytdlp_ready;
     let whisper_base_ready = if python_exists {
         match resolve_whisper_base_model_dir(app) {
             Ok(model_dir) => whisper_model_is_usable(&python_path, &model_dir, 8).unwrap_or(false),
@@ -702,6 +714,26 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
             }),
         },
         RuntimeHealthCheck {
+            name: "yt-dlp".to_string(),
+            ok: ytdlp_ready,
+            severity: "info".to_string(),
+            detail: Some(if ytdlp_ready {
+                "在线导入下载器已就绪".to_string()
+            } else {
+                "在线导入可选下载器".to_string()
+            }),
+        },
+        RuntimeHealthCheck {
+            name: "在线导入".to_string(),
+            ok: online_import_ready,
+            severity: "info".to_string(),
+            detail: Some(if online_import_ready {
+                "Python、FFmpeg 与 yt-dlp 已就绪".to_string()
+            } else {
+                "可选功能：需要 Python、FFmpeg 与 yt-dlp".to_string()
+            }),
+        },
+        RuntimeHealthCheck {
             name: "AI 听写草稿".to_string(),
             ok: faster_whisper_ready && whisper_base_ready,
             severity: "info".to_string(),
@@ -747,9 +779,31 @@ fn detect_runtime_health(app: &AppHandle) -> RuntimeHealthReport {
         nvidia_driver_visible: false,
         nvidia_driver_cuda_version: None,
         checks: {
-            checks.sort_by(|a, b| a.name.cmp(&b.name));
+            checks.sort_by_key(|check| runtime_check_priority(&check.name));
             checks
         },
+    }
+}
+
+fn runtime_check_priority(name: &str) -> usize {
+    match name {
+        "Python" => 0,
+        "FFmpeg" => 1,
+        "ONNX Runtime" => 2,
+        "ONNX 默认模型" => 3,
+        "ONNX Session" => 4,
+        "ONNX Metadata" => 5,
+        "NumPy" => 6,
+        "SoundFile" => 7,
+        "Sherpa ONNX" => 8,
+        "在线导入" => 9,
+        "yt-dlp" => 10,
+        "ONNX 高质量模型" => 11,
+        "Torch（HQ）" => 12,
+        "faster-whisper" => 13,
+        "Whisper base" => 14,
+        "AI 听写草稿" => 15,
+        _ => usize::MAX,
     }
 }
 
@@ -869,13 +923,12 @@ fn set_file_storage_settings(settings: FileStorageSettings) {
 }
 
 fn resolve_asset_root(kind: &str, settings: &FileStorageSettings) -> PathBuf {
-    let base = match kind {
+    match kind {
         "instrumental" => PathBuf::from(&settings.instrumental_root),
         "vocals" => PathBuf::from(&settings.vocals_root),
         "lyrics" => PathBuf::from(&settings.lyrics_root),
         _ => get_default_asset_root(kind),
-    };
-    base
+    }
 }
 
 fn legacy_song_workspace_dir(song_id: &str) -> PathBuf {
@@ -898,6 +951,17 @@ fn resolve_original_mix_path(song_id: &str, settings: &FileStorageSettings) -> P
     resolve_asset_root("vocals", settings)
         .join(song_id)
         .join("original_mix.wav")
+}
+
+fn resolve_managed_original_path(song_id: &str, source_path: &Path) -> PathBuf {
+    let extension = source_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .filter(|ext| !ext.trim().is_empty())
+        .unwrap_or("m4a");
+    get_default_asset_root("original")
+        .join(song_id)
+        .join(format!("original.{}", extension))
 }
 
 fn resolve_lyrics_json_path(song_id: &str, settings: &FileStorageSettings) -> PathBuf {
@@ -1077,11 +1141,18 @@ fn cleanup_song_artifacts(song: &Song) {
         song.instrumental_path.as_ref(),
         song.original_mix_path.as_ref(),
         song.lyrics_path.as_ref(),
-    ] {
-        if let Some(path) = path {
-            if let Some(parent) = Path::new(path).parent() {
-                cleanup_dirs.insert(parent.to_path_buf());
-            }
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Some(parent) = Path::new(path).parent() {
+            cleanup_dirs.insert(parent.to_path_buf());
+        }
+    }
+
+    if song.original_managed {
+        if let Some(parent) = Path::new(&song.original_path).parent() {
+            cleanup_dirs.insert(parent.to_path_buf());
         }
     }
 
@@ -1116,12 +1187,8 @@ fn get_cached_lyrics_candidates(key: &str) -> Option<Vec<LyricsCandidate>> {
     ensure_lyrics_search_cache_loaded();
 
     let cache = LYRICS_SEARCH_CACHE.lock().unwrap();
-    let Some(map) = cache.as_ref() else {
-        return None;
-    };
-    let Some(entry) = map.get(key) else {
-        return None;
-    };
+    let map = cache.as_ref()?;
+    let entry = map.get(key)?;
     if now_ms().saturating_sub(entry.cached_at) > CACHE_TTL_MS {
         return None;
     }
@@ -1836,7 +1903,7 @@ fn get_ffmpeg_urls() -> Vec<String> {
 
 fn add_ffmpeg_to_path(bin_dir: &Path) {
     let separator = if cfg!(windows) { ";" } else { ":" };
-    let _ = std::env::set_var(
+    std::env::set_var(
         "PATH",
         format!(
             "{}{}{}",
@@ -2350,7 +2417,7 @@ fn run_hidden_command_with_timeout(
             return Err(format!(
                 "{} 超时：已运行 {} 分钟仍未结束，已自动终止。请检查网络、代理、杀毒软件或 Python/pip 源。",
                 label,
-                (elapsed.as_secs() + 59) / 60
+                elapsed.as_secs().div_ceil(60)
             ));
         }
 
@@ -2688,6 +2755,12 @@ fn format_missing_core_components_with_reason(health: &RuntimeHealthReport) -> S
         // AI 听写草稿和 GPU 硬件提示是可选能力，不参与核心就绪判断
         .filter(|c| c.name != "AI 听写草稿")
         .filter(|c| c.name != "NVIDIA GPU")
+        .filter(|c| c.name != "在线导入")
+        .filter(|c| c.name != "yt-dlp")
+        .filter(|c| c.name != "ONNX 高质量模型")
+        .filter(|c| c.name != "Torch（HQ）")
+        .filter(|c| c.name != "faster-whisper")
+        .filter(|c| c.name != "Whisper base")
         .map(|c| {
             let detail = c.detail.as_deref().unwrap_or("").trim();
             if detail.is_empty() {
@@ -2802,6 +2875,21 @@ fn song_has_live_processing_job(song_id: &str) -> bool {
     separation_queue::is_queued(song_id)
         || get_active_job_token(song_id).is_some()
         || get_job(song_id).is_some()
+}
+
+fn clear_restartable_stale_job_state(song_id: &str) {
+    if let Some(job) = get_job(song_id) {
+        terminate_known_job(&job, true);
+    }
+    terminate_song_processes(song_id, true);
+    let _ = separation_queue::cancel_task(song_id);
+    clear_active_job_token(song_id);
+    clear_cancel_flag(song_id);
+    remove_job(song_id);
+}
+
+fn can_start_process_status(status: &str, live_job: bool) -> bool {
+    !live_job && matches!(status, "pending" | "error" | "cancelled" | "queued")
 }
 
 fn spawn_in_own_process_group(command: &mut Command) -> io::Result<std::process::Child> {
@@ -2989,6 +3077,74 @@ fn normalize_match_text(text: &str) -> String {
         .join(" ")
 }
 
+fn contains_cjk(text: &str) -> bool {
+    text.chars().any(|ch| {
+        ('\u{4e00}'..='\u{9fff}').contains(&ch)
+            || ('\u{3400}'..='\u{4dbf}').contains(&ch)
+            || ('\u{f900}'..='\u{faff}').contains(&ch)
+    })
+}
+
+fn convert_chinese_script(text: &str, to_traditional: bool) -> Option<String> {
+    let config = if to_traditional {
+        BuiltinConfig::S2twp
+    } else {
+        BuiltinConfig::Tw2sp
+    };
+    OpenCC::from_config(config).ok().map(|converter| converter.convert(text))
+}
+
+fn collect_chinese_script_variants(text: &str) -> Vec<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    let mut variants = Vec::new();
+    let mut seen = HashSet::new();
+    let mut push = |value: String| {
+        let normalized = value.trim().to_string();
+        if normalized.is_empty() {
+            return;
+        }
+        if seen.insert(normalized.clone()) {
+            variants.push(normalized);
+        }
+    };
+
+    push(trimmed.to_string());
+    if contains_cjk(trimmed) {
+        if let Some(converted) = convert_chinese_script(trimmed, false) {
+            push(converted);
+        }
+        if let Some(converted) = convert_chinese_script(trimmed, true) {
+            push(converted);
+        }
+    }
+
+    variants
+}
+
+fn load_lyrics_document_for_song(song_id: &str) -> Result<Option<LyricDocument>, String> {
+    let lyrics_json_path = get_lyrics_json_path(song_id);
+    let legacy_lyrics_json = legacy_lyrics_json_path(song_id);
+    let target_path = if lyrics_json_path.exists() {
+        Some(lyrics_json_path)
+    } else if legacy_lyrics_json.exists() {
+        Some(legacy_lyrics_json)
+    } else {
+        None
+    };
+
+    let Some(path) = target_path else {
+        return Ok(None);
+    };
+
+    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let document = serde_json::from_str::<LyricDocument>(&content).map_err(|e| e.to_string())?;
+    Ok(Some(document))
+}
+
 fn strip_bracketed_segments(text: &str) -> String {
     let mut depth = 0i32;
     let mut out = String::with_capacity(text.len());
@@ -3174,6 +3330,16 @@ fn candidate_query_variants(
         }
     };
 
+    let push_text_variants = |text: &str,
+                              variants: &mut Vec<(Option<String>, String)>,
+                              seen: &mut std::collections::HashSet<String>| {
+        for variant in collect_chinese_script_variants(text) {
+            push_variant(None, variant.clone(), variants, seen);
+            let (artist, track) = split_artist_track_hint(&variant);
+            push_variant(artist.clone(), track.clone(), variants, seen);
+        }
+    };
+
     let build_variants = |hint: &str,
                           variants: &mut Vec<(Option<String>, String)>,
                           seen: &mut std::collections::HashSet<String>| {
@@ -3182,10 +3348,7 @@ fn candidate_query_variants(
             return;
         }
 
-        push_variant(None, trimmed.to_string(), variants, seen);
-
-        let (artist, track) = split_artist_track_hint(&trimmed);
-        push_variant(artist.clone(), track.clone(), variants, seen);
+        push_text_variants(&trimmed, variants, seen);
 
         let mut stripped = trimmed.to_string();
         let removals = [("（", "）"), ("(", ")"), ("【", "】"), ("[", "]")];
@@ -3209,13 +3372,10 @@ fn candidate_query_variants(
             .replace("伴奏", " ")
             .replace("人声", " ")
             .replace("歌词", " ")
-            .replace(" ", " ")
             .trim()
             .to_string();
         if !stripped.is_empty() && stripped != trimmed {
-            push_variant(None, stripped.clone(), variants, seen);
-            let (artist, track) = split_artist_track_hint(&stripped);
-            push_variant(artist, track, variants, seen);
+            push_text_variants(&stripped, variants, seen);
         }
 
         let normalized_tokens = normalize_match_text(&trimmed);
@@ -3227,7 +3387,7 @@ fn candidate_query_variants(
             .collect::<Vec<String>>();
         if simple_tokens.len() >= 2 {
             let collapsed = simple_tokens.join(" ");
-            push_variant(None, collapsed, variants, seen);
+            push_text_variants(&collapsed, variants, seen);
 
             let cjk_tokens = simple_tokens
                 .iter()
@@ -3241,12 +3401,12 @@ fn candidate_query_variants(
                 .collect::<Vec<String>>();
             if !cjk_tokens.is_empty() {
                 let cjk_collapsed = cjk_tokens.join(" ");
-                push_variant(None, cjk_collapsed, variants, seen);
+                push_text_variants(&cjk_collapsed, variants, seen);
             }
         }
 
         if simple_tokens.len() == 1 {
-            push_variant(None, simple_tokens[0].clone(), variants, seen);
+            push_text_variants(&simple_tokens[0], variants, seen);
         }
     };
 
@@ -3304,6 +3464,10 @@ mod tests {
             id: "song_1".to_string(),
             name: "isis_临渊_remix.wav".to_string(),
             original_path: "/tmp/isis_临渊_remix.wav".to_string(),
+            source_kind: None,
+            source_url: None,
+            source_id: None,
+            original_managed: false,
             playlist_folder: None,
             vocals_path: None,
             instrumental_path: None,
@@ -3328,6 +3492,10 @@ mod tests {
             id: "song_1".to_string(),
             name: "isis_临渊_remix.wav".to_string(),
             original_path: "/tmp/isis_临渊_remix.wav".to_string(),
+            source_kind: None,
+            source_url: None,
+            source_id: None,
+            original_managed: false,
             playlist_folder: None,
             vocals_path: None,
             instrumental_path: None,
@@ -3349,11 +3517,40 @@ mod tests {
     }
 
     #[test]
+    fn chinese_script_variants_include_both_forms() {
+        let variants = collect_chinese_script_variants("後來");
+        assert!(variants.iter().any(|value| value.contains("後來")));
+        assert!(variants.iter().any(|value| value.contains("后来")));
+    }
+
+    #[test]
+    fn candidate_query_variants_expand_chinese_scripts() {
+        let variants = candidate_query_variants("後來", "後來");
+        assert!(variants
+            .iter()
+            .any(|(_, track)| normalize_match_text(track).contains("後來")));
+        assert!(variants
+            .iter()
+            .any(|(_, track)| normalize_match_text(track).contains("后来")));
+    }
+
+    #[test]
+    fn cancelled_song_can_start_when_no_live_job_remains() {
+        assert!(can_start_process_status("cancelled", false));
+        assert!(!can_start_process_status("cancelled", true));
+        assert!(!can_start_process_status("ready", false));
+    }
+
+    #[test]
     fn manual_search_short_query_does_not_allow_weak_fallback() {
         let song = Song {
             id: "song_1".to_string(),
             name: "爱你.wav".to_string(),
             original_path: "/tmp/爱你.wav".to_string(),
+            source_kind: None,
+            source_url: None,
+            source_id: None,
+            original_managed: false,
             playlist_folder: None,
             vocals_path: None,
             instrumental_path: None,
@@ -3589,7 +3786,8 @@ fn rank_lyrics_candidates(
         }
     }
 
-    let sort_bucket = |items: &mut Vec<((i32, i32, i32, bool), LyricsCandidate)>| {
+    type LyricsRankBucket = ((i32, i32, i32, bool), LyricsCandidate);
+    let sort_bucket = |items: &mut Vec<LyricsRankBucket>| {
         items.sort_by(|a, b| {
             b.0 .0
                 .cmp(&a.0 .0)
@@ -4077,7 +4275,7 @@ fn fetch_netease_candidates(
             scored.push((metadata_score, song, artist, album));
         }
 
-        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        scored.sort_by_key(|item| Reverse(item.0));
         let mut filtered = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for (score, song, artist, album) in scored.into_iter() {
@@ -4148,7 +4346,7 @@ fn fetch_netease_candidates(
             }
         }
 
-        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        scored.sort_by_key(|item| Reverse(item.0));
         let mut result = Vec::new();
         for (score, song, artist, album, has_synced, document) in scored {
             result.push(LyricsCandidate {
@@ -4173,9 +4371,7 @@ fn fetch_netease_candidates(
 }
 
 fn build_qq_document(song_id: &str, lyric: Option<&str>) -> Option<LyricDocument> {
-    let Some(lyric) = lyric.map(str::trim).filter(|value| !value.is_empty()) else {
-        return None;
-    };
+    let lyric = lyric.map(str::trim).filter(|value| !value.is_empty())?;
     let timed_lines = parse_lrclib_synced_lines(lyric);
     if !timed_lines.is_empty() {
         return build_document_from_timed_lines(
@@ -4322,7 +4518,7 @@ fn fetch_qq_candidates(
             scored.push((metadata_score, song, artist, album, songmid));
         }
 
-        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        scored.sort_by_key(|item| Reverse(item.0));
         let mut filtered = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for (score, song, artist, album, songmid) in scored.into_iter() {
@@ -4391,7 +4587,7 @@ fn fetch_qq_candidates(
             }
         }
 
-        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        scored.sort_by_key(|item| Reverse(item.0));
         let mut result = Vec::new();
 
         for (score, song, artist, album, has_synced, document) in scored {
@@ -4828,7 +5024,7 @@ fn fetch_lrclib_candidates(
         }
     }
 
-    candidates.sort_by(|a, b| b.0.cmp(&a.0));
+    candidates.sort_by_key(|item| Reverse(item.0));
     let mut seen = std::collections::HashSet::new();
     let mut result = Vec::new();
     for (score, track) in candidates {
@@ -4871,7 +5067,7 @@ fn fetch_lrclib_candidates(
         }
     }
 
-    result.sort_by(|a, b| b.score.cmp(&a.score));
+    result.sort_by_key(|item| Reverse(item.score));
     if result.is_empty() {
         // Try broader plain-lyrics fallback before giving up.
         let mut broader = Vec::new();
@@ -4904,7 +5100,7 @@ fn fetch_lrclib_candidates(
             }
         }
 
-        broader.sort_by(|a, b| b.0.cmp(&a.0));
+        broader.sort_by_key(|item| Reverse(item.0));
         let mut seen = std::collections::HashSet::new();
         for (score, track) in broader {
             let key = format!(
@@ -4945,7 +5141,7 @@ fn fetch_lrclib_candidates(
                 });
             }
         }
-        result.sort_by(|a, b| b.score.cmp(&a.score));
+        result.sort_by_key(|item| Reverse(item.score));
     }
     set_cached_lyrics_candidates(cache_key, result.clone());
     Ok(result)
@@ -5018,7 +5214,7 @@ fn fetch_lrclib_candidates_manual(
             (score, track)
         })
         .collect();
-    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored.sort_by_key(|item| Reverse(item.0));
 
     let mut seen = std::collections::HashSet::new();
     let mut result = Vec::new();
@@ -5102,11 +5298,16 @@ async fn import_songs(_app: AppHandle, paths: Vec<String>) -> Result<Vec<Song>, 
         } else {
             path.clone()
         };
+        let is_video_import = is_video_import_path(source_path);
 
         let song = Song {
             id: song_id.clone(),
             name: filename,
             original_path: stored_original_path,
+            source_kind: Some(if is_video_import { "video" } else { "local" }.to_string()),
+            source_url: None,
+            source_id: None,
+            original_managed: is_video_import,
             playlist_folder: None,
             vocals_path: None,
             instrumental_path: None,
@@ -5131,6 +5332,115 @@ async fn import_songs(_app: AppHandle, paths: Vec<String>) -> Result<Vec<Song>, 
 }
 
 #[tauri::command]
+async fn import_online_song(
+    path: String,
+    source_url: Option<String>,
+    source_id: Option<String>,
+    source_title: Option<String>,
+) -> Result<Song, String> {
+    let source_path = Path::new(&path);
+    if !source_path.exists() {
+        return Err("在线下载文件不存在，无法导入处理".to_string());
+    }
+
+    {
+        let songs = SONGS.lock().unwrap();
+        if let Some(ref map) = *songs {
+            let source_url_normalized = source_url
+                .as_deref()
+                .map(|value| value.trim().trim_end_matches('/').to_ascii_lowercase());
+            let duplicate = map.values().any(|song| {
+                if song.source_kind.as_deref() != Some("online") {
+                    return false;
+                }
+                if let Some(source_id) = source_id.as_deref() {
+                    if !source_id.is_empty() && song.source_id.as_deref() == Some(source_id) {
+                        return true;
+                    }
+                }
+                if let (Some(expected), Some(actual)) =
+                    (&source_url_normalized, song.source_url.as_deref())
+                {
+                    return actual.trim().trim_end_matches('/').to_ascii_lowercase() == *expected;
+                }
+                false
+            });
+            if duplicate {
+                return Err("该在线视频已导入过，请在歌曲列表中处理已有歌曲".to_string());
+            }
+        }
+    }
+
+    let mut songs = SONGS.lock().unwrap();
+    if songs.is_none() {
+        *songs = Some(HashMap::new());
+    }
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let song_id = format!("song_{}_0", timestamp);
+    let managed_original_path = resolve_managed_original_path(&song_id, source_path);
+    if let Some(parent) = managed_original_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("创建在线原始音频目录失败：{}", e))?;
+    }
+    match fs::rename(source_path, &managed_original_path) {
+        Ok(_) => {}
+        Err(_) => {
+            fs::copy(source_path, &managed_original_path)
+                .map_err(|e| format!("转存在线原始音频失败：{}", e))?;
+            let _ = fs::remove_file(source_path);
+        }
+    }
+    if let Some(parent) = source_path.parent() {
+        if parent
+            .parent()
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+            == Some(".tmp")
+        {
+            let _ = fs::remove_dir(parent);
+        }
+    }
+
+    let fallback_name = source_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("online-audio.m4a")
+        .to_string();
+    let song_name = source_title
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(fallback_name);
+    let song = Song {
+        id: song_id.clone(),
+        name: song_name,
+        original_path: managed_original_path.to_string_lossy().to_string(),
+        source_kind: Some("online".to_string()),
+        source_url,
+        source_id,
+        original_managed: true,
+        playlist_folder: None,
+        vocals_path: None,
+        instrumental_path: None,
+        original_mix_path: None,
+        lyrics_path: None,
+        duration: 0,
+        status: "pending".to_string(),
+        progress: 0,
+        processing_stage: None,
+        error_message: None,
+        separation_model_id: None,
+        added_at: timestamp,
+    };
+    songs.as_mut().unwrap().insert(song_id, song.clone());
+    drop(songs);
+    save_songs_to_disk();
+
+    Ok(song)
+}
+
+#[tauri::command]
 async fn start_process(
     app: AppHandle,
     song_id: String,
@@ -5147,13 +5457,12 @@ async fn start_process(
         None => return Err("Song not found".to_string()),
     };
 
-    let live_job = song_has_live_processing_job(&song_id);
-    if live_job
-        || (song.status != "pending"
-            && song.status != "error"
-            && song.status != "cancelled"
-            && !(song.status == "queued" && !live_job))
-    {
+    let mut live_job = song_has_live_processing_job(&song_id);
+    if live_job && (song.status == "cancelled" || song.status == "error") {
+        clear_restartable_stale_job_state(&song_id);
+        live_job = song_has_live_processing_job(&song_id);
+    }
+    if !can_start_process_status(&song.status, live_job) {
         return Err(format!("Cannot process song with status: {}", song.status));
     }
 
@@ -5618,9 +5927,9 @@ fn process_song_with_onnx_skeleton(
     );
     clear_separator_job(&song_id);
     clear_active_job_token(&song_id);
-    return;
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn process_song_background(
     app: AppHandle,
     song_id: String,
@@ -6336,23 +6645,7 @@ async fn search_match_lyrics(
 
 #[tauri::command]
 async fn get_lyrics_document(song_id: String) -> Result<Option<LyricDocument>, String> {
-    let lyrics_json_path = get_lyrics_json_path(&song_id);
-    let legacy_lyrics_json = legacy_lyrics_json_path(&song_id);
-    let target_path = if lyrics_json_path.exists() {
-        Some(lyrics_json_path)
-    } else if legacy_lyrics_json.exists() {
-        Some(legacy_lyrics_json)
-    } else {
-        None
-    };
-
-    let Some(path) = target_path else {
-        return Ok(None);
-    };
-
-    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let document = serde_json::from_str::<LyricDocument>(&content).map_err(|e| e.to_string())?;
-    Ok(Some(document))
+    load_lyrics_document_for_song(&song_id)
 }
 
 #[tauri::command]
@@ -6389,38 +6682,21 @@ fn persist_lyrics_document(song_id: &str, document: &LyricDocument) -> Result<St
     Ok(lyrics_lrc_path.to_string_lossy().to_string())
 }
 
-#[tauri::command]
-async fn generate_whisper_base_lyrics(
-    app: AppHandle,
-    song_id: String,
-) -> Result<GeneratedLyricsDraftResult, String> {
-    let song = {
-        let songs = SONGS.lock().unwrap();
-        songs
-            .as_ref()
-            .and_then(|m| m.get(&song_id).cloned())
-            .ok_or_else(|| "Song not found".to_string())?
-    };
-
-    let audio_path = song
-        .vocals_path
-        .clone()
-        .filter(|path| Path::new(path).exists())
-        .unwrap_or_else(|| song.original_path.clone());
-
-    if !Path::new(&audio_path).exists() {
-        return Err("找不到可用于转录的音频文件".to_string());
-    }
-
-    let python_bin = runtime::python::get_python_path(&app);
+async fn run_whisper_transcription(
+    app: &AppHandle,
+    song_id: &str,
+    audio_path: &str,
+) -> Result<WhisperTranscriptionResult, String> {
+    let python_bin = runtime::python::get_python_path(app);
     if !python_bin.exists() {
-        return Err("找不到 Python 运行时，无法生成 Whisper 草稿".to_string());
+        return Err("找不到 Python 运行时，无法使用 AI 听写".to_string());
     }
 
-    let model_dir = ensure_whisper_runtime_ready(&app)?;
-    let song_dir = get_songs_dir().join(&song_id);
+    let model_dir = ensure_whisper_runtime_ready(app)?;
+    let song_dir = get_songs_dir().join(song_id);
     ensure_dir(&song_dir).map_err(|e| e.to_string())?;
     let transcription_result_file = song_dir.join("whisper_transcription.json");
+    let audio_path = audio_path.to_string();
 
     let transcription_json =
         tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
@@ -6487,7 +6763,7 @@ print(json.dumps(payload, ensure_ascii=False))
                 .arg("utf8")
                 .arg("-c")
                 .arg(script)
-                .env("WHISPER_AUDIO_PATH", &audio_path)
+                .env("WHISPER_AUDIO_PATH", audio_path)
                 .env("WHISPER_MODEL_DIR", &model_dir)
                 .env("WHISPER_RESULT_PATH", &transcription_result_file)
                 .env("WHISPER_DEVICE", "cpu")
@@ -6521,8 +6797,33 @@ print(json.dumps(payload, ensure_ascii=False))
         .await
         .map_err(|e| e.to_string())??;
 
-    let transcription = serde_json::from_str::<WhisperTranscriptionResult>(&transcription_json)
-        .map_err(|e| format!("Whisper base 输出解析失败: {}", e))?;
+    serde_json::from_str::<WhisperTranscriptionResult>(&transcription_json)
+        .map_err(|e| format!("Whisper base 输出解析失败: {}", e))
+}
+
+#[tauri::command]
+async fn generate_whisper_base_lyrics(
+    app: AppHandle,
+    song_id: String,
+) -> Result<GeneratedLyricsDraftResult, String> {
+    let song = {
+        let songs = SONGS.lock().unwrap();
+        songs
+            .as_ref()
+            .and_then(|m| m.get(&song_id).cloned())
+            .ok_or_else(|| "Song not found".to_string())?
+    };
+
+    let audio_path = song
+        .vocals_path
+        .clone()
+        .filter(|path| Path::new(path).exists())
+        .unwrap_or_else(|| song.original_path.clone());
+
+    if !Path::new(&audio_path).exists() {
+        return Err("找不到可用于转录的音频文件".to_string());
+    }
+    let transcription = run_whisper_transcription(&app, &song_id, &audio_path).await?;
 
     let document = build_document_from_whisper_segments(
         &song_id,
@@ -6614,9 +6915,9 @@ pub fn run() {
             let data_dir = get_data_dir();
             let _ = ensure_dir(&data_dir);
             let app_handle = app.handle().clone();
-            let _ = tauri::async_runtime::spawn_blocking(move || {
+            std::mem::drop(tauri::async_runtime::spawn_blocking(move || {
                 let _ = bootstrap_install_default_onnx_model(&app_handle);
-            });
+            }));
             Ok(())
         })
         .on_window_event(|_window, event| {
@@ -6626,6 +6927,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             import_songs,
+            import_online_song,
             start_process,
             reprocess_song,
             cancel_process,
@@ -6644,6 +6946,11 @@ pub fn run() {
             download_hq_model,
             download_whisper_model,
             update_file_storage_settings,
+            online_import::get_online_import_status,
+            online_import::install_or_update_ytdlp,
+            online_import::probe_online_media,
+            online_import::download_online_audio,
+            online_import::cancel_online_download,
             search_match_lyrics,
             generate_whisper_base_lyrics,
             get_lyrics_document,

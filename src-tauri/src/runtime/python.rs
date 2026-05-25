@@ -125,8 +125,8 @@ pub fn python_file_compiles(python_path: &Path, file_path: &Path) -> Result<bool
     cmd.args([
         "-c",
         &format!(
-            "import py_compile; py_compile.compile({}, doraise=True)",
-            format!("{:?}", file_path.to_string_lossy())
+            "import py_compile; py_compile.compile({:?}, doraise=True)",
+            file_path.to_string_lossy()
         ),
     ])
     .stdout(Stdio::piped())

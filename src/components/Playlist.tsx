@@ -202,14 +202,18 @@ function ContextMenuItem({
   icon,
   children,
   destructive = false,
+  disabled = false,
   onClick,
   ariaLabel,
+  title,
 }: {
   icon: React.ReactNode;
   children: React.ReactNode;
   destructive?: boolean;
+  disabled?: boolean;
   onClick: () => void;
   ariaLabel?: string;
+  title?: string;
 }) {
   return (
     <button
@@ -217,6 +221,8 @@ function ContextMenuItem({
       className={`context-menu-item ${destructive ? "context-menu-item-danger" : ""}`}
       data-danger={destructive || undefined}
       aria-label={ariaLabel}
+      disabled={disabled}
+      title={title}
       onClick={onClick}
     >
       <span className="context-menu-icon">{icon}</span>
@@ -906,7 +912,7 @@ export default function Playlist({
           >
             {contextMenu.kind === "song" ? (
               <>
-                {contextMenu.song.status !== "processing" && contextMenu.song.status !== "cancelling" && contextMenu.song.status !== "queued" && (
+                {contextMenu.song.status !== "processing" && contextMenu.song.status !== "cancelling" && contextMenu.song.status !== "queued" && contextMenu.song.status !== "ready" && (
                   <ContextMenuItem
                     icon={<SplitAudioIcon className="h-5 w-5" />}
                     onClick={() => {
