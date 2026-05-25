@@ -1388,6 +1388,166 @@ html, body {
   color: var(--theme-text-muted);
 }
 
+.modal-shell.runtime-reminder-modal {
+  width: min(92vw, 540px);
+  min-width: min(430px, calc(100vw - 48px));
+  max-width: 540px;
+  border-radius: 28px;
+  border-color: var(--theme-primary-border);
+  background: var(--theme-surface);
+  box-shadow: var(--theme-shadow-modal, var(--dialogShadow));
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.runtime-reminder-content {
+  padding: 22px 28px 20px;
+  box-sizing: border-box;
+}
+
+.runtime-reminder-inner {
+  width: 100%;
+  max-width: 480px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-sizing: border-box;
+}
+
+.runtime-reminder-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 16px;
+}
+
+.runtime-reminder-title {
+  min-width: 0;
+  color: var(--theme-text);
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1.15;
+  letter-spacing: 0;
+}
+
+.runtime-reminder-subtitle {
+  margin-top: 6px;
+  max-width: 360px;
+  color: var(--theme-text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.runtime-reminder-close {
+  width: 104px;
+  height: 42px;
+  min-height: 42px;
+  justify-self: end;
+}
+
+.runtime-reminder-notice {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--theme-primary-border);
+  background: var(--theme-primary-soft);
+  color: var(--theme-text);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.runtime-reminder-chips {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+
+.runtime-reminder-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--theme-border);
+  background: var(--theme-surface-elevated);
+  color: var(--theme-text);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.runtime-reminder-chip.is-ok {
+  border-color: var(--theme-primary-border);
+  background: var(--theme-primary-soft);
+}
+
+.runtime-reminder-chip.is-warning {
+  border-color: var(--theme-warning-border);
+  background: var(--theme-warning-soft);
+}
+
+.runtime-reminder-actions {
+  width: 100%;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  box-sizing: border-box;
+}
+
+.runtime-reminder-action-secondary {
+  width: 136px;
+  height: 44px;
+  min-height: 44px;
+}
+
+.runtime-reminder-action-primary {
+  width: 184px;
+  height: 44px;
+  min-height: 44px;
+}
+
+@media (max-width: 720px) {
+  .modal-shell.runtime-reminder-modal {
+    width: min(calc(100vw - 32px), 1080px);
+    min-width: 0;
+  }
+
+  .runtime-reminder-content {
+    padding: 20px 18px 18px;
+  }
+
+  .runtime-reminder-header {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .runtime-reminder-close {
+    justify-self: start;
+    width: 100%;
+    max-width: 140px;
+  }
+
+  .runtime-reminder-actions {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .runtime-reminder-action-secondary,
+  .runtime-reminder-action-primary {
+    width: 100%;
+  }
+}
+
 .online-import-dialog-content .online-import-close {
   width: 66px;
   height: 30px;

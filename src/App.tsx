@@ -571,6 +571,8 @@ function App() {
   const [bootstrapProgress, setBootstrapProgress] = useState<BootstrapProgress | null>(null);
   const [bootstrapStartedAt, setBootstrapStartedAt] = useState<number | null>(null);
   const [runtimeHealthRefreshing, setRuntimeHealthRefreshing] = useState(false);
+  const [runtimeReminderOpen, setRuntimeReminderOpen] = useState(false);
+  const runtimeReminderPromptedRef = useRef(false);
   const [selectedSeparationModel, setSelectedSeparationModel] = useState<"default" | "high_quality">(() => {
     if (typeof window === "undefined") return "default";
     return (localStorage.getItem("4isfstools.separation_model") as "default" | "high_quality") || "default";
@@ -630,6 +632,7 @@ function App() {
   const runtimeCheckCountLabel = `${runtimeChecks.length}/${RUNTIME_CHECK_NAMES.length}`;
   const bootstrapElapsedSeconds = bootstrapStartedAt ? Math.floor((Date.now() - bootstrapStartedAt) / 1000) : 0;
   const bootstrapProgressValue = bootstrapProgress?.progress ?? (bootstrapInstalling ? 8 : 0);
+  const runtimeReminderDetail = bootstrapStatus?.detail ?? runtimeHealth?.detail ?? "当前运行环境检查未通过。";
 
   useEffect(() => {
     document.documentElement.dataset.theme = colorTheme;
@@ -1455,6 +1458,24 @@ function App() {
       cancelled = true;
     };
   }, [isDesktopRuntime]);
+
+  useEffect(() => {
+    if (!isDesktopRuntime || !runtimeHealth || runtimeReminderPromptedRef.current) return;
+    runtimeReminderPromptedRef.current = true;
+    if (runtimeHealth.level !== "ready" || bootstrapStatus?.canRunCore === false) {
+      setRuntimeReminderOpen(true);
+    }
+  }, [isDesktopRuntime, runtimeHealth, bootstrapStatus]);
+
+  const handleOpenRuntimePane = useCallback(() => {
+    setRuntimeReminderOpen(false);
+    setFileStorageSettingsOpen(true);
+    setSettingsPane("runtime");
+  }, []);
+
+  const handleDismissRuntimeReminder = useCallback(() => {
+    setRuntimeReminderOpen(false);
+  }, []);
 
   useEffect(() => {
     if (!isDesktopRuntime) return;
@@ -2730,6 +2751,80 @@ function App() {
           >
             导入/获取线上内容
           </button>
+        </div>,
+        document.body
+      )}
+
+      {runtimeReminderOpen && typeof document !== "undefined" && createPortal(
+        <div className="fixed inset-0 z-[82] flex items-center justify-center p-6" role="dialog" aria-modal="true" aria-labelledby="runtime-reminder-title">
+          <div
+            className="absolute inset-0 bg-black/55 backdrop-blur-[2px]"
+            onClick={handleDismissRuntimeReminder}
+          />
+          <div className="modal-shell runtime-reminder-modal relative">
+            <div className="dialog-content runtime-reminder-content">
+              <div className="runtime-reminder-inner">
+                <div className="runtime-reminder-header">
+                  <div className="min-w-0">
+                    <div id="runtime-reminder-title" className="runtime-reminder-title">
+                      启动检测未通过
+                    </div>
+                    <div
+                      className="runtime-reminder-subtitle"
+                      title={runtimeReminderDetail}
+                    >
+                      ONNX Runtime、默认分离模型或音频依赖未就绪，请继续安装/修复。
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="ui-button ghost-button runtime-reminder-close shrink-0 text-sm font-semibold"
+                    onClick={handleDismissRuntimeReminder}
+                  >
+                    关闭
+                  </button>
+                </div>
+
+                <div className="runtime-reminder-notice">
+                  请前往“运行环境”页面确认并部署依赖。该提醒不会自动安装或修复任何组件。
+                </div>
+
+                <div className="runtime-reminder-chips">
+                  {[
+                    { label: "ONNX Runtime", ok: runtimeHealth?.separationEngine?.onnxruntimeAvailable ?? false },
+                    { label: "ONNX Session", ok: runtimeChecks.find((check) => check.name === "ONNX Session")?.ok ?? false },
+                    { label: "ONNX Metadata", ok: runtimeChecks.find((check) => check.name === "ONNX Metadata")?.ok ?? false },
+                    { label: "NumPy", ok: runtimeChecks.find((check) => check.name === "NumPy")?.ok ?? false },
+                  ].map((chip) => (
+                    <span
+                      key={chip.label}
+                      className={`runtime-reminder-chip ${chip.ok ? "is-ok" : "is-warning"}`}
+                      title={chip.ok ? "已就绪" : "需要处理"}
+                    >
+                      {chip.label}
+                    </span>
+                  ))}
+                </div>
+
+                <div className="runtime-reminder-actions">
+                  <button
+                    type="button"
+                    className="ui-button ghost-button runtime-reminder-action-secondary text-sm font-semibold"
+                    onClick={handleDismissRuntimeReminder}
+                  >
+                    稍后再说
+                  </button>
+                  <button
+                    type="button"
+                    className="ui-button ui-button-primary runtime-reminder-action-primary text-sm font-bold"
+                    onClick={handleOpenRuntimePane}
+                  >
+                    前往依赖界面
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>,
         document.body
       )}
