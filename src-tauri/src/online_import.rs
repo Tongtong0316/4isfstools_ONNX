@@ -372,7 +372,7 @@ pub async fn get_online_import_status(
     } else if !js_runtime_ready {
         "JavaScript runtime 未就绪，请将 node.exe 加入 PATH".to_string()
     } else {
-        "yt-dlp 未安装，请安装在线导入组件".to_string()
+        "yt-dlp 未安装，请前往“偏好设置 - 运行环境”下载".to_string()
     };
     Ok(OnlineImportStatus {
         python_ready,
@@ -630,7 +630,7 @@ pub async fn download_online_audio(
     }
     ensure_dir(&target_dir).map_err(|e| format!("创建下载目录失败：{}", e))?;
     if ytdlp_version(&app).is_none() {
-        return Err("yt-dlp 未安装，请先安装在线导入组件".to_string());
+        return Err("yt-dlp 未安装，请前往“偏好设置 - 运行环境”下载".to_string());
     }
     let ffmpeg_path = resolve_ffmpeg_binary_path()
         .ok_or_else(|| "FFmpeg 未就绪，请先完成核心环境部署".to_string())?;
