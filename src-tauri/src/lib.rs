@@ -2878,6 +2878,21 @@ fn song_has_live_processing_job(song_id: &str) -> bool {
         || get_job(song_id).is_some()
 }
 
+fn clear_restartable_stale_job_state(song_id: &str) {
+    if let Some(job) = get_job(song_id) {
+        terminate_known_job(&job, true);
+    }
+    terminate_song_processes(song_id, true);
+    let _ = separation_queue::cancel_task(song_id);
+    clear_active_job_token(song_id);
+    clear_cancel_flag(song_id);
+    remove_job(song_id);
+}
+
+fn can_start_process_status(status: &str, live_job: bool) -> bool {
+    !live_job && matches!(status, "pending" | "error" | "cancelled" | "queued")
+}
+
 fn spawn_in_own_process_group(command: &mut Command) -> io::Result<std::process::Child> {
     process_control::spawn_in_own_process_group(command)
 }
@@ -3518,6 +3533,13 @@ mod tests {
         assert!(variants
             .iter()
             .any(|(_, track)| normalize_match_text(track).contains("后来")));
+    }
+
+    #[test]
+    fn cancelled_song_can_start_when_no_live_job_remains() {
+        assert!(can_start_process_status("cancelled", false));
+        assert!(!can_start_process_status("cancelled", true));
+        assert!(!can_start_process_status("ready", false));
     }
 
     #[test]
@@ -5436,13 +5458,12 @@ async fn start_process(
         None => return Err("Song not found".to_string()),
     };
 
-    let live_job = song_has_live_processing_job(&song_id);
-    if live_job
-        || (song.status != "pending"
-            && song.status != "error"
-            && song.status != "cancelled"
-            && song.status != "queued")
-    {
+    let mut live_job = song_has_live_processing_job(&song_id);
+    if live_job && (song.status == "cancelled" || song.status == "error") {
+        clear_restartable_stale_job_state(&song_id);
+        live_job = song_has_live_processing_job(&song_id);
+    }
+    if !can_start_process_status(&song.status, live_job) {
         return Err(format!("Cannot process song with status: {}", song.status));
     }
 
