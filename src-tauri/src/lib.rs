@@ -1,5 +1,6 @@
 #[cfg(unix)]
 use serde::{Deserialize, Serialize};
+use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, Read};
@@ -923,13 +924,12 @@ fn set_file_storage_settings(settings: FileStorageSettings) {
 }
 
 fn resolve_asset_root(kind: &str, settings: &FileStorageSettings) -> PathBuf {
-    let base = match kind {
+    match kind {
         "instrumental" => PathBuf::from(&settings.instrumental_root),
         "vocals" => PathBuf::from(&settings.vocals_root),
         "lyrics" => PathBuf::from(&settings.lyrics_root),
         _ => get_default_asset_root(kind),
-    };
-    base
+    }
 }
 
 fn legacy_song_workspace_dir(song_id: &str) -> PathBuf {
@@ -1142,11 +1142,12 @@ fn cleanup_song_artifacts(song: &Song) {
         song.instrumental_path.as_ref(),
         song.original_mix_path.as_ref(),
         song.lyrics_path.as_ref(),
-    ] {
-        if let Some(path) = path {
-            if let Some(parent) = Path::new(path).parent() {
-                cleanup_dirs.insert(parent.to_path_buf());
-            }
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Some(parent) = Path::new(path).parent() {
+            cleanup_dirs.insert(parent.to_path_buf());
         }
     }
 
@@ -1187,12 +1188,8 @@ fn get_cached_lyrics_candidates(key: &str) -> Option<Vec<LyricsCandidate>> {
     ensure_lyrics_search_cache_loaded();
 
     let cache = LYRICS_SEARCH_CACHE.lock().unwrap();
-    let Some(map) = cache.as_ref() else {
-        return None;
-    };
-    let Some(entry) = map.get(key) else {
-        return None;
-    };
+    let map = cache.as_ref()?;
+    let entry = map.get(key)?;
     if now_ms().saturating_sub(entry.cached_at) > CACHE_TTL_MS {
         return None;
     }
@@ -1907,7 +1904,7 @@ fn get_ffmpeg_urls() -> Vec<String> {
 
 fn add_ffmpeg_to_path(bin_dir: &Path) {
     let separator = if cfg!(windows) { ";" } else { ":" };
-    let _ = std::env::set_var(
+    std::env::set_var(
         "PATH",
         format!(
             "{}{}{}",
@@ -2421,7 +2418,7 @@ fn run_hidden_command_with_timeout(
             return Err(format!(
                 "{} 超时：已运行 {} 分钟仍未结束，已自动终止。请检查网络、代理、杀毒软件或 Python/pip 源。",
                 label,
-                (elapsed.as_secs() + 59) / 60
+                elapsed.as_secs().div_ceil(60)
             ));
         }
 
@@ -3361,7 +3358,6 @@ fn candidate_query_variants(
             .replace("伴奏", " ")
             .replace("人声", " ")
             .replace("歌词", " ")
-            .replace(" ", " ")
             .trim()
             .to_string();
         if !stripped.is_empty() && stripped != trimmed {
@@ -3769,7 +3765,8 @@ fn rank_lyrics_candidates(
         }
     }
 
-    let sort_bucket = |items: &mut Vec<((i32, i32, i32, bool), LyricsCandidate)>| {
+    type LyricsRankBucket = ((i32, i32, i32, bool), LyricsCandidate);
+    let sort_bucket = |items: &mut Vec<LyricsRankBucket>| {
         items.sort_by(|a, b| {
             b.0 .0
                 .cmp(&a.0 .0)
@@ -4257,7 +4254,7 @@ fn fetch_netease_candidates(
             scored.push((metadata_score, song, artist, album));
         }
 
-        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        scored.sort_by_key(|item| Reverse(item.0));
         let mut filtered = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for (score, song, artist, album) in scored.into_iter() {
@@ -4328,7 +4325,7 @@ fn fetch_netease_candidates(
             }
         }
 
-        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        scored.sort_by_key(|item| Reverse(item.0));
         let mut result = Vec::new();
         for (score, song, artist, album, has_synced, document) in scored {
             result.push(LyricsCandidate {
@@ -4353,9 +4350,7 @@ fn fetch_netease_candidates(
 }
 
 fn build_qq_document(song_id: &str, lyric: Option<&str>) -> Option<LyricDocument> {
-    let Some(lyric) = lyric.map(str::trim).filter(|value| !value.is_empty()) else {
-        return None;
-    };
+    let lyric = lyric.map(str::trim).filter(|value| !value.is_empty())?;
     let timed_lines = parse_lrclib_synced_lines(lyric);
     if !timed_lines.is_empty() {
         return build_document_from_timed_lines(
@@ -4502,7 +4497,7 @@ fn fetch_qq_candidates(
             scored.push((metadata_score, song, artist, album, songmid));
         }
 
-        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        scored.sort_by_key(|item| Reverse(item.0));
         let mut filtered = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for (score, song, artist, album, songmid) in scored.into_iter() {
@@ -4571,7 +4566,7 @@ fn fetch_qq_candidates(
             }
         }
 
-        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        scored.sort_by_key(|item| Reverse(item.0));
         let mut result = Vec::new();
 
         for (score, song, artist, album, has_synced, document) in scored {
@@ -5008,7 +5003,7 @@ fn fetch_lrclib_candidates(
         }
     }
 
-    candidates.sort_by(|a, b| b.0.cmp(&a.0));
+    candidates.sort_by_key(|item| Reverse(item.0));
     let mut seen = std::collections::HashSet::new();
     let mut result = Vec::new();
     for (score, track) in candidates {
@@ -5051,7 +5046,7 @@ fn fetch_lrclib_candidates(
         }
     }
 
-    result.sort_by(|a, b| b.score.cmp(&a.score));
+    result.sort_by_key(|item| Reverse(item.score));
     if result.is_empty() {
         // Try broader plain-lyrics fallback before giving up.
         let mut broader = Vec::new();
@@ -5084,7 +5079,7 @@ fn fetch_lrclib_candidates(
             }
         }
 
-        broader.sort_by(|a, b| b.0.cmp(&a.0));
+        broader.sort_by_key(|item| Reverse(item.0));
         let mut seen = std::collections::HashSet::new();
         for (score, track) in broader {
             let key = format!(
@@ -5125,7 +5120,7 @@ fn fetch_lrclib_candidates(
                 });
             }
         }
-        result.sort_by(|a, b| b.score.cmp(&a.score));
+        result.sort_by_key(|item| Reverse(item.score));
     }
     set_cached_lyrics_candidates(cache_key, result.clone());
     Ok(result)
@@ -5198,7 +5193,7 @@ fn fetch_lrclib_candidates_manual(
             (score, track)
         })
         .collect();
-    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored.sort_by_key(|item| Reverse(item.0));
 
     let mut seen = std::collections::HashSet::new();
     let mut result = Vec::new();
@@ -5446,7 +5441,7 @@ async fn start_process(
         || (song.status != "pending"
             && song.status != "error"
             && song.status != "cancelled"
-            && !(song.status == "queued" && !live_job))
+            && song.status != "queued")
     {
         return Err(format!("Cannot process song with status: {}", song.status));
     }
@@ -5912,9 +5907,9 @@ fn process_song_with_onnx_skeleton(
     );
     clear_separator_job(&song_id);
     clear_active_job_token(&song_id);
-    return;
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn process_song_background(
     app: AppHandle,
     song_id: String,
@@ -6900,9 +6895,9 @@ pub fn run() {
             let data_dir = get_data_dir();
             let _ = ensure_dir(&data_dir);
             let app_handle = app.handle().clone();
-            let _ = tauri::async_runtime::spawn_blocking(move || {
+            std::mem::drop(tauri::async_runtime::spawn_blocking(move || {
                 let _ = bootstrap_install_default_onnx_model(&app_handle);
-            });
+            }));
             Ok(())
         })
         .on_window_event(|_window, event| {

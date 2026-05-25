@@ -337,6 +337,7 @@ fn model_probe_from_json(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_onnx_separation(
     app: &AppHandle,
     song_id: &str,

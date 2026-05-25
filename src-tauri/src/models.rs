@@ -255,7 +255,7 @@ impl Default for OnnxRuntimeProbeResult {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OnnxModelProbeResult {
     pub model_path: String,
@@ -269,24 +269,6 @@ pub struct OnnxModelProbeResult {
     pub dummy_inference_ok: Option<bool>,
     pub dummy_inference_error: Option<String>,
     pub probe_error: Option<String>,
-}
-
-impl Default for OnnxModelProbeResult {
-    fn default() -> Self {
-        Self {
-            model_path: String::new(),
-            model_ready: false,
-            session_load_ok: false,
-            session_load_error: None,
-            model_metadata_ok: false,
-            model_metadata_error: None,
-            input_shape: None,
-            output_shape: None,
-            dummy_inference_ok: None,
-            dummy_inference_error: None,
-            probe_error: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

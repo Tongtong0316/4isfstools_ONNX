@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::cmp::Reverse;
 use std::collections::HashSet;
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -498,7 +499,7 @@ fn first_downloaded_file_in(dir: &Path) -> Option<PathBuf> {
             .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
         candidates.push((modified, path));
     }
-    candidates.sort_by(|a, b| b.0.cmp(&a.0));
+    candidates.sort_by_key(|item| Reverse(item.0));
     candidates.into_iter().map(|(_, path)| path).next()
 }
 
