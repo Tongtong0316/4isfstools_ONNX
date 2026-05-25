@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::cmp::Reverse;
 use std::collections::HashSet;
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -318,7 +317,7 @@ pub async fn get_online_import_status(
     } else if !ffmpeg_ready {
         "FFmpeg 未就绪，请先完成核心环境部署".to_string()
     } else {
-        "yt-dlp 未安装，请安装在线导入组件".to_string()
+        "yt-dlp 未安装，请前往“偏好设置 - 运行环境”下载".to_string()
     };
     Ok(OnlineImportStatus {
         python_ready,
@@ -499,7 +498,7 @@ fn first_downloaded_file_in(dir: &Path) -> Option<PathBuf> {
             .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
         candidates.push((modified, path));
     }
-    candidates.sort_by_key(|item| Reverse(item.0));
+    candidates.sort_by(|a, b| b.0.cmp(&a.0));
     candidates.into_iter().map(|(_, path)| path).next()
 }
 
@@ -575,9 +574,15 @@ pub async fn download_online_audio(
     }
     ensure_dir(&target_dir).map_err(|e| format!("创建下载目录失败：{}", e))?;
     if ytdlp_version(&app).is_none() {
-        return Err("yt-dlp 未安装，请先安装在线导入组件".to_string());
+        return Err("yt-dlp 未安装，请前往“偏好设置 - 运行环境”下载".to_string());
     }
-    if resolve_ffmpeg_binary_path().is_none() {
+    let ffmpeg_path = resolve_ffmpeg_binary_path()
+        .ok_or_else(|| "FFmpeg 未就绪，请先完成核心环境部署".to_string())?;
+    let ffmpeg_dir = ffmpeg_path
+        .parent()
+        .map(|path| path.to_path_buf())
+        .ok_or_else(|| "FFmpeg 路径无效".to_string())?;
+    if !ffmpeg_dir.exists() {
         return Err("FFmpeg 未就绪，请先完成核心环境部署".to_string());
     }
 
@@ -618,6 +623,8 @@ pub async fn download_online_audio(
         .arg("30")
         .arg("--retries")
         .arg("3")
+        .arg("--ffmpeg-location")
+        .arg(&ffmpeg_dir)
         .arg("-o")
         .arg(output_template);
     let download_kind = if check_duplicate.unwrap_or(false) {

@@ -569,6 +569,8 @@ function App() {
   const [bootstrapInstalling, setBootstrapInstalling] = useState(false);
   const [bootstrapMessage, setBootstrapMessage] = useState<string | null>(null);
   const [bootstrapProgress, setBootstrapProgress] = useState<BootstrapProgress | null>(null);
+  const bootstrapInstallingRef = useRef(false);
+  const bootstrapProgressClearTimerRef = useRef<number | null>(null);
   const [bootstrapStartedAt, setBootstrapStartedAt] = useState<number | null>(null);
   const [runtimeHealthRefreshing, setRuntimeHealthRefreshing] = useState(false);
   const [runtimeReminderOpen, setRuntimeReminderOpen] = useState(false);
@@ -633,6 +635,31 @@ function App() {
   const bootstrapElapsedSeconds = bootstrapStartedAt ? Math.floor((Date.now() - bootstrapStartedAt) / 1000) : 0;
   const bootstrapProgressValue = bootstrapProgress?.progress ?? (bootstrapInstalling ? 8 : 0);
   const runtimeReminderDetail = bootstrapStatus?.detail ?? runtimeHealth?.detail ?? "当前运行环境检查未通过。";
+
+  useEffect(() => {
+    if (bootstrapProgress?.stage !== "complete") {
+      if (bootstrapProgressClearTimerRef.current !== null) {
+        window.clearTimeout(bootstrapProgressClearTimerRef.current);
+        bootstrapProgressClearTimerRef.current = null;
+      }
+      return;
+    }
+
+    if (bootstrapProgressClearTimerRef.current !== null) {
+      window.clearTimeout(bootstrapProgressClearTimerRef.current);
+    }
+    bootstrapProgressClearTimerRef.current = window.setTimeout(() => {
+      setBootstrapProgress(null);
+      bootstrapProgressClearTimerRef.current = null;
+    }, 1200);
+
+    return () => {
+      if (bootstrapProgressClearTimerRef.current !== null) {
+        window.clearTimeout(bootstrapProgressClearTimerRef.current);
+        bootstrapProgressClearTimerRef.current = null;
+      }
+    };
+  }, [bootstrapProgress]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = colorTheme;
@@ -1565,6 +1592,7 @@ function App() {
 
   const handleBootstrapInstall = useCallback(async () => {
     if (!isDesktopRuntime) return;
+    bootstrapInstallingRef.current = true;
     setBootstrapInstalling(true);
     setBootstrapStartedAt(Date.now());
     setBootstrapProgress({ stage: "starting", progress: 3, message: "正在启动一键部署..." });
@@ -1591,6 +1619,7 @@ function App() {
       setBootstrapProgress({ stage: "failed", progress: bootstrapProgressValue, message: `安装失败：${message}` });
       setBootstrapMessage(`安装失败：${message}`);
     } finally {
+      bootstrapInstallingRef.current = false;
       setBootstrapInstalling(false);
       setBootstrapStartedAt(null);
     }
@@ -1674,6 +1703,7 @@ function App() {
     let unlisten: (() => void) | undefined;
     listen<BootstrapProgress>("bootstrap-progress", (event) => {
       if (disposed) return;
+      if (!bootstrapInstallingRef.current) return;
       setBootstrapProgress(event.payload);
       setBootstrapMessage(event.payload.message);
     }).then((dispose) => {
@@ -2786,7 +2816,7 @@ function App() {
                 </div>
 
                 <div className="runtime-reminder-notice">
-                  请前往“运行环境”页面确认并部署依赖。该提醒不会自动安装或修复任何组件。
+                  请前往“偏好设置 - 运行环境”页面下载并确认依赖。该提醒不会自动安装或修复任何组件。
                 </div>
 
                 <div className="runtime-reminder-chips">
@@ -2851,7 +2881,7 @@ function App() {
                     type="button"
                     className="ui-button ghost-button online-import-close shrink-0 text-sm font-semibold"
                     onClick={() => setOnlineImportOpen(false)}
-                      disabled={onlineImportBusy || onlineImportInstalling || onlineMediaProbeLoading}
+                    disabled={onlineImportBusy || onlineMediaProbeLoading}
                   >
                     关闭
                   </button>
@@ -2873,7 +2903,7 @@ function App() {
                   onChange={(event) => setOnlineImportUrl(event.target.value)}
                   placeholder="粘贴 YouTube / BiliBili 等平台的媒体链接"
                   className="online-import-input border bg-[var(--theme-surface)] text-sm text-[var(--theme-text)] outline-none transition-colors placeholder:text-[var(--theme-text-muted)] focus:border-[var(--theme-primary)] focus-visible:ring-1 focus-visible:ring-[var(--theme-primary)]"
-                  disabled={onlineImportBusy || onlineImportInstalling}
+                  disabled={onlineImportBusy}
                 />
 
                 {onlineMediaProbeLoading && (
@@ -2915,25 +2945,7 @@ function App() {
                   </div>
                 )}
 
-                <div
-                  className={`online-import-actions ${
-                    onlineImportBusy
-                      ? "is-busy"
-                      : onlineImportStatus?.canDownload
-                        ? "is-ready"
-                        : "is-install"
-                  }`}
-                >
-                  {!onlineImportStatus?.canDownload && (
-                    <button
-                      type="button"
-                      className="ui-button ui-button-primary online-import-action-install text-sm font-bold"
-                      onClick={() => void handleInstallOnlineImport()}
-                      disabled={onlineImportInstalling || !onlineImportStatus?.pythonReady}
-                    >
-                      {onlineImportInstalling ? "安装中..." : "安装/更新 yt-dlp"}
-                    </button>
-                  )}
+                <div className={`online-import-actions ${onlineImportBusy ? "is-busy" : "is-ready"}`}>
                   {onlineImportBusy ? (
                     <button
                       type="button"
@@ -2948,7 +2960,7 @@ function App() {
                         type="button"
                         className="ui-button ghost-button online-import-action-only text-sm font-semibold"
                         onClick={handleOpenDownloadOnlyOptions}
-                        disabled={!onlineImportStatus?.canDownload || onlineImportInstalling || onlineMediaProbeLoading || !onlineMediaProbe}
+                        disabled={!onlineImportStatus?.canDownload || onlineMediaProbeLoading || !onlineMediaProbe}
                       >
                         仅下载
                       </button>
@@ -2956,7 +2968,7 @@ function App() {
                         type="button"
                         className="ui-button ui-button-primary online-import-action-process text-sm font-bold"
                         onClick={() => void handleOnlineDownload("process")}
-                        disabled={!onlineImportStatus?.canDownload || onlineImportInstalling || onlineMediaProbeLoading}
+                        disabled={!onlineImportStatus?.canDownload || onlineMediaProbeLoading}
                       >
                         下载歌曲并处理
                       </button>
